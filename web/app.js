@@ -69,6 +69,24 @@ function safeLink(raw, label) {
     return '';
   }
 }
+function renderInbox(job) {
+  const a = job.autonomy;
+  if (!a) return '';
+  const m = a.metrics;
+  const metrics = `<p class="hint">묶음 ${m.batches}회 · 입력 검증 ${m.fields}개 · 답변 재사용 ${m.reused}개 · 확인 요청 ${m.inboxBatches}회 · 자동 복구 ${m.recoveries}회 · 모델 ${(m.modelMs / 1000).toFixed(1)}초 / 브라우저 ${(m.browserMs / 1000).toFixed(1)}초</p>`;
+  const changed = !a.synthetic && state.autonomy.revision !== a.revision;
+  if (changed && !['completed', 'stopped'].includes(job.status))
+    return (
+      metrics +
+      `<p class="warning-text">설정이 변경되어 기존 위임이 만료되었습니다.</p><button data-action="delegation" data-job="${job.id}">이 작업에 새 정책 적용</button>`
+    );
+  const box = a.inbox;
+  if (!box) return metrics;
+  return (
+    metrics +
+    `<div class="approval"><h3>확인함 · ${box.final ? '최종 제출' : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.</p><p>${esc(job.currentUrl)}</p><details><summary>입력 내용 확인</summary><pre>${esc(JSON.stringify(box.review, null, 2))}</pre></details><button type="submit" class="primary">최종 제출하고 결과 확인</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : '<p class="hint">저장된 답이 없어 직접 확인이 필요합니다.</p>'}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form></div>`
+  );
+}
 function render() {
   const auth = state.auth;
   const previous = $('account').value;
@@ -108,6 +126,14 @@ function render() {
           ? 'API 키 설정됨 · 선택한 경로로만 실행합니다.'
           : 'ChatGPT 계정을 연결하거나 API 키를 설정하세요.';
   $('event-count').textContent = state.events.length;
+  $('saved-answers').innerHTML = state.autonomy.savedAnswers.length
+    ? state.autonomy.savedAnswers
+        .map(
+          (a) =>
+            `<p>${esc(a.question)} · ${esc(a.origin)} <button data-forget="${a.id}">삭제</button></p>`,
+        )
+        .join('')
+    : '<p class="hint">확인함에서 재사용을 선택한 답변이 여기에 표시됩니다.</p>';
   const contentKey = JSON.stringify({ events: state.events, jobs: state.jobs, busy: state.busy });
   if (contentKey === rendered) return;
   rendered = contentKey;
@@ -121,11 +147,21 @@ function render() {
         })
         .join('')
     : '<div class="empty">아직 모아둔 기회가 없어요.<br><small>AI를 연결한 뒤 첫 탐색을 시작해 보세요.</small></div>';
+  if (
+    state.jobs.some(
+      (j) =>
+        j.autonomy?.inbox?.id &&
+        j.autonomy.inbox.id === document.activeElement?.closest('[data-inbox]')?.dataset.inboxId,
+    )
+  ) {
+    rendered = '';
+    return;
+  }
   $('jobs').innerHTML = state.jobs.length
     ? state.jobs
         .map(
           (j) =>
-            `<article class="job"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div><p>${esc(j.note)}</p><div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${j.approval ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}<details><summary>현재 폼에 입력된 내용</summary><pre>${esc(JSON.stringify(j.approval.form, null, 2))}</pre></details><p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}<div class="card-actions">${j.status === 'running' ? `<button data-action="pause" data-job="${j.id}">일시정지 · 직접 조작</button><button data-action="stop" data-job="${j.id}">중지</button>` : !['completed', 'stopped'].includes(j.status) ? `${j.status === 'approval' ? `<button data-action="pause" data-job="${j.id}">취소 · 직접 조작</button>` : `<button data-action="resume" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>${j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개'}</button>`}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? `<button data-action="resume-current" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>현재 브라우저 화면에서 재개</button>` : ''}${j.uncertain ? `<button data-action="reconcile" data-job="${j.id}">미제출 직접 확인</button>` : ''}` : ''}</div></article>`,
+            `<article class="job"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div><p>${esc(j.note)}</p><div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${renderInbox(j)}${j.approval ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}<details><summary>현재 폼에 입력된 내용</summary><pre>${esc(JSON.stringify(j.approval.form, null, 2))}</pre></details><p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}<div class="card-actions">${j.status === 'running' ? `<button data-action="pause" data-job="${j.id}">일시정지 · 직접 조작</button><button data-action="stop" data-job="${j.id}">중지</button>` : !['completed', 'stopped'].includes(j.status) ? `${j.status === 'approval' ? `<button data-action="pause" data-job="${j.id}">취소 · 직접 조작</button>` : `<button data-action="resume" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>${j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개'}</button>`}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? `<button data-action="resume-current" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>현재 브라우저 화면에서 재개</button>` : ''}${j.uncertain ? `<button data-action="reconcile" data-job="${j.id}">미제출 직접 확인</button>` : ''}` : ''}</div></article>`,
         )
         .join('')
     : '<div class="empty compact">탐색과 응모 기록이 여기에 쌓입니다.</div>';
@@ -206,6 +242,89 @@ async function demo(layout) {
 }
 $('demo').onclick = guard(() => demo('normal'));
 $('demo-shift').onclick = guard(() => demo('shift'));
+for (const id of ['autonomy-demo', 'autonomy-demo-inbox'])
+  $(id).onclick = guard(async () => {
+    await api('/api/jobs', {
+      kind: 'autonomy_demo',
+      provider: requireChoice(),
+      goal: '합성 프로필과 위임 기준으로 이 설문을 완료하고 실제 접수 결과를 확인하세요.',
+      maxSteps: 20,
+      layout: id.endsWith('inbox') ? 'shift' : 'normal',
+      demoInbox: id.endsWith('inbox'),
+    });
+    toast('가상 정보와 위임 정책으로 자율 설문을 시작했습니다. 실제 프로필은 사용하지 않습니다.');
+  });
+async function loadProfile() {
+  const value = await api('/api/autonomy');
+  const form = $('autonomy-form');
+  for (const [key, v] of Object.entries({ ...value.profile, ...value.policy })) {
+    const el = form.elements.namedItem(key);
+    if (el.type === 'checkbox') el.checked = v;
+    else el.value = v;
+  }
+}
+$('reload-profile').onclick = guard(loadProfile);
+void loadProfile().catch((error) => toast(error.message, true));
+$('autonomy-form').onsubmit = guard(async () => {
+  const f = new FormData($('autonomy-form'));
+  const profile = Object.fromEntries(
+    ['name', 'email', 'phone', 'region', 'occupation', 'ageRange'].map((k) => [
+      k,
+      String(f.get(k) || ''),
+    ]),
+  );
+  const policy = {
+    enabled: f.has('enabled'),
+    autoRecommendations: f.has('autoRecommendations'),
+    preferenceRule: f.get('preferenceRule'),
+    evaluationRule: f.get('evaluationRule'),
+    singleChoice: f.get('singleChoice'),
+    finalSubmit: f.get('finalSubmit'),
+    maxRecoveries: Number(f.get('maxRecoveries')),
+  };
+  await api('/api/autonomy', { profile, policy });
+  toast('저장했습니다. 새 응모부터 적용합니다.');
+});
+const handleAutonomyClick = guard(async (event) => {
+  const login = event.target.closest('[data-login]');
+  if (login) {
+    await api('/api/browser/open', { url: login.dataset.login });
+    toast('전용 브라우저에서 로그인해 주세요. 세션은 다음 작업에도 재사용합니다.');
+  }
+  const forget = event.target.closest('[data-forget]');
+  if (forget) await api('/api/answers/delete', { id: forget.dataset.forget });
+  const recommend = event.target.closest('[data-recommend]');
+  if (recommend) {
+    const box = state.jobs.find((j) => j.id === recommend.dataset.recommend).autonomy.inbox;
+    const form = recommend.closest('form');
+    for (const q of box.items.filter((q) => q.recommended))
+      for (const el of form.elements) {
+        if (el.name !== q.id) continue;
+        if (el.type === 'checkbox' || el.type === 'radio')
+          el.checked = q.recommended.includes(el.value);
+        else el.value = q.recommended[0] || '';
+      }
+  }
+});
+document.addEventListener('click', (event) => {
+  if (event.target.closest('[data-login],[data-forget],[data-recommend]'))
+    void handleAutonomyClick(event);
+});
+document.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (!form.matches('[data-inbox]')) return;
+  void guard(async () => {
+    const box = state.jobs.find((j) => j.id === form.dataset.inbox).autonomy.inbox;
+    const f = new FormData(form);
+    await api(`/api/jobs/${form.dataset.inbox}/inbox`, {
+      inboxId: form.dataset.inboxId,
+      confirm: box.final,
+      answers: Object.fromEntries(box.items.map((q) => [q.id, f.getAll(q.id)])),
+      remember: f.has('remember'),
+    });
+    toast('답변을 전달했습니다. 현재 화면에서 이어서 진행합니다.');
+  })(event);
+});
 const handleAction = guard(async (event) => {
   const apply = event.target.closest('[data-apply]');
   if (apply) {
@@ -213,7 +332,7 @@ const handleAction = guard(async (event) => {
     const provider = requireChoice();
     if (
       !confirm(
-        `${e.title}\n\n원문에서 참여 자격과 브라우저 대행이 가능한 범위를 확인했나요?\n필수 과제: ${e.requirements.join(' / ')}\n\n응모 준비를 시작하며, 새 입력 내용과 게시·제출은 따로 확인합니다.`,
+        `${e.title}\n\n원문에서 참여 자격과 브라우저 대행이 가능한 범위를 확인했나요?\n필수 과제: ${e.requirements.join(' / ')}\n\n${state.autonomy.policy.enabled ? '저장한 프로필과 위임 정책으로 이 사이트에서 진행합니다. 최종 제출: ' + (state.autonomy.policy.finalSubmit === 'auto' ? '자동' : '확인함에서 확인') : '응모 준비를 시작하며, 새 입력 내용과 게시·제출은 따로 확인합니다.'}`,
       )
     )
       return;
@@ -224,6 +343,7 @@ const handleAction = guard(async (event) => {
       eventId: e.id,
       routeConfirmed: true,
       maxSteps: 40,
+      autonomy: state.autonomy.policy.enabled,
     });
     return;
   }

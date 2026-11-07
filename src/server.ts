@@ -9,6 +9,17 @@ import { Model } from './model.js';
 import { Store, deadlineState, scoreCandidate, type Job } from './store.js';
 import { Runner } from './runner.js';
 import { demoPage } from './demo.js';
+import {
+  SettingsSchema,
+  createAutonomy,
+  settings,
+  memories,
+  saveAnswer,
+  syntheticSettings,
+  validateAnswer,
+} from './autonomy.js';
+import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
+import { inspectForm } from './forms.js';
 
 const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -16,12 +27,14 @@ const ProviderSchema = z.object({
   model: z.string().min(1).max(150),
 });
 const JobSchema = z.object({
-  kind: z.enum(['discover', 'apply', 'demo']),
+  kind: z.enum(['discover', 'apply', 'demo', 'autonomy_demo']),
+  autonomy: z.boolean().default(false),
+  demoInbox: z.boolean().default(false),
   provider: ProviderSchema,
   goal: z.string().min(1).max(2000),
   eventId: z.string().optional(),
   candidateLimit: z.number().int().min(1).max(10).default(5),
-  maxSteps: z.number().int().min(5).max(100).default(40),
+  maxSteps: z.number().int().min(5).max(300).default(40),
   routeConfirmed: z.boolean().optional(),
   layout: z.enum(['normal', 'shift']).optional(),
   discoverySource: z.enum(['culture', 'google', 'custom']).default('culture'),
@@ -100,6 +113,23 @@ export async function createApp(options: {
     if (request.headers.origin && request.headers.origin !== origin)
       throw new ServiceError('cross_origin_blocked', 403);
     if (isDemo) {
+      if (url.pathname === '/demo/autonomy') {
+        const run = z.string().uuid().parse(url.searchParams.get('run'));
+        if (method === 'POST') {
+          if (!acceptDemo(store, run, new URLSearchParams(await body(request))))
+            return send(
+              response,
+              400,
+              '<p>입력 검증 실패. 제출은 접수되지 않았습니다.</p>',
+              'text/html; charset=utf-8',
+            );
+          response.writeHead(303, { Location: `/demo/autonomy?run=${run}` });
+          response.end();
+          return;
+        }
+        if (method === 'GET')
+          return send(response, 200, autonomyDemo(store, run), 'text/html; charset=utf-8');
+      }
       if (url.pathname === '/demo/submit' && method === 'POST') {
         const params = new URLSearchParams(await body(request));
         const run = url.searchParams.get('run') || 'sample';
@@ -147,7 +177,29 @@ export async function createApp(options: {
       return send(response, 200, {
         csrf,
         auth: auth.publicInfo(),
-        jobs: store.jobs(),
+        jobs: store.jobs().map((job) => ({
+          ...job,
+          autonomy: job.autonomy
+            ? {
+                ...job.autonomy,
+                profile: undefined,
+                overrides: undefined,
+                reused: undefined,
+                privateAnswers: undefined,
+                plan: undefined,
+              }
+            : undefined,
+        })),
+        autonomy: {
+          policy: settings(store).policy,
+          revision: settings(store).revision,
+          savedAnswers: memories(store).map((a) => ({
+            id: a.id,
+            question: a.question,
+            origin: a.origin,
+            at: a.at,
+          })),
+        },
         events: store.events().map((event) => {
           const ranked = scoreCandidate(event);
           return {
@@ -161,6 +213,23 @@ export async function createApp(options: {
         activeId: runner.activeId,
         selection: store.settings('selection', null),
       });
+    }
+    if (method === 'GET' && url.pathname === '/api/autonomy')
+      return send(response, 200, settings(store));
+    if (method === 'POST' && url.pathname === '/api/autonomy') {
+      if (runner.isBusy()) throw new ServiceError('pause_before_changing_delegation');
+      const input = SettingsSchema.parse(data);
+      store.setSettings('autonomy', { ...input, revision: randomUUID() });
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/answers/delete') {
+      if (runner.isBusy()) throw new ServiceError('pause_before_changing_delegation');
+      const id = z.string().parse(data.id);
+      store.setSettings(
+        'answers',
+        memories(store).filter((a) => a.id !== id),
+      );
+      return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/auth/begin') {
       if (runner.isBusy()) throw new ServiceError('pause_before_changing_connections');
@@ -237,14 +306,16 @@ export async function createApp(options: {
       const id = randomUUID();
       const now = new Date().toISOString();
       const startUrl =
-        input.kind === 'demo'
-          ? `${origin}/demo/event?run=${id}&layout=${input.layout || 'normal'}`
-          : event?.entryUrl ||
-            (input.discoverySource === 'culture'
-              ? 'https://www.culture.go.kr/portal/bbs/B0000101/list.do?menuNo=200031'
-              : input.discoverySource === 'custom'
-                ? z.string().url().parse(input.sourceUrl)
-                : `https://www.google.com/search?q=${encodeURIComponent(`${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })} ${input.goal}`)}`);
+        input.kind === 'autonomy_demo'
+          ? `${origin}/demo/autonomy?run=${id}`
+          : input.kind === 'demo'
+            ? `${origin}/demo/event?run=${id}&layout=${input.layout || 'normal'}`
+            : event?.entryUrl ||
+              (input.discoverySource === 'culture'
+                ? 'https://www.culture.go.kr/portal/bbs/B0000101/list.do?menuNo=200031'
+                : input.discoverySource === 'custom'
+                  ? z.string().url().parse(input.sourceUrl)
+                  : `https://www.google.com/search?q=${encodeURIComponent(`${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })} ${input.goal}`)}`);
       const job: Job = {
         id,
         kind: input.kind,
@@ -267,6 +338,19 @@ export async function createApp(options: {
         history: [],
         userContext: input.userContext,
       };
+      if (input.kind === 'autonomy_demo') {
+        job.autonomy = createAutonomy(syntheticSettings, origin, true);
+        store.setSettings(`synthetic:${id}`, {
+          page: 1,
+          layout: input.layout || 'normal',
+          inbox: input.demoInbox,
+          posts: 0,
+        });
+      } else if (input.autonomy) {
+        if (input.kind !== 'apply' || !settings(store).policy.enabled)
+          throw new ServiceError('delegation_not_enabled');
+        job.autonomy = createAutonomy(settings(store), new URL(startUrl).origin);
+      }
       if (event && !store.claimSubmission(event.id, id))
         throw new ServiceError('event_already_started_or_submitted');
       store.saveJob(job);
@@ -275,7 +359,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|context)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|context|inbox|delegation)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -285,10 +369,76 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      if (action === 'inbox') {
+        if (
+          runner.isBusy() ||
+          manualNavigation ||
+          !job.autonomy?.inbox ||
+          job.status !== 'needs_user'
+        )
+          throw new ServiceError('inbox_not_available');
+        const state = job.autonomy,
+          inbox = state.inbox!;
+        if (data.inboxId !== inbox.id || Date.now() - inbox.createdAt > 24 * 60 * 60_000)
+          throw new ServiceError('inbox_expired');
+        if (browser.ownerJobId !== job.id || !browser.page)
+          throw new ServiceError('autonomy_live_page_required');
+        if (inbox.final) {
+          if (data.confirm !== true) throw new ServiceError('final_confirmation_required');
+          state.finalApproval = inbox.fingerprint;
+        } else {
+          if ((await inspectForm(browser.page)).view.fingerprint !== inbox.fingerprint)
+            throw new ServiceError('inbox_page_changed');
+          const answers = z
+            .record(z.string(), z.array(z.string().max(2000)).max(30))
+            .parse(data.answers);
+          const validated = inbox.items.map((q) => ({
+            q,
+            answer: validateAnswer(q, answers[q.id] || []),
+          }));
+          if (validated.some((v) => !v.answer)) throw new ServiceError('invalid_inbox_answer');
+          for (const { q, answer } of validated) {
+            state.overrides[q.signature] = answer!;
+            if (q.kind === 'text')
+              state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
+            if (data.remember === true && !state.synthetic)
+              saveAnswer(store, {
+                signature: q.signature,
+                question: q.label,
+                kind: q.kind,
+                category: q.category,
+                answer: answer!,
+                origin: state.origin,
+              });
+          }
+        }
+        state.metrics.waitingMs = (state.metrics.waitingMs || 0) + Date.now() - inbox.createdAt;
+        delete state.inbox;
+        job.status = 'paused';
+        store.saveJob(job);
+        runner.start(id);
+        return send(response, 200, { ok: true });
+      }
+      if (action === 'delegation') {
+        if (
+          runner.isBusy() ||
+          !job.autonomy ||
+          job.autonomy.synthetic ||
+          job.uncertain ||
+          ['completed', 'stopped'].includes(job.status)
+        )
+          throw new ServiceError('cannot_update_job_delegation');
+        job.autonomy = createAutonomy(settings(store), job.autonomy.origin);
+        job.status = 'paused';
+        store.saveJob(job);
+        return send(response, 200, { ok: true });
+      }
       if (action === 'pause' || action === 'stop') await runner.pause(id, action === 'stop');
       else if (action === 'resume') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
         if (job.status === 'approval') throw new ServiceError('review_pending_action_first');
+        if (job.autonomy?.inbox && data.useCurrentPage !== true)
+          throw new ServiceError('answer_inbox_first');
         if (runner.isBusy()) throw new ServiceError('browser_busy', 409);
         if (data.useCurrentPage === true) {
           const current = browser.page?.url();
@@ -298,10 +448,15 @@ export async function createApp(options: {
           browser.ownerJobId = id;
           browser.invalidate();
           job.currentUrl = current;
+          if (job.autonomy) {
+            delete job.autonomy.inbox;
+            delete job.autonomy.plan;
+            delete job.autonomy.finalApproval;
+          }
           store.saveJob(job);
         }
         if (data.extraSteps === 20) {
-          job.maxSteps = Math.min(120, job.maxSteps + 20);
+          job.maxSteps = Math.min(300, job.maxSteps + 20);
           store.saveJob(job);
         }
         runner.start(id);

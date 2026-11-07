@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  createAutonomy,
+  syntheticSettings,
+  resolveAnswer,
+  type Question,
+  type AnswerPlan,
+  type SavedAnswer,
+} from '../src/autonomy.js';
+const q = (label: string, kind: Question['kind'] = 'radio'): Question => ({
+  id: 'q1',
+  signature: label,
+  label,
+  kind,
+  required: true,
+  multiple: false,
+  options:
+    kind === 'text'
+      ? []
+      : [
+          { id: '예', label: '예' },
+          { id: '아니요', label: '아니요' },
+        ],
+});
+const plan: AnswerPlan = {
+  questionId: 'q1',
+  source: 'recommendation',
+  category: 'evaluation',
+  answer: ['예'],
+  reason: 'test',
+};
+test('profile resolves locally; unknown facts and first consent cannot be invented by auto recommendations', () => {
+  const a = createAutonomy(syntheticSettings, 'https://example.org');
+  assert.deepEqual(resolveAnswer(q('이름', 'text'), undefined, a, [], '').answer, [
+    '테스트 참가자',
+  ]);
+  for (const label of ['이용한 경험이 있나요?', '회원인가요?', '개인정보 동의'])
+    assert.equal(resolveAnswer(q(label), plan, a, [], '').answer, undefined);
+  assert.deepEqual(resolveAnswer(q('디자인이 적절하다'), plan, a, [], '').answer, ['예']);
+  a.policy = { ...a.policy, autoRecommendations: false };
+  assert.deepEqual(resolveAnswer(q('디자인이 적절하다'), plan, a, [], '').recommendation, ['예']);
+  assert.equal(resolveAnswer(q('디자인이 적절하다'), plan, a, [], '').answer, undefined);
+});
+test('single-choice conflict uses explicit priority policy; exact memory stays origin scoped', () => {
+  const a = createAutonomy(syntheticSettings, 'https://example.org');
+  const p = { ...plan, answer: ['예', '아니요'] };
+  assert.deepEqual(resolveAnswer(q('디자인'), p, a, [], '').answer, ['예']);
+  a.policy = { ...a.policy, singleChoice: 'ask' };
+  assert.equal(resolveAnswer(q('디자인'), p, a, [], '').answer, undefined);
+  const question = q('회원인가요?');
+  const memory: SavedAnswer = {
+    id: 'm',
+    question: question.label,
+    signature: question.signature,
+    kind: 'radio',
+    answer: ['아니요'],
+    origin: a.origin,
+    category: 'fact',
+    at: '',
+  };
+  assert.deepEqual(resolveAnswer(question, undefined, a, [memory], '').answer, ['아니요']);
+  assert.equal(
+    resolveAnswer(question, undefined, { ...a, origin: 'https://other.org' }, [memory], '').answer,
+    undefined,
+  );
+  assert.equal(
+    resolveAnswer(
+      q('가입했나요?'),
+      { ...plan, source: 'memory', sourceId: 'm', category: 'fact' },
+      a,
+      [memory],
+      '',
+    ).answer,
+    undefined,
+  );
+});

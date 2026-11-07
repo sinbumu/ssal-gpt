@@ -13,7 +13,7 @@
         <p class="tagline">작은 기회를 모으다.</p>
         <nav>
           <a href="#discover">01 · 기회 탐색</a><a href="#runs">02 · 실행 기록</a
-          ><a href="#settings">03 · 연결 설정</a>
+          ><a href="#autonomy">03 · 프로필·위임</a><a href="#settings">04 · 연결 설정</a>
         </nav>
         <div class="aside-bottom">
           <span class="dot"></span> 내 컴퓨터에서 실행 중
@@ -85,6 +85,86 @@
           </div>
           <div id="jobs"></div>
         </section>
+        <section class="panel" id="autonomy">
+          <div class="section-head">
+            <h2>프로필·위임 정책</h2>
+            <span class="pill muted">선택한 응모 사이트 · 작업당 24시간</span>
+          </div>
+          <p class="hint">
+            저장한 정보는 이 컴퓨터의 보호된 저장소에서 입력합니다. 사실·경험을 새로 추측하거나
+            동의를 대신 만들지 않습니다.
+          </p>
+          <form id="autonomy-form">
+            <div class="settings-grid">
+              <div>
+                <h3>기본 응모 정보</h3>
+                <label>이름<input name="name" autocomplete="off" maxlength="100" /></label>
+                <label>이메일<input name="email" type="email" autocomplete="off" /></label>
+                <label>전화번호<input name="phone" type="tel" autocomplete="off" /></label>
+                <label>거주지역<input name="region" maxlength="100" /></label>
+                <label>직업<input name="occupation" maxlength="100" /></label>
+                <label
+                  >연령대<input name="ageRange" placeholder="예: 30대" maxlength="100"
+                /></label>
+              </div>
+              <div>
+                <h3>맡길 범위</h3>
+                <label class="check"
+                  ><input name="enabled" type="checkbox" /> 새 응모에 프로필·정책 사용</label
+                >
+                <label class="check"
+                  ><input name="autoRecommendations" type="checkbox" /> 아래 기준의 추천 답변 자동
+                  적용</label
+                >
+                <label
+                  >선호 기준<textarea
+                    name="preferenceRule"
+                    maxlength="1500"
+                    placeholder="예: 경품은 커피, 상품권 순으로 선호"
+                  ></textarea>
+                </label>
+                <label
+                  >일반 평가 기준<textarea
+                    name="evaluationRule"
+                    maxlength="1500"
+                    placeholder="특정 경험·자격을 제외한 일반 평가에 적용할 기준"
+                  ></textarea>
+                </label>
+                <label
+                  >복수 선택 안내지만 하나만 고를 수 있을 때<select name="singleChoice">
+                    <option value="ask">확인함에서 질문</option>
+                    <option value="first">추천 우선순위의 첫 항목</option>
+                  </select></label
+                >
+                <label
+                  >최종 제출<select name="finalSubmit">
+                    <option value="review">확인함에서 최종 확인</option>
+                    <option value="auto">승인한 사이트에 자동 제출</option>
+                  </select></label
+                >
+                <label
+                  >자동 복구 한도<select name="maxRecoveries">
+                    <option>0</option>
+                    <option>1</option>
+                    <option>2</option>
+                    <option selected>3</option>
+                    <option>5</option>
+                  </select></label
+                >
+              </div>
+            </div>
+            <button class="primary" type="submit">정보·정책 저장</button
+            ><button type="button" id="reload-profile">저장한 내용 불러오기</button>
+            <p class="hint">
+              정책을 변경하면 기존 작업의 위임은 만료됩니다. 해당 작업에서 새 정책 적용을
+              선택하세요. 최초 동의와 새 사실은 확인함에 모읍니다.
+            </p>
+          </form>
+          <details>
+            <summary>재사용 답변 관리</summary>
+            <div id="saved-answers"></div>
+          </details>
+        </section>
         <section class="panel" id="settings">
           <div class="section-head">
             <h2>연결 설정</h2>
@@ -154,6 +234,11 @@
                   </button>
                 </div>
               </form>
+              <div class="inline">
+                <button data-login="https://www.instagram.com/">Instagram 로그인</button
+                ><button data-login="https://www.youtube.com/">YouTube 로그인</button
+                ><button data-login="https://nid.naver.com/nidlogin.login">Naver 로그인</button>
+              </div>
             </div>
             <div>
               <h3>04 / 연결 동작 확인</h3>
@@ -164,6 +249,8 @@
               <div class="inline">
                 <button id="demo">AI 브라우저 테스트</button
                 ><button id="demo-shift">배치 변경 테스트</button>
+                <button id="autonomy-demo">자율 설문 테스트</button
+                ><button id="autonomy-demo-inbox">확인함 포함 테스트</button>
               </div>
             </div>
           </div>

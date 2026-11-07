@@ -167,7 +167,7 @@ test('dashboard loads without script errors, keeps links usable and blocks untru
     await page.goto(app.origin);
     await page.locator('#account option').waitFor({ state: 'attached' });
     assert.deepEqual(errors, []);
-    await page.getByRole('link', { name: '03 · 연결 설정' }).click();
+    await page.getByRole('link', { name: '04 · 연결 설정' }).click();
     assert.equal(new URL(page.url()).hash, '#settings');
     await page.getByRole('button', { name: '기회 찾아보기' }).click();
     await page.getByRole('status').filter({ hasText: '모델 목록' }).waitFor();

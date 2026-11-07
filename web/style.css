@@ -189,6 +189,7 @@ h3 {
 }
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 15px;
@@ -431,12 +432,16 @@ blockquote {
   grid-template-columns: 1fr 1fr;
   gap: 35px;
 }
+.settings-grid > div {
+  min-width: 0;
+}
 .settings-grid h3 {
   font-size: 13px;
   color: #60745b;
 }
 .inline {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
@@ -538,6 +543,8 @@ footer {
   }
   nav {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 12px;
   }
   nav a {
@@ -594,4 +601,25 @@ footer {
     display: block;
     margin-top: 8px;
   }
+}
+fieldset {
+  min-width: 0;
+  border: 1px solid #d5ddd5;
+  border-radius: 8px;
+  margin: 16px 0;
+  padding: 16px;
+}
+legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+label.check input {
+  width: auto;
+  margin: 0;
 }

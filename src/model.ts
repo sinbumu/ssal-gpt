@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Auth, ServiceError, type ProviderChoice } from './auth.js';
+import { AnswerPlanSchema } from './autonomy.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -29,6 +30,7 @@ export const StepSchema = z
       'record_event',
       'done',
       'needs_user',
+      'form_plan',
     ]),
     observationId: z.string().min(1),
     reason: z.string().min(1).max(500),
@@ -41,6 +43,8 @@ export const StepSchema = z
     delta: z.number().min(-1000).max(1000).optional(),
     candidate: CandidateSchema.optional(),
     evidenceQuote: z.string().max(2000).optional(),
+    answers: z.array(AnswerPlanSchema).max(80).optional(),
+    buttonId: z.string().optional(),
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;

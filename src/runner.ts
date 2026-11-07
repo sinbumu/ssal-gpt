@@ -3,6 +3,7 @@ import { Browser, validateUrl, type Observation } from './browser.js';
 import { Model, type Step } from './model.js';
 import { Store, type Job, type Approval } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
+import { runAutonomous } from './autonomous-runner.js';
 
 const INSTRUCTIONS = `You are ssal-gpt, a Korean giveaway discovery and browser-entry assistant.
 Choose exactly one ssal_browser.step tool call per observation. The screenshot is your primary visual input; visible element refs and text supplement it. Use coordinates when appropriate. observationId must match.
@@ -269,6 +270,7 @@ export class Runner {
     this.store.saveJob(job);
   }
   private async run(job: Job, signal: AbortSignal, approved?: Approval) {
+    if (job.autonomy) return runAutonomous(this.store, this.browser, this.model, job, signal);
     const started = Date.now();
     let previousFingerprint = '';
     let unchangedObservations = 0;

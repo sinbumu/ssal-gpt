@@ -4,6 +4,7 @@ import { chmodSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import type { ProviderChoice } from './auth.js';
 import type { Candidate, Step } from './model.js';
+import type { AutonomyState } from './autonomy.js';
 
 export type JobStatus =
   | 'queued'
@@ -27,7 +28,8 @@ export type Approval = {
 };
 export type Job = {
   id: string;
-  kind: 'discover' | 'apply' | 'demo';
+  kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo';
+  autonomy?: AutonomyState;
   goal: string;
   provider: ProviderChoice;
   startUrl: string;

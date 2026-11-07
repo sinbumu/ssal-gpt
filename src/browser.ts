@@ -204,7 +204,7 @@ export class Browser {
       );
     }
   }
-  async observe(): Promise<Observation> {
+  async observe(fullPage = false, secrets: string[] = []): Promise<Observation> {
     await this.open();
     const page = this.page!;
     if (page.isClosed()) throw new ServiceError('browser_closed');
@@ -282,7 +282,7 @@ export class Browser {
       this.handles.set(ref, handle as ElementHandle<HTMLElement>);
       elements.push({ ref, ...item });
     }
-    const text = await page.evaluate(() => {
+    let text = await page.evaluate((fullPage) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const lines: string[] = [];
       while (walker.nextNode()) {
@@ -301,8 +301,7 @@ export class Browser {
           (b) =>
             b.width > 0 &&
             b.height > 0 &&
-            b.bottom > 0 &&
-            b.top < innerHeight &&
+            (fullPage || (b.bottom > 0 && b.top < innerHeight)) &&
             b.right > 0 &&
             b.left < innerWidth,
         );
@@ -310,11 +309,24 @@ export class Browser {
         if (visible && style.visibility !== 'hidden' && style.display !== 'none') lines.push(value);
       }
       return lines.join('\n').slice(0, 18000);
-    });
+    }, fullPage);
+    for (const value of secrets.filter((v) => v.length >= 2))
+      text = text.split(value).join('[저장된 정보]');
+    for (const element of elements)
+      for (const value of secrets.filter((v) => v.length >= 2))
+        element.label = element.label.split(value).join('[저장된 정보]');
+    if (fullPage && (await page.evaluate(() => document.documentElement.scrollHeight)) > 12000)
+      throw new ServiceError('form_page_too_large');
     const image = await page.screenshot({
       type: 'png',
       animations: 'disabled',
-      mask: [page.locator('input:not([type=radio]):not([type=checkbox]),textarea,[data-private]')],
+      fullPage,
+      mask: [
+        page.locator('input:not([type=radio]):not([type=checkbox]),textarea,select,[data-private]'),
+        ...secrets
+          .filter((v) => v.length >= 2)
+          .map((value) => page.getByText(value, { exact: false })),
+      ],
       timeout: 10_000,
     });
     // Playwright temporarily adds screenshot masking styles; capture revision after cleanup.

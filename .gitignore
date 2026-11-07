@@ -1,0 +1,47 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.secrets/
+secrets/
+.auth/
+auth.json
+auth-state*.json
+chatgpt-auth*.json
+storage-state*.json
+*.pem
+*.key
+
+# Private runtime data: sessions, participants, evidence, coupons, logs
+.ssal-gpt/
+runtime/
+private-data/
+browser-profiles/
+playwright/.auth/
+playwright-report/
+test-results/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+
+# JavaScript / TypeScript tooling (proposed stack)
+node_modules/
+dist/
+coverage/
+.cache/
+*.tsbuildinfo
+
+# Python tooling (if used for evaluation)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor / OS
+.DS_Store
+Thumbs.db

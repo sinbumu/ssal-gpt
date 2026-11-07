@@ -259,3 +259,18 @@ export function redact(text: string, profile: Profile) {
     text = text.split(value).join('[저장된 정보]');
   return text;
 }
+export function redactContext(value: unknown, secrets: string[]): unknown {
+  if (typeof value === 'string') {
+    for (const secret of secrets.filter((s) => s.length >= 2)) {
+      value = (value as string).split(secret).join('[저장된 정보]');
+      value = (value as string).split(encodeURIComponent(secret)).join('[저장된 정보]');
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactContext(item, secrets));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactContext(item, secrets)]),
+    );
+  return value;
+}

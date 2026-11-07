@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completionMessage } from '../src/completion.js';
+import { redactContext } from '../src/autonomy.js';
 import {
   createAutonomy,
   syntheticSettings,
@@ -39,6 +40,22 @@ test('completion cannot be fabricated by quoting only the positive fragment of a
     completionMessage('설문이 완료되었습니다.', '설문이 완료되었습니다.\n감사합니다.'),
     true,
   );
+});
+test('known private values are removed from nested model context including URL echoes', () => {
+  const value = 'demo+user@example.invalid';
+  const sanitized = JSON.stringify(
+    redactContext(
+      {
+        url: `https://example.org/?email=${encodeURIComponent(value)}`,
+        elements: [{ label: `recipient ${value}` }],
+        quote: 'name "private"',
+      },
+      [value, '"private"'],
+    ),
+  );
+  assert.ok(!sanitized.includes(value));
+  assert.ok(!sanitized.includes(encodeURIComponent(value)));
+  assert.ok(!sanitized.includes('private'));
 });
 test('profile resolves locally; unknown facts and first consent cannot be invented by auto recommendations', () => {
   const a = createAutonomy(syntheticSettings, 'https://example.org');

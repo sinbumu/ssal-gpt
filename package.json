@@ -15,7 +15,9 @@
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:browser": "tsx --test tests/browser/*.test.ts",
-    "browser:install": "playwright install chromium"
+    "browser:install": "playwright install chromium",
+    "format": "prettier --write src web tests",
+    "format:check": "prettier --check src web tests"
   },
   "dependencies": {
     "jose": "^6.2.15",
@@ -24,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

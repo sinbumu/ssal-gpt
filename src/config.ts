@@ -1,6 +1,14 @@
 import { homedir } from 'node:os';
 import { resolve, join, relative, isAbsolute } from 'node:path';
-import { mkdirSync, chmodSync, writeFileSync, readFileSync, renameSync, existsSync, unlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  chmodSync,
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  existsSync,
+  unlinkSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 export function privateDirectory(path: string) {
@@ -35,12 +43,17 @@ export function acquireLock(dir: string) {
   if (existsSync(path)) {
     const pid = Number(readFileSync(path, 'utf8'));
     let alive = false;
-    try { process.kill(pid, 0); alive = true; } catch (error) {
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') alive = true;
     }
     if (alive) throw new Error('Another ssal-gpt process owns this data directory.');
     unlinkSync(path);
   }
   writeFileSync(path, String(process.pid), { flag: 'wx', mode: 0o600 });
-  return () => { if (existsSync(path)) unlinkSync(path); };
+  return () => {
+    if (existsSync(path)) unlinkSync(path);
+  };
 }

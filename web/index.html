@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>쌀-GPT · 작은 기회를 모으다</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside>
+        <a class="brand" href="/">쌀<span>GPT</span><i>●</i></a>
+        <p class="tagline">작은 기회를 모으다.</p>
+        <nav>
+          <a href="#discover">01 · 기회 탐색</a><a href="#runs">02 · 실행 기록</a
+          ><a href="#settings">03 · 연결 설정</a>
+        </nav>
+        <div class="aside-bottom">
+          <span class="dot"></span> 내 컴퓨터에서 실행 중
+          <p>개인 브라우저와 응모 기록은<br />이 컴퓨터에 보관됩니다.</p>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <span class="eyebrow">YOUR OPPORTUNITY DESK</span>
+            <h1>오늘은 어떤 기회가 있을까요?</h1>
+            <p>찾는 일부터 참여하는 일까지, 화면을 보며 한 단계씩.</p>
+          </div>
+          <span class="pill" id="connection-badge">연결 확인 중</span>
+        </header>
+        <div id="toast" role="status" aria-live="polite" hidden></div>
+        <section class="panel discover" id="discover">
+          <div class="section-head">
+            <h2>기회 탐색</h2>
+            <span class="pill muted">직접 실행 · MVP</span>
+          </div>
+          <form id="discover-form">
+            <label for="goal">어떤 이벤트를 찾아볼까요?</label
+            ><textarea id="goal" rows="2">
+구매·방문·친구 태그 없이 온라인으로 참여할 수 있는 커피·상품권 이벤트를 찾아줘. 공식 원문에서 현재 참여 가능한지 확인해줘.</textarea>
+            <label for="discovery-source">탐색 시작점</label>
+            <select id="discovery-source">
+              <option value="culture">문화포털 공지 목록 · 공식 출처 예제</option>
+              <option value="google">Google 웹 검색</option>
+              <option value="custom">다른 공개 목록에서 시작</option>
+            </select>
+            <div id="source-url-field" hidden>
+              <label for="source-url">기관·브랜드·SNS의 공개 목록 주소</label>
+              <input id="source-url" type="url" placeholder="https://…" />
+            </div>
+            <div class="form-row">
+              <label
+                >후보 수<select id="candidate-limit">
+                  <option value="3">3개</option>
+                  <option value="5" selected>5개</option>
+                  <option value="10">10개</option>
+                </select></label
+              ><label
+                >판단 횟수 한도<select id="step-limit">
+                  <option value="20">20회</option>
+                  <option value="40" selected>40회</option>
+                  <option value="80">80회</option>
+                </select></label
+              ><button class="primary" type="submit">기회 찾아보기 <span>↗</span></button>
+            </div>
+          </form>
+          <p class="hint">
+            탐색에서는 응모하지 않습니다. 후보를 선택하면 참여 조건과 실행할 내용을 확인합니다.
+          </p>
+        </section>
+        <div class="section-head">
+          <h2>수집한 기회 <span id="event-count">0</span></h2>
+          <span class="hint">우선순위는 당첨 확률이 아닙니다</span>
+        </div>
+        <div id="events" class="event-grid">
+          <div class="empty">
+            아직 모아둔 기회가 없어요.<br /><small>AI를 연결한 뒤 첫 탐색을 시작해 보세요.</small>
+          </div>
+        </div>
+        <section id="runs">
+          <div class="section-head">
+            <h2>실행 기록</h2>
+            <span class="hint">완료 증거 · 개입 요청 · 사용량</span>
+          </div>
+          <div id="jobs"></div>
+        </section>
+        <section class="panel" id="settings">
+          <div class="section-head">
+            <h2>연결 설정</h2>
+            <span class="pill muted">계정과 과금 경로를 직접 선택</span>
+          </div>
+          <div class="settings-grid">
+            <div>
+              <h3>01 / AI 연결</h3>
+              <button id="chatgpt-login" class="dark">Continue with ChatGPT</button>
+              <p class="hint">
+                ChatGPT 플랜 사용을 별도로 허용합니다.<br />다른 AI 과금 경로로 자동 전환하지
+                않습니다.
+              </p>
+              <form id="key-form">
+                <label for="api-key">OpenAI API 키</label>
+                <div class="inline">
+                  <input
+                    id="api-key"
+                    type="password"
+                    autocomplete="off"
+                    placeholder="이 컴퓨터에만 저장"
+                  /><button type="submit">저장</button>
+                </div>
+              </form>
+              <p>
+                <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer"
+                  >ChatGPT 사용량 설정 ↗</a
+                >
+              </p>
+            </div>
+            <div>
+              <h3>02 / 이번 작업에 사용할 연결</h3>
+              <label for="provider">AI 제공자</label
+              ><select id="provider">
+                <option value="chatgpt">ChatGPT 로그인</option>
+                <option value="api">OpenAI API 키</option></select
+              ><label for="account">ChatGPT 계정</label
+              ><select id="account"></select>
+              <div class="inline">
+                <button id="reauth">다시 로그인</button
+                ><button id="add-account">다른 계정 추가</button
+                ><button id="disconnect">연결 해제</button>
+              </div>
+              <label for="model">모델</label>
+              <div class="inline">
+                <select id="model">
+                  <option value="">모델 목록을 불러오세요</option></select
+                ><button id="load-models">불러오기</button>
+              </div>
+              <p id="auth-note" class="hint"></p>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="settings-grid">
+            <div>
+              <h3>03 / SNS·폼 로그인</h3>
+              <p class="hint">
+                전용 Chromium에서 직접 로그인합니다. 인증 중에는 화면을 AI에 보내지 않습니다.
+              </p>
+              <form id="browser-form">
+                <label for="login-url">열 주소</label>
+                <div class="inline">
+                  <input id="login-url" type="url" value="https://www.instagram.com/" /><button
+                    type="submit"
+                  >
+                    브라우저 열기
+                  </button>
+                </div>
+              </form>
+            </div>
+            <div>
+              <h3>04 / 연결 동작 확인</h3>
+              <p class="hint">
+                가상 이벤트에서 화면 읽기·퀴즈·입력·접수를 검사합니다. 실제 경품이 없으며 모델
+                사용량은 발생합니다.
+              </p>
+              <div class="inline">
+                <button id="demo">AI 브라우저 테스트</button
+                ><button id="demo-shift">배치 변경 테스트</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <footer>
+          쌀-GPT · Local-first, open source. <span>실제 당첨·수령은 별도 확인이 필요합니다.</span>
+        </footer>
+      </main>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

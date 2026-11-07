@@ -27,7 +27,7 @@
 
 ## Collaboration and validation
 
-- The current repository starts with design documents only. Clearly distinguish planned, implemented, tested and externally verified capabilities.
+- The repository contains a working local MVP. Read docs/implementation.md for the current validation status; distinguish planned, implemented, tested and externally verified capabilities.
 - Do not invent successful live login, submission or reward results. Use synthetic fixtures for repeatable tests.
 - Test boundaries that matter: actual screenshot-to-action operation, layout changes, browser/profile isolation, stale observations, manual takeover, provider separation, credentials redaction, deduplication, scoped approval, restart recovery and uncertain submission handling.
 - Prefer a small vertical slice before broad platform support. Do not add a general-purpose agent framework or multiple services without a demonstrated need.

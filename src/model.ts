@@ -6,6 +6,7 @@ export const CandidateSchema = z.object({
   organizer: z.string().max(120),
   entryUrl: z.string().url(),
   deadline: z.string().datetime({ offset: true }).nullable(),
+  deadlineDate: z.string().date().nullable().optional(),
   prize: z.string().max(500),
   winners: z.number().int().positive().nullable(),
   requirements: z.array(z.string().max(300)).max(20),

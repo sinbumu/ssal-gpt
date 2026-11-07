@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { Auth, ServiceError, safeMessage } from './auth.js';
 import { Browser } from './browser.js';
 import { Model } from './model.js';
-import { Store, type Job } from './store.js';
+import { Store, deadlineState, scoreCandidate, type Job } from './store.js';
 import { Runner } from './runner.js';
 import { demoPage } from './demo.js';
 
@@ -147,7 +147,15 @@ export async function createApp(options: {
         csrf,
         auth: auth.publicInfo(),
         jobs: store.jobs(),
-        events: store.events(),
+        events: store.events().map((event) => {
+          const ranked = scoreCandidate(event);
+          return {
+            ...event,
+            score: ranked.score,
+            scoreReasons: ranked.reasons,
+            deadlineState: deadlineState(event),
+          };
+        }),
         busy: runner.isBusy(),
         activeId: runner.activeId,
         selection: store.settings('selection', null),
@@ -205,10 +213,7 @@ export async function createApp(options: {
         input.kind === 'apply' && input.eventId ? store.event(input.eventId) : undefined;
       if (input.kind === 'apply' && (!event || !input.routeConfirmed))
         throw new ServiceError('event_and_route_confirmation_required');
-      if (
-        event &&
-        (!event.deadline || Date.parse(event.deadline) <= Date.now() || event.blockers.length)
-      )
+      if (event && (deadlineState(event) !== 'available' || event.blockers.length))
         throw new ServiceError('event_not_eligible');
       const id = randomUUID();
       const now = new Date().toISOString();

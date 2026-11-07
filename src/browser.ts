@@ -373,8 +373,15 @@ export class Browser {
     } else if (step.action === 'search') {
       if (!step.text) throw new ServiceError('query_required');
       await this.navigate(`https://www.google.com/search?q=${encodeURIComponent(step.text)}`);
-    } else if (step.action === 'scroll') await page.mouse.wheel(0, step.delta || 650);
-    else if (step.action === 'click') {
+    } else if (step.action === 'scroll') {
+      // A page may scroll inside a panel; wheel over the observed content, not the window corner.
+      const x = step.x ?? o.width / 2;
+      const y = step.y ?? o.height * 0.65;
+      if (x < 0 || y < 0 || x >= o.width || y >= o.height)
+        throw new ServiceError('invalid_scroll_target');
+      await page.mouse.move(x, y);
+      await page.mouse.wheel(0, step.delta || 650);
+    } else if (step.action === 'click') {
       if (target) await target.click({ timeout: 6000 });
       else if (
         step.x !== undefined &&

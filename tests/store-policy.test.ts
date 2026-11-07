@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store, scoreCandidate, type Job } from '../src/store.js';
+import { deadlineState, Store, scoreCandidate, type Job } from '../src/store.js';
 import { actionPolicy } from '../src/runner.js';
 import { validateUrl, privateAddress, type Observation } from '../src/browser.js';
 const candidate = {
@@ -131,4 +131,12 @@ test('browser blocks internal services, encoded loopback, file URLs and unrelate
   assert.equal(privateAddress('192.168.1.1'), true);
   assert.equal(privateAddress('::ffff:127.0.0.1'), true);
   assert.equal(privateAddress('8.8.8.8'), false);
+});
+
+test('date-only deadlines preserve uncertainty and use the Korean calendar boundary', () => {
+  const c = { deadline: null, deadlineDate: '2030-01-02' };
+  assert.equal(deadlineState(c, Date.parse('2030-01-01T14:59:59Z')), 'available');
+  assert.equal(deadlineState(c, Date.parse('2030-01-01T15:00:00Z')), 'closing_today');
+  assert.equal(deadlineState(c, Date.parse('2030-01-02T15:00:00Z')), 'ended');
+  assert.equal(scoreCandidate({ ...candidate, ...c }, Date.parse('2030-01-01T15:00:00Z')).score, 0);
 });

@@ -49,6 +49,7 @@ export type Job = {
   approvedTexts: string[];
   intent?: { beforeText: string; url: string };
   memory?: string;
+  observedUrls?: string[];
   history: { action: string; reason: string; url: string }[];
 };
 export type EventRecord = Candidate & {
@@ -71,10 +72,24 @@ export function canonicalUrl(raw: string) {
   url.searchParams.sort();
   return url.toString();
 }
+export function deadlineState(
+  candidate: Pick<Candidate, 'deadline' | 'deadlineDate'>,
+  now = Date.now(),
+) {
+  if (candidate.deadline) return Date.parse(candidate.deadline) <= now ? 'ended' : 'available';
+  if (!candidate.deadlineDate) return 'unknown';
+  const today = new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  if (candidate.deadlineDate < today) return 'ended';
+  // A date is not evidence that entries remain open until 23:59 on that day.
+  return candidate.deadlineDate === today ? 'closing_today' : 'available';
+}
 export function scoreCandidate(candidate: Candidate, now = Date.now()) {
   const reasons: string[] = [];
-  if (!candidate.deadline) return { score: 0, reasons: ['마감일 확인 필요'] };
-  if (Date.parse(candidate.deadline) <= now) return { score: 0, reasons: ['종료된 이벤트'] };
+  const state = deadlineState(candidate, now);
+  if (state === 'unknown') return { score: 0, reasons: ['마감일 확인 필요'] };
+  if (state === 'ended') return { score: 0, reasons: ['종료된 이벤트'] };
+  if (state === 'closing_today')
+    return { score: 0, reasons: ['오늘 마감 · 정확한 시각 확인 필요'] };
   if (candidate.blockers.length) return { score: 0, reasons: candidate.blockers };
   let score = 50;
   if (candidate.effortMinutes <= 5) {

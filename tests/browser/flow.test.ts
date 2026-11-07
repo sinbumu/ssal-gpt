@@ -361,3 +361,67 @@ test('discovery opens an observed link without invoking its page-provided click 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('wheel scroll reaches a nested panel and invalidates the previous observation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-scroll-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    await app.browser.navigate(`${app.origin}/demo/event?run=nested-scroll`);
+    await app.browser.page!.evaluate(() => {
+      document.body.innerHTML =
+        '<div id="panel" style="position:fixed;inset:80px 120px;overflow:auto"><div style="height:2000px">안내문 상단</div><p>스크롤 후 조건</p></div>';
+      document.body.style.overflow = 'hidden';
+    });
+    const o = await app.browser.observe();
+    await app.browser.act({
+      action: 'scroll',
+      observationId: o.id,
+      delta: 650,
+      reason: 'Read panel',
+    });
+    assert.ok((await app.browser.page!.locator('#panel').evaluate((el) => el.scrollTop)) > 0);
+    await assert.rejects(() => app.browser.assertFresh(o.id), /stale_observation/);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a completion message visible before an attempted submission is not fresh proof', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-old-receipt-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.kind = 'apply';
+    j.currentUrl = j.startUrl;
+    j.uncertain = true;
+    app.store.submitDemo(j.id);
+    await app.browser.navigate(j.startUrl);
+    app.browser.ownerJobId = j.id;
+    const o = await app.browser.observe();
+    j.intent = { beforeText: o.text, url: o.url };
+    app.store.saveJob(j);
+    const model = {
+      async decide(_p: unknown, _i: string, context: any) {
+        return {
+          step: {
+            action: 'done',
+            observationId: context.observation.id,
+            reason: 'Synthetic old receipt test',
+            evidenceQuote: '응모가 완료되었습니다',
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    assert.equal(app.store.job(j.id)?.status, 'submission_unknown');
+    assert.equal(app.store.job(j.id)?.note, 'completion_requires_receipt_or_new_comment');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

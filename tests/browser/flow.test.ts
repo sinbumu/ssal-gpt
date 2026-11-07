@@ -425,3 +425,176 @@ test('a completion message visible before an attempted submission is not fresh p
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('user review keeps source evidence and context updates revoke pending approvals without clearing unknown submissions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-context-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const candidate = {
+      title: 'Synthetic event',
+      organizer: 'Fixture',
+      entryUrl: 'https://93.184.216.34/source',
+      deadline: null,
+      deadlineDate: '2099-01-01',
+      prize: 'Synthetic coffee',
+      winners: 1,
+      requirements: ['Answer truthfully'],
+      blockers: ['Unverified link'],
+      evidenceQuote: 'Synthetic evidence',
+      evidenceKind: 'text' as const,
+      effortMinutes: 5,
+    };
+    const { event } = app.store.record(candidate, candidate.entryUrl, 'fixture', 'fixture.png');
+    const state = await (await fetch(`${app.origin}/api/state`)).json();
+    const post = async (path: string, value: unknown) =>
+      fetch(app.origin + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+        body: JSON.stringify(value),
+      });
+    const response = await post(`/api/events/${event.id}/review`, {
+      entryUrl: 'https://93.184.216.34/form',
+      deadlineDate: '2099-01-01',
+      blockers: [],
+      note: 'Observed public form, synthetic review',
+    });
+    assert.equal(response.status, 200);
+    const revised = app.store.event(event.id)!;
+    assert.equal(revised.sourceUrl, candidate.entryUrl);
+    assert.equal(revised.reviews?.[0]?.previousBlockers[0], 'Unverified link');
+    const j = job(app.origin);
+    j.kind = 'apply';
+    j.eventId = event.id;
+    j.uncertain = true;
+    j.status = 'submission_unknown';
+    app.store.saveJob(j);
+    app.store.claimSubmission(event.id, j.id);
+    const context = await post(`/api/jobs/${j.id}/context`, {
+      text: 'The user supplied a synthetic answer.',
+    });
+    assert.equal(context.status, 200);
+    assert.equal(app.store.job(j.id)?.uncertain, true);
+    assert.equal(app.store.job(j.id)?.status, 'submission_unknown');
+    assert.equal(app.store.job(j.id)?.userContext, 'The user supplied a synthetic answer.');
+    const denied = await post(`/api/events/${event.id}/review`, {
+      entryUrl: candidate.entryUrl,
+      deadlineDate: null,
+      blockers: [],
+      note: 'Cannot alter a started entry',
+    });
+    assert.equal(denied.status, 400);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('hidden form timers do not invalidate observation but visible field changes do', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-timer-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    await app.browser.navigate(`${app.origin}/demo/event?run=timer`);
+    await app.browser.page!.evaluate(() => {
+      const timer = document.createElement('input');
+      timer.type = 'hidden';
+      timer.id = 'timer';
+      document.body.append(timer);
+    });
+    const o = await app.browser.observe();
+    await app.browser.page!.locator('#timer').evaluate((el) => el.setAttribute('value', '2'));
+    await app.browser.assertFresh(o.id);
+    await app.browser.page!.locator('#timer').evaluate((el) => el.setAttribute('type', 'text'));
+    await assert.rejects(() => app.browser.assertFresh(o.id), /stale_observation/);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('explicit manual handoff resumes a live form without GET reloading it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-live-form-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.status = 'paused';
+    j.currentUrl = j.startUrl;
+    app.store.saveJob(j);
+    await app.browser.navigate(j.startUrl);
+    await app.browser.page!.evaluate(() => {
+      document.body.innerHTML = '<p>Transient form step preserved</p>';
+    });
+    const observed: string[] = [];
+    app.runner.model.decide = async (_choice, _instructions, context: any) => {
+      observed.push(context.observation.text);
+      return {
+        step: {
+          action: 'needs_user',
+          observationId: context.observation.id,
+          reason: 'Synthetic handoff test',
+        },
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+    };
+    const state = await (await fetch(`${app.origin}/api/state`)).json();
+    const response = await fetch(`${app.origin}/api/jobs/${j.id}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: JSON.stringify({ useCurrentPage: true }),
+    });
+    assert.equal(response.status, 200);
+    await app.runner.finished();
+    assert.deepEqual(observed, ['Transient form step preserved']);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('styled radio labels work and a numbered Next page stays in progress instead of becoming a final submission', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-multistep-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.currentUrl = j.startUrl;
+    app.store.saveJob(j);
+    await app.browser.navigate(j.startUrl);
+    app.browser.ownerJobId = j.id;
+    await app.browser.page!.evaluate(() => {
+      document.body.innerHTML =
+        '<p id="progress">1 / 3page</p><form><div style="position:relative;height:40px"><input id="answer" type="radio" name="answer" value="first"><label for="answer" style="position:absolute;inset:0;background:white;margin:0">First visit</label></div><button type="submit">다음</button></form>';
+      document.querySelector('form')!.onsubmit = (event) => {
+        event.preventDefault();
+        document.querySelector('#progress')!.textContent = '2 / 3page';
+      };
+    });
+    const model = {
+      async decide(_choice: unknown, _instructions: string, context: any) {
+        const o = context.observation as Observation;
+        const radio = o.elements.find((e) => e.type === 'radio')!;
+        const step = o.text.includes('2 / 3page')
+          ? { action: 'needs_user' }
+          : !radio.checked
+            ? { action: 'click', ref: radio.ref }
+            : { action: 'click', ref: o.elements.find((e) => e.type === 'submit')!.ref };
+        return {
+          step: { ...step, observationId: o.id, reason: 'Synthetic multi-page form test' },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'needs_user');
+    assert.equal(result.uncertain, false);
+    assert.equal(result.steps, 3);
+    assert.equal(result.intent, undefined);
+    assert.equal(app.store.receipt(j.id), undefined);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

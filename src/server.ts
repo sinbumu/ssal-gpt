@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { Auth, ServiceError, safeMessage } from './auth.js';
-import { Browser } from './browser.js';
+import { Browser, validateUrl } from './browser.js';
 import { Model } from './model.js';
 import { Store, deadlineState, scoreCandidate, type Job } from './store.js';
 import { Runner } from './runner.js';
@@ -26,6 +26,7 @@ const JobSchema = z.object({
   layout: z.enum(['normal', 'shift']).optional(),
   discoverySource: z.enum(['culture', 'google', 'custom']).default('culture'),
   sourceUrl: z.string().url().optional(),
+  userContext: z.string().max(6000).optional(),
 });
 async function body(request: IncomingMessage, limit = 64_000) {
   const chunks: Buffer[] = [];
@@ -204,6 +205,24 @@ export async function createApp(options: {
         manualNavigation = false;
       }
     }
+    const reviewMatch = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/review$/);
+    if (method === 'POST' && reviewMatch) {
+      const id = reviewMatch[1]!;
+      const review = z
+        .object({
+          entryUrl: z.string().url(),
+          deadlineDate: z.string().date().nullable(),
+          blockers: z.array(z.string().max(300)).max(20),
+          note: z.string().min(5).max(2000),
+        })
+        .parse(data);
+      if (!store.event(id)) throw new ServiceError('event_not_found', 404);
+      await validateUrl(review.entryUrl);
+      if (runner.isBusy() || store.submission(id))
+        throw new ServiceError('cannot_review_started_event');
+      const { note, ...patch } = review;
+      return send(response, 200, { event: store.reviewEvent(id, patch, note) });
+    }
     if (method === 'POST' && url.pathname === '/api/jobs') {
       if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
       const input = JobSchema.parse(data);
@@ -246,6 +265,7 @@ export async function createApp(options: {
         allowedOrigins: [new URL(startUrl).origin],
         approvedTexts: [],
         history: [],
+        userContext: input.userContext,
       };
       if (event && !store.claimSubmission(event.id, id))
         throw new ServiceError('event_already_started_or_submitted');
@@ -255,7 +275,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|context)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -269,6 +289,17 @@ export async function createApp(options: {
       else if (action === 'resume') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
         if (job.status === 'approval') throw new ServiceError('review_pending_action_first');
+        if (runner.isBusy()) throw new ServiceError('browser_busy', 409);
+        if (data.useCurrentPage === true) {
+          const current = browser.page?.url();
+          if (!current || !job.allowedOrigins.includes(new URL(current).origin))
+            throw new ServiceError('current_page_outside_job_scope');
+          // Explicit manual handoff: keep a live POST-backed form instead of reloading its URL.
+          browser.ownerJobId = id;
+          browser.invalidate();
+          job.currentUrl = current;
+          store.saveJob(job);
+        }
         if (data.extraSteps === 20) {
           job.maxSteps = Math.min(120, job.maxSteps + 20);
           store.saveJob(job);
@@ -277,6 +308,18 @@ export async function createApp(options: {
       } else if (action === 'approve') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
         runner.approve(id, z.string().parse(data.approvalId));
+      } else if (action === 'context') {
+        if (runner.isBusy() || ['completed', 'stopped'].includes(job.status))
+          throw new ServiceError('pause_before_updating_context');
+        const text = z.string().min(1).max(2000).parse(data.text);
+        const combined = [job.userContext, text].filter(Boolean).join('\n');
+        if (combined.length > 12000) throw new ServiceError('user_context_limit');
+        job.userContext = combined;
+        delete job.approval;
+        job.status = job.uncertain ? 'submission_unknown' : 'paused';
+        job.note = '사용자 답변을 추가했습니다. 새 화면에서 재개할 수 있습니다.';
+        store.saveJob(job);
+        store.note(id, '사용자가 작업 답변을 추가했습니다.');
       } else if (action === 'reconcile') {
         if (runner.isBusy() || !job.uncertain || data.confirmed !== true)
           throw new ServiceError('manual_reconciliation_required');

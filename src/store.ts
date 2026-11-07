@@ -47,9 +47,16 @@ export type Job = {
   uncertain: boolean;
   allowedOrigins: string[];
   approvedTexts: string[];
-  intent?: { beforeText: string; url: string };
+  intent?: {
+    beforeText: string;
+    url: string;
+    kind?: 'step' | 'submission';
+    progress?: { current: number; total: number };
+  };
+  userContext?: string;
   memory?: string;
   observedUrls?: string[];
+  observedProgress?: { url: string; current: number; total: number };
   history: { action: string; reason: string; url: string }[];
 };
 export type EventRecord = Candidate & {
@@ -62,6 +69,7 @@ export type EventRecord = Candidate & {
   scoreReasons: string[];
   entryKey: string;
   campaignKey: string;
+  reviews?: { at: string; note: string; previousEntryUrl: string; previousBlockers: string[] }[];
 };
 
 export function canonicalUrl(raw: string) {
@@ -165,6 +173,31 @@ export class Store {
   event(id: string): EventRecord | undefined {
     const r = this.db.prepare('SELECT data FROM events WHERE id=?').get(id);
     return r ? JSON.parse(r.data as string) : undefined;
+  }
+  reviewEvent(
+    id: string,
+    patch: Pick<Candidate, 'entryUrl' | 'deadlineDate' | 'blockers'>,
+    note: string,
+  ) {
+    const event = this.event(id);
+    if (!event) return undefined;
+    const reviews = [
+      ...(event.reviews || []),
+      {
+        at: new Date().toISOString(),
+        note,
+        previousEntryUrl: event.entryUrl,
+        previousBlockers: event.blockers,
+      },
+    ].slice(-10);
+    const next = { ...event, ...patch, entryKey: canonicalUrl(patch.entryUrl), reviews };
+    const ranked = scoreCandidate(next);
+    next.score = ranked.score;
+    next.scoreReasons = ranked.reasons;
+    this.db
+      .prepare('UPDATE events SET entry_key=?,data=? WHERE id=?')
+      .run(next.entryKey, JSON.stringify(next), id);
+    return next;
   }
   record(candidate: Candidate, sourceUrl: string, jobId: string, screenshot: string) {
     const entryKey = canonicalUrl(candidate.entryUrl);

@@ -137,8 +137,19 @@ export class Browser {
     });
     await this.context.addInitScript(() => {
       (window as any).__ssalRevision = 0;
-      new MutationObserver(() => {
-        (window as any).__ssalRevision++;
+      new MutationObserver((mutations) => {
+        // Hidden timers / rotating form tokens do not change the observed controls.
+        // Type, visibility, name and all visible field mutations still invalidate actions.
+        const relevant = mutations.some(
+          (m) =>
+            !(
+              m.type === 'attributes' &&
+              m.attributeName === 'value' &&
+              m.target instanceof HTMLInputElement &&
+              m.target.type === 'hidden'
+            ),
+        );
+        if (relevant) (window as any).__ssalRevision++;
       }).observe(document, {
         subtree: true,
         childList: true,
@@ -382,8 +393,19 @@ export class Browser {
       await page.mouse.move(x, y);
       await page.mouse.wheel(0, step.delta || 650);
     } else if (step.action === 'click') {
-      if (target) await target.click({ timeout: 6000 });
-      else if (
+      if (target) {
+        const element = o.elements.find((e) => e.ref === step.ref);
+        // Styled radios/checkboxes often put the associated label over the input.
+        const label =
+          element && ['radio', 'checkbox'].includes(element.type)
+            ? await target.evaluateHandle((el) => (el as HTMLInputElement).labels?.[0] || null)
+            : undefined;
+        try {
+          await (label?.asElement() || target).click({ timeout: 6000 });
+        } finally {
+          await label?.dispose();
+        }
+      } else if (
         step.x !== undefined &&
         step.y !== undefined &&
         step.x < o.width &&

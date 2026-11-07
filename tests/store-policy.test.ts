@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deadlineState, Store, scoreCandidate, type Job } from '../src/store.js';
-import { actionPolicy } from '../src/runner.js';
+import { actionPolicy, pageProgress, intermediateAdvanced } from '../src/runner.js';
 import { validateUrl, privateAddress, type Observation } from '../src/browser.js';
 const candidate = {
   title: 'Synthetic coffee',
@@ -139,4 +139,28 @@ test('date-only deadlines preserve uncertainty and use the Korean calendar bound
   assert.equal(deadlineState(c, Date.parse('2030-01-01T15:00:00Z')), 'closing_today');
   assert.equal(deadlineState(c, Date.parse('2030-01-02T15:00:00Z')), 'ended');
   assert.equal(scoreCandidate({ ...candidate, ...c }, Date.parse('2030-01-01T15:00:00Z')).score, 0);
+});
+
+test('intermediate survey navigation requires observed progress on the same origin, never implies final completion', () => {
+  assert.deepEqual(pageProgress('Survey\n1 / 26page\n2%'), { current: 1, total: 26 });
+  assert.deepEqual(pageProgress('2 / 26 페이지\nQ2'), { current: 2, total: 26 });
+  const j = makeJob();
+  j.uncertain = true;
+  j.intent = {
+    beforeText: '1 / 26page',
+    url: 'https://example.com/survey',
+    kind: 'step',
+    progress: { current: 1, total: 26 },
+  };
+  const o = { url: 'https://example.com/survey', text: '2 / 26page\nQuestion two' } as Observation;
+  assert.equal(intermediateAdvanced(j, o), true);
+  assert.equal(
+    intermediateAdvanced(j, { ...o, text: '8 / 26page\nSkipped inapplicable questions' }),
+    true,
+  );
+  assert.equal(intermediateAdvanced(j, { ...o, text: '1 / 26page\nPlease answer' }), false);
+  assert.equal(intermediateAdvanced(j, { ...o, url: 'https://other.example/survey' }), false);
+  assert.equal(intermediateAdvanced(j, { ...o, text: '응모가 완료되었습니다' }), false);
+  j.intent.kind = 'submission';
+  assert.equal(intermediateAdvanced(j, o), false);
 });

@@ -401,7 +401,10 @@ export class Browser {
             ? await target.evaluateHandle((el) => (el as HTMLInputElement).labels?.[0] || null)
             : undefined;
         try {
-          await (label?.asElement() || target).click({ timeout: 6000 });
+          const labelElement = label?.asElement();
+          const clickTarget =
+            labelElement && (await labelElement.isVisible()) ? labelElement : target;
+          await clickTarget.click({ timeout: 6000 });
         } finally {
           await label?.dispose();
         }

@@ -598,3 +598,36 @@ test('styled radio labels work and a numbered Next page stays in progress instea
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('visible choices remain clickable when their associated label is hidden or has no box', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-hidden-label-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    await app.browser.navigate(`${app.origin}/demo/event?run=hidden-label`);
+    await app.browser.page!.evaluate(() => {
+      document.body.innerHTML =
+        '<input id="rating" type="radio" name="rating" value="agree" aria-label="Agree"><label for="rating" style="display:none">Agree</label>' +
+        '<input id="choice" type="checkbox" aria-label="Select"><label for="choice" style="display:block;width:0;height:0;overflow:hidden;margin:0">Select</label>';
+      document.body.dataset.changes = '0';
+      document.body.addEventListener('change', () => {
+        document.body.dataset.changes = String(Number(document.body.dataset.changes) + 1);
+      });
+    });
+    for (const type of ['radio', 'checkbox']) {
+      const o = await app.browser.observe();
+      const choice = o.elements.find((e) => e.type === type)!;
+      assert.ok(choice, 'the input must be observed on screen');
+      await app.browser.act({
+        action: 'click',
+        observationId: o.id,
+        ref: choice.ref,
+        reason: 'Synthetic hidden-label test',
+      });
+      assert.equal(await app.browser.page!.locator(`input[type="${type}"]`).isChecked(), true);
+    }
+    assert.equal(await app.browser.page!.locator('body').getAttribute('data-changes'), '2');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

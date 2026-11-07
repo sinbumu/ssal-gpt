@@ -73,7 +73,7 @@ function renderInbox(job) {
   const a = job.autonomy;
   if (!a) return '';
   const m = a.metrics;
-  const metrics = `<p class="hint">묶음 ${m.batches}회 · 입력 검증 ${m.fields}개 · 답변 재사용 ${m.reused}개 · 확인 요청 ${m.inboxBatches}회 · 자동 복구 ${m.recoveries}회 · 모델 ${(m.modelMs / 1000).toFixed(1)}초 / 브라우저 ${(m.browserMs / 1000).toFixed(1)}초</p>`;
+  const metrics = `<p class="hint">묶음 ${m.batches}회 · 입력 검증 ${m.fields}개 · 답변 재사용 ${m.reused}개 · 확인 요청 ${m.inboxBatches}회 · 자동 복구 ${m.recoveries}회 · 모델 ${(m.modelMs / 1000).toFixed(1)}초 / 관찰·입력 ${(m.browserMs / 1000).toFixed(1)}초</p>`;
   const changed = !a.synthetic && state.autonomy.revision !== a.revision;
   if (changed && !['completed', 'stopped'].includes(job.status))
     return (
@@ -276,6 +276,7 @@ $('autonomy-form').onsubmit = guard(async () => {
   const policy = {
     enabled: f.has('enabled'),
     autoRecommendations: f.has('autoRecommendations'),
+    semanticPreferenceReuse: f.has('semanticPreferenceReuse'),
     preferenceRule: f.get('preferenceRule'),
     evaluationRule: f.get('evaluationRule'),
     singleChoice: f.get('singleChoice'),

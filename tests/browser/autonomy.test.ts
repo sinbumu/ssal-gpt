@@ -18,6 +18,15 @@ import {
 import { inspectForm, applyAnswers } from '../../src/forms.js';
 import { demoState } from '../../src/autonomy-demo.js';
 
+async function post(app: Awaited<ReturnType<typeof createApp>>, path: string, data: unknown) {
+  const s = await fetch(app.origin + '/api/state').then((r) => r.json());
+  return fetch(app.origin + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': s.csrf },
+    body: JSON.stringify(data),
+  });
+}
+
 function syntheticModel(): Model {
   return {
     async decide(_choice: unknown, _instructions: string, context: any, image: Buffer) {
@@ -179,6 +188,182 @@ test('batch rejects changed form destinations and choice options before entering
       /form_structure_changed/,
     );
     assert.equal(await page.locator('input').first().inputValue(), '');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('final review is bound to actual values; manual edits cannot be silently overwritten and submitted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-final-review-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    app.runner.model.decide = syntheticModel().decide;
+    const j = makeJob(app.origin);
+    j.autonomy!.policy = { ...j.autonomy!.policy, finalSubmit: 'review' };
+    app.store.saveJob(j);
+    app.runner.start(j.id);
+    await app.runner.finished();
+    const pending = app.store.job(j.id)!;
+    assert.equal(pending.autonomy!.inbox?.final, true);
+    assert.equal(demoState(app.store, j.id).posts, 4);
+    await app.browser.page!.locator('input[type=tel]').fill('010-1111-1111');
+    assert.equal(
+      (
+        await post(app, `/api/jobs/${j.id}/inbox`, {
+          inboxId: pending.autonomy!.inbox!.id,
+          confirm: true,
+        })
+      ).status,
+      200,
+    );
+    await app.runner.finished();
+    const changed = app.store.job(j.id)!;
+    assert.equal(changed.status, 'needs_user');
+    assert.equal(changed.note, 'final_review_changed');
+    assert.equal(await app.browser.page!.locator('input[type=tel]').inputValue(), '010-1111-1111');
+    assert.equal(demoState(app.store, j.id).posts, 4);
+    // A fresh review must be generated and explicitly accepted before submission.
+    app.runner.start(j.id);
+    await app.runner.finished();
+    const fresh = app.store.job(j.id)!;
+    assert.ok(fresh.autonomy!.inbox?.final);
+    assert.notEqual(fresh.autonomy!.inbox!.id, pending.autonomy!.inbox!.id);
+    assert.equal(
+      (
+        await post(app, `/api/jobs/${j.id}/inbox`, {
+          inboxId: fresh.autonomy!.inbox!.id,
+          confirm: true,
+        })
+      ).status,
+      200,
+    );
+    await app.runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+    assert.equal(demoState(app.store, j.id).posts, 5);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test('revoked delegation stops before input; settings and profile are not copied into the state polling response', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-revoke-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = makeJob(app.origin);
+    j.autonomy!.synthetic = false;
+    j.autonomy!.revision = 'old';
+    app.store.saveJob(j);
+    assert.equal(
+      (
+        await post(app, '/api/autonomy', {
+          profile: syntheticSettings.profile,
+          policy: syntheticSettings.policy,
+        })
+      ).status,
+      200,
+    );
+    app.runner.model.decide = syntheticModel().decide;
+    app.runner.start(j.id);
+    await app.runner.finished();
+    assert.equal(app.store.job(j.id)!.note, 'delegation_expired_or_changed');
+    assert.equal(app.store.job(j.id)!.steps, 0);
+    assert.equal(await app.browser.page!.locator('input').first().inputValue(), '');
+    const s = await fetch(app.origin + '/api/state').then((r) => r.text());
+    assert.ok(!s.includes('demo@example.invalid'));
+    assert.equal((await post(app, `/api/jobs/${j.id}/delegation`, {})).status, 200);
+    app.runner.start(j.id);
+    await app.runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test('autonomous submission response loss never repeats a POST and receipt read reconciles the result', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-unknown-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = makeJob(app.origin);
+    app.store.saveJob(j);
+    app.runner.model.decide = syntheticModel().decide;
+    await app.browser.open();
+    await app.browser.page!.route('**/demo/autonomy*', async (route) => {
+      if (route.request().method() === 'POST' && demoState(app.store, j.id).page === 5) {
+        await route.fetch();
+        await route.abort('failed');
+      } else await route.continue();
+    });
+    app.runner.start(j.id);
+    await app.runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'submission_unknown');
+    assert.equal(demoState(app.store, j.id).posts, 5);
+    app.runner.start(j.id);
+    await app.runner.finished();
+    assert.equal(demoState(app.store, j.id).posts, 5);
+    // User navigates to the existing receipt (GET); this does not submit again.
+    await app.browser.navigate(j.startUrl);
+    app.runner.start(j.id);
+    await app.runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+    assert.equal(demoState(app.store, j.id).posts, 5);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirmed answers persist through dashboard API and a new job reuses them without asking again', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-reuse-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    await post(app, '/api/autonomy', {
+      profile: syntheticSettings.profile,
+      policy: syntheticSettings.policy,
+    });
+    const config = app.store.settings<any>('autonomy', null);
+    app.runner.model.decide = syntheticModel().decide;
+    const first = makeJob(app.origin);
+    first.autonomy = createAutonomy(config, app.origin);
+    app.store.saveJob(first);
+    app.store.setSettings(`synthetic:${first.id}`, {
+      page: 1,
+      layout: 'normal',
+      inbox: true,
+      posts: 0,
+    });
+    app.runner.start(first.id);
+    await app.runner.finished();
+    const box = app.store.job(first.id)!.autonomy!.inbox!;
+    assert.equal(box.items.length, 2);
+    assert.equal(
+      (
+        await post(app, `/api/jobs/${first.id}/inbox`, {
+          inboxId: box.id,
+          answers: Object.fromEntries(box.items.map((q) => [q.id, ['아니요']])),
+          remember: true,
+        })
+      ).status,
+      200,
+    );
+    await app.runner.finished();
+    assert.equal(app.store.job(first.id)!.status, 'completed');
+    assert.equal(app.store.settings('answers', []).length, 2);
+    const second = makeJob(app.origin);
+    second.autonomy = createAutonomy(config, app.origin);
+    app.store.saveJob(second);
+    app.store.setSettings(`synthetic:${second.id}`, {
+      page: 1,
+      layout: 'shift',
+      inbox: true,
+      posts: 0,
+    });
+    app.runner.start(second.id);
+    await app.runner.finished();
+    const done = app.store.job(second.id)!;
+    assert.equal(done.status, 'completed');
+    assert.equal(done.autonomy!.metrics.inboxBatches, 0);
+    assert.equal(demoState(app.store, second.id).posts, 5);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

@@ -1,3 +1,4 @@
+import { completionMessage } from './completion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { Browser, validateUrl, type Observation } from './browser.js';
 import { Model, type Step } from './model.js';
@@ -372,10 +373,7 @@ export class Runner {
           if (job.kind !== 'discover') {
             if (!step.evidenceQuote || !o.text.includes(step.evidenceQuote))
               throw new ServiceError('completion_evidence_missing');
-            const receiptMessage =
-              /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|설문(?:조사|응답)?(?:이|가)?\s*완료되었습니다|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
-                step.evidenceQuote,
-              );
+            const receiptMessage = completionMessage(step.evidenceQuote, o.text);
             const newReceipt =
               receiptMessage &&
               !!job.intent &&

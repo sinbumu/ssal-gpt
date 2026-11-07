@@ -16,6 +16,7 @@ export const PolicySchema = z
   .object({
     enabled: z.boolean().default(false),
     autoRecommendations: z.boolean().default(false),
+    semanticPreferenceReuse: z.boolean().default(false),
     preferenceRule: z.string().max(1500).default(''),
     evaluationRule: z.string().max(1500).default(''),
     singleChoice: z.enum(['ask', 'first']).default('ask'),
@@ -165,6 +166,12 @@ const personal: Record<keyof Profile, RegExp> = {
   ageRange: /연령|나이|age/i,
 };
 export function personalKey(q: Question) {
+  if (
+    /친구|타인|추천인|보호자|만족|평가|의견|설명|예시|friend|guardian|referr|opinion|describe|example/i.test(
+      q.label,
+    )
+  )
+    return undefined;
   return (Object.keys(personal) as (keyof Profile)[]).find((k) => personal[k].test(q.label));
 }
 export function consentQuestion(q: Question) {
@@ -208,13 +215,21 @@ export function resolveAnswer(
   if (exact) return { answer: validateAnswer(q, exact.answer), source: 'memory' };
   if (!plan) return { source: 'missing_plan' };
   const factual =
-    /이용한|사용한|경험|구매|방문한|회원|가입|횟수|빈도|자격|성별|생년|have you|how often|previously|eligib/i.test(
+    /이름|성명|이메일|전화번호|연락처|이용한|사용한|경험|구매|방문한|회원|가입|횟수|빈도|자격|성별|생년|have you|how often|previously|eligib|email|phone|friend/i.test(
       q.label,
     );
   if (plan.source === 'memory') {
     const memory = saved.find((a) => a.id === plan.sourceId && a.origin === state.origin);
+    const negative = /않|싫|제외|비선호|원하지|\bnot\b|least|dislike|avoid|except/i;
     // Facts require an exact question/options match. Semantic reuse is preference-only.
-    if (!factual && memory && memory.category === 'preference' && plan.category === 'preference') {
+    if (
+      state.policy.semanticPreferenceReuse &&
+      !factual &&
+      memory &&
+      memory.category === 'preference' &&
+      plan.category === 'preference' &&
+      negative.test(q.label) === negative.test(memory.question)
+    ) {
       const answer = memory.answer.map(
         (label) => q.options.find((o) => o.id === label || o.label === label)?.id || label,
       );

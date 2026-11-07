@@ -1,3 +1,4 @@
+import { completionMessage } from './completion.js';
 import { randomUUID } from 'node:crypto';
 import type { Browser } from './browser.js';
 import type { Model } from './model.js';
@@ -140,10 +141,7 @@ export async function runAutonomous(
         job.note = redact(step.reason, state.profile);
         if (step.action === 'done') {
           const quote = step.evidenceQuote || '';
-          const receipt =
-            /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|설문(?:조사|응답)?(?:이|가)?\s*완료되었습니다|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
-              quote,
-            );
+          const receipt = completionMessage(quote, o.text);
           if (
             !job.uncertain ||
             !job.intent ||

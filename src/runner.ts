@@ -371,7 +371,7 @@ export class Runner {
             if (!step.evidenceQuote || !o.text.includes(step.evidenceQuote))
               throw new ServiceError('completion_evidence_missing');
             const receiptMessage =
-              /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
+              /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|설문(?:조사|응답)?(?:이|가)?\s*완료되었습니다|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
                 step.evidenceQuote,
               );
             const newReceipt =

@@ -631,3 +631,62 @@ test('visible choices remain clickable when their associated label is hidden or 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('survey completion is recognized after submission, while thanks alone or an incomplete survey stays uncertain', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-survey-receipt-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    for (const [message, completed] of [
+      ['설문이 완료되었습니다.', true],
+      ['참여해 주셔서 감사합니다.', false],
+      ['설문이 완료되지 않았습니다.', false],
+    ] as const) {
+      const j = job(app.origin);
+      j.kind = 'apply';
+      j.currentUrl = j.startUrl;
+      app.store.saveJob(j);
+      await app.browser.navigate(j.startUrl);
+      app.browser.ownerJobId = j.id;
+      await app.browser.page!.evaluate((result) => {
+        document.body.innerHTML =
+          '<form><p>참여해 주셔서 감사합니다.</p><button type="submit">설문제출</button></form>';
+        document.body.dataset.submissions = '0';
+        document.querySelector('form')!.onsubmit = (event) => {
+          event.preventDefault();
+          document.body.dataset.submissions = String(Number(document.body.dataset.submissions) + 1);
+          document.body.innerHTML = `<p>${result}</p>`;
+        };
+      }, message);
+      const model = {
+        async decide(_p: unknown, _i: string, context: any) {
+          const o = context.observation as Observation;
+          const submit = o.elements.find((e) => e.type === 'submit');
+          return {
+            step: {
+              ...(submit
+                ? { action: 'click', ref: submit.ref }
+                : { action: 'done', evidenceQuote: message }),
+              observationId: o.id,
+              reason: 'Synthetic survey completion test',
+            },
+            inputTokens: 0,
+            outputTokens: 0,
+          };
+        },
+      } as unknown as Model;
+      const runner = new Runner(app.store, app.browser, model, app.origin);
+      runner.start(j.id);
+      await runner.finished();
+      assert.equal(app.store.job(j.id)?.status, 'approval');
+      runner.approve(j.id, app.store.job(j.id)!.approval!.id);
+      await runner.finished();
+      const result = app.store.job(j.id)!;
+      assert.equal(result.status, completed ? 'completed' : 'submission_unknown', message);
+      assert.equal(result.uncertain, !completed);
+      assert.equal(await app.browser.page!.locator('body').getAttribute('data-submissions'), '1');
+    }
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

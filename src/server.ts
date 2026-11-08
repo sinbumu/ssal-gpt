@@ -421,7 +421,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -450,10 +450,41 @@ export async function createApp(options: {
         }
       }
       if (
-        ['resume', 'approve', 'inbox'].includes(action) &&
+        ['resume', 'approve', 'inbox', 'retry-research'].includes(action) &&
         (job.browserEngine || 'chromium') !== browser.engine
       )
         throw new ServiceError('job_browser_profile_mismatch');
+      if (action === 'retry-research') {
+        const state = job.autonomy;
+        const questions =
+          state?.inbox?.items.filter(
+            (q) =>
+              q.category === 'knowledge' &&
+              !/이름|연락처|이메일|동의|약관|경험|회원|직업|생년/.test(q.label),
+          ) || [];
+        if (
+          runner.isBusy() ||
+          manualNavigation ||
+          job.uncertain ||
+          job.status !== 'needs_user' ||
+          !state ||
+          state.inbox?.final ||
+          !questions.length ||
+          (state.researchRetries || 0) >= 2
+        )
+          throw new ServiceError('research_retry_unavailable');
+        state.researchRetries = (state.researchRetries || 0) + 1;
+        state.researched = state.researched?.filter(
+          (s) => !questions.some((q) => q.signature === s),
+        );
+        delete state.inbox;
+        delete state.plan;
+        delete state.finalApproval;
+        job.status = 'paused';
+        store.saveJob(job);
+        runner.start(id);
+        return send(response, 200, { ok: true });
+      }
       if (action === 'inbox') {
         if (
           runner.isBusy() ||

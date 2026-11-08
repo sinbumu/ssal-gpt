@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './store.js';
-import { searchPage, type SourceEvidence } from './evidence.js';
+import { searchPage, observedQuote, type SourceEvidence } from './evidence.js';
 
 export const ProfileSchema = z
   .object({
@@ -81,6 +81,7 @@ export type AutonomyState = {
   evidence?: SourceEvidence[];
   entryChannel?: string;
   researched?: string[];
+  researchRetries?: number;
   introAdvances?: number;
   inbox?: {
     id: string;
@@ -284,7 +285,7 @@ export function resolveAnswer(
       source &&
       !searchPage(source.url) &&
       plan.evidenceQuote &&
-      source.text.includes(plan.evidenceQuote)
+      observedQuote(source.text, plan.evidenceQuote)
     )
       return { answer: valid, source: 'observed_public_evidence' };
   }

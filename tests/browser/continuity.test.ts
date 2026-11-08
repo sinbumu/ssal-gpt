@@ -375,3 +375,109 @@ test('discovery automatically starts exactly one observed form and waits at the 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('public research opens a visible embedded article before asking the model for its source', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-research-frame-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = prepare(app);
+    await app.browser.navigate(job.startUrl);
+    const original = app.browser.page!;
+    app.browser.ownerJobId = job.id;
+    const source = 'https://example.org/public-source';
+    await app.browser.context!.route('https://search.naver.com/**', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<iframe src="${source}" style="width:1200px;height:800px"></iframe>`,
+      }),
+    );
+    await app.browser.context!.route(source, (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<p>이것은 공식 기관의 공개 자료입니다. 현재 인정기관은 모두 12곳이며 원문에서 이 내용을 확인할 수 있습니다.</p>',
+      }),
+    );
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        calls++;
+        assert.equal(ctx.observation.url, source);
+        assert.ok(ctx.observation.text.includes('12곳'));
+        return {
+          step: { action: 'done', observationId: ctx.observation.id, reason: '공식 원문 확인' },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    await researchQuestion(
+      app.store,
+      app.browser,
+      model,
+      job,
+      '공개 기관',
+      new AbortController().signal,
+    );
+    assert.equal(calls, 1);
+    assert.equal(app.browser.page, original);
+    assert.ok(job.autonomy!.evidence!.some((e) => e.url === source));
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard can retry only unresolved public knowledge without approving consent or repeating submissions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-research-retry-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = prepare(app);
+    const knowledge = {
+      id: 'knowledge',
+      signature: 'knowledge',
+      label: '공식 기관 수는?',
+      kind: 'radio' as const,
+      required: true,
+      multiple: false,
+      options: [{ id: '12', label: '12' }],
+      category: 'knowledge' as const,
+      reason: 'answer_required',
+    };
+    job.status = 'needs_user';
+    job.autonomy!.researched = ['knowledge'];
+    job.autonomy!.inbox = {
+      id: randomUUID(),
+      fingerprint: 'fixture',
+      createdAt: Date.now(),
+      items: [knowledge],
+    };
+    app.store.saveJob(job);
+    app.runner.model.decide = async (_p, _i, ctx: any) => ({
+      step: { action: 'needs_user', observationId: ctx.observation.id, reason: 'fixture stop' },
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    const state = await fetch(app.origin + '/api/state').then((r) => r.json());
+    const response = await fetch(app.origin + `/api/jobs/${job.id}/retry-research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: '{}',
+    });
+    assert.equal(response.status, 200);
+    await app.runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.autonomy!.researchRetries, 1);
+    assert.deepEqual(saved.autonomy!.overrides, {});
+    assert.equal(saved.autonomy!.metrics.fields, 0);
+    assert.equal(saved.uncertain, false);
+    const second = await fetch(app.origin + `/api/jobs/${job.id}/retry-research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: '{}',
+    });
+    assert.notEqual(second.status, 200);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -256,9 +256,13 @@ function render() {
       )
     : [];
   const active = (j) =>
-    ['running', 'needs_user'].includes(j.status) || j.autonomy?.inbox || j.approval || j.uncertain;
+    !['completed', 'stopped'].includes(j.status) || j.autonomy?.inbox || j.approval || j.uncertain;
   $('pending-count').textContent = state.jobs.filter(
-    (j) => j.autonomy?.inbox || j.approval || j.uncertain,
+    (j) =>
+      ['paused', 'failed', 'needs_user'].includes(j.status) ||
+      j.autonomy?.inbox ||
+      j.approval ||
+      j.uncertain,
   ).length;
   $('active-jobs').innerHTML =
     cards.filter((_, i) => active(state.jobs[i])).join('') ||

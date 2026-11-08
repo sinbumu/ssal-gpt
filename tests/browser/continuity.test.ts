@@ -196,6 +196,74 @@ test('source facts, profile and route leave only consent and final review; compl
   }
 });
 
+test('manual reconciliation keeps the paused job visible and resumes its live page without replaying navigation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-reconcile-ui-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  const ui = await chromium.launch({ headless: true });
+  try {
+    const job = prepare(app);
+    let gets = 0;
+    let posts = 0;
+    await app.browser.open();
+    await app.browser.page!.route(job.startUrl, (route) => {
+      if (route.request().method() === 'POST') posts++;
+      else gets++;
+      return route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<p>2 / 2 페이지</p><form method="post"><fieldset><legend>개인정보 수집 동의</legend><label><input type="checkbox" name="c" required>동의합니다</label></fieldset><button>제출</button></form>',
+      });
+    });
+    await app.browser.navigate(job.startUrl);
+    app.browser.ownerJobId = job.id;
+    job.currentUrl = job.startUrl;
+    job.status = 'submission_unknown';
+    job.uncertain = true;
+    job.intent = {
+      url: job.startUrl,
+      beforeText: '첫 문항\n다음',
+      kind: 'submission',
+      at: Date.now(),
+    };
+    app.store.saveJob(job);
+    app.runner.model.decide = async (_p, _i, raw: any) => ({
+      step: {
+        action: 'form_plan',
+        observationId: raw.observation.id,
+        reason: '현재 문항 확인',
+        buttonId: raw.form.buttons[0].id,
+        answers: raw.form.questions.map((q: any) => ({
+          questionId: q.id,
+          category: 'consent',
+          source: 'unknown',
+          answer: [],
+          reason: '본인 동의 필요',
+        })),
+      },
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    const card = page.locator(`#active-jobs #job-${job.id}`);
+    page.on('dialog', (dialog) => void dialog.accept());
+    await card.getByRole('button', { name: '미제출 직접 확인', exact: true }).click();
+    await card.getByText('일시정지', { exact: true }).waitFor();
+    assert.equal(await page.locator(`#jobs #job-${job.id}`).count(), 0);
+    assert.equal(await page.locator('#pending-count').innerText(), '1');
+    assert.equal(app.store.job(job.id)!.uncertain, false);
+    await card.getByRole('button', { name: '현재 브라우저 화면에서 재개', exact: true }).click();
+    await card.locator('[data-inbox]').waitFor();
+    assert.equal(app.store.job(job.id)!.status, 'needs_user');
+    assert.equal(gets, 1, 'resume must preserve the live page');
+    assert.equal(posts, 0, 'reconciliation must not transmit answers or consent');
+    assert.equal(app.store.completedEntries().length, 0);
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('saved receipt survives restart and verifies without opening a browser or resubmitting', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-proof-'));
   let app = await createApp({ dir, port: 0, headless: true });

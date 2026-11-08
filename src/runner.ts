@@ -77,7 +77,7 @@ export function actionPolicy(
   if (['done', 'needs_user', 'scroll', 'wait'].includes(step.action)) return 'allow';
   if (job.kind === 'discover') {
     if (['search', 'record_event'].includes(step.action)) return 'allow';
-    const progress = pageProgress(observation.text);
+    const progress = pageProgress(observation.text || '');
     if (
       step.action === 'click' &&
       element &&

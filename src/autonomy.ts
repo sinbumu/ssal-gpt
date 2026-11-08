@@ -2,6 +2,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './store.js';
 import { searchPage, observedQuote, type SourceEvidence } from './evidence.js';
+import {
+  ConsentPolicySchema,
+  ConsentAssessmentSchema,
+  decideConsent,
+  recordConsent,
+  userConsentDecision,
+  type ConsentAudit,
+  type ConsentDecision,
+} from './consent.js';
 
 export const ProfileSchema = z
   .object({
@@ -23,6 +32,7 @@ export const PolicySchema = z
     singleChoice: z.enum(['ask', 'first']).default('ask'),
     finalSubmit: z.enum(['review', 'auto']).default('review'),
     maxRecoveries: z.number().int().min(0).max(5).default(3),
+    consent: ConsentPolicySchema.default(() => ConsentPolicySchema.parse({})),
   })
   .strict();
 export const SettingsSchema = z.object({ profile: ProfileSchema, policy: PolicySchema }).strict();
@@ -49,6 +59,7 @@ export const AnswerPlanSchema = z
     answer: z.array(z.string().max(2000)).max(30).optional(),
     evidenceQuote: z.string().max(1000).optional(),
     reason: z.string().max(300),
+    consentAssessment: ConsentAssessmentSchema.optional(),
   })
   .strict();
 export type AnswerPlan = z.infer<typeof AnswerPlanSchema>;
@@ -73,6 +84,8 @@ export type AutonomyState = {
   profile: Profile;
   origin: string;
   expires: number;
+  organizer?: string;
+  consents?: ConsentAudit[];
   synthetic?: boolean;
   plan?: { fingerprint: string; answers: AnswerPlan[]; buttonId?: string };
   overrides: Record<string, string[]>;
@@ -111,10 +124,14 @@ export function hash(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 export function settings(store: Store): Settings {
-  return store.settings<Settings>('autonomy', {
+  const saved = store.settings<Settings>('autonomy', {
     ...SettingsSchema.parse({ profile: {}, policy: {} }),
     revision: 'initial',
   });
+  return {
+    ...SettingsSchema.parse({ profile: saved.profile, policy: saved.policy }),
+    revision: saved.revision,
+  };
 }
 export function memories(store: Store) {
   return store.settings<SavedAnswer[]>('answers', []);
@@ -130,8 +147,8 @@ export function saveAnswer(store: Store, answer: Omit<SavedAnswer, 'id' | 'at'>)
 export function createAutonomy(config: Settings, origin: string, synthetic = false): AutonomyState {
   return {
     revision: config.revision,
-    policy: config.policy,
-    profile: config.profile,
+    policy: PolicySchema.parse(config.policy),
+    profile: { ...config.profile },
     origin,
     synthetic,
     expires: Date.now() + 24 * 60 * 60_000,
@@ -163,6 +180,9 @@ export const syntheticSettings: Settings = {
     evaluationRule: '일반 디자인·편의성 평가는 대체로 긍정, 매우 그렇다로 통일하지 않는다.',
     singleChoice: 'first',
     finalSubmit: 'auto',
+    // The synthetic demo explicitly delegates declining its optional marketing.
+    // Real/new settings still default to manual consent review.
+    consent: { mode: 'routine' },
   }),
 };
 const personal: Record<keyof Profile, RegExp> = {
@@ -202,14 +222,25 @@ export function resolveAnswer(
   state: AutonomyState,
   saved: SavedAnswer[],
   text: string,
-): { answer?: string[]; source: string; recommendation?: string[] } {
+): { answer?: string[]; source: string; recommendation?: string[]; consent?: ConsentDecision } {
+  const isConsent = consentQuestion(q) || plan?.category === 'consent';
   const override = state.overrides[q.signature];
-  if (override) return { answer: validateAnswer(q, override), source: 'user' };
-  // First-time consent is never inferred from a broad recommendation setting.
-  if (consentQuestion(q))
-    return !q.required && /마케팅|marketing/i.test(q.label)
-      ? { answer: [], source: 'optional_marketing_off' }
-      : { source: 'consent_required' };
+  if (override) {
+    const answer = validateAnswer(q, override);
+    const consent = isConsent && answer ? userConsentDecision(q, answer) : undefined;
+    if (consent) recordConsent(state, q, consent, 'user');
+    return { answer, source: 'user', consent };
+  }
+  // Consent has its own grant; recommendations and saved answers cannot grant it.
+  if (isConsent) {
+    const consent = decideConsent(q, state, plan?.consentAssessment);
+    recordConsent(state, q, consent);
+    return {
+      answer: consent.answer ? validateAnswer(q, consent.answer) : undefined,
+      source: consent.reason,
+      consent,
+    };
+  }
   if (state.reused?.[q.signature])
     return { answer: validateAnswer(q, state.reused[q.signature]!), source: 'job_memory' };
   const key = personalKey(q);

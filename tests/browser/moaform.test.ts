@@ -31,7 +31,7 @@ test('Moaform binds rendered labels and choices, requires notice consent, verifi
     const phone = view.questions.find((q) => q.label.includes('전화'))!;
     const quiz = view.questions.find((q) => q.label.includes('색상'))!;
     const state = createAutonomy(syntheticSettings, new URL(page.url()).origin, true);
-    assert.equal(resolveAnswer(consent, undefined, state, [], '').source, 'consent_required');
+    assert.equal(resolveAnswer(consent, undefined, state, [], '').consent?.decision, 'ask');
     assert.deepEqual(resolveAnswer(name, undefined, state, [], '').answer, ['테스트 참가자']);
     assert.deepEqual(resolveAnswer(phone, undefined, state, [], '').answer, ['01000000000']);
     const answers = new Map([

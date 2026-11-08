@@ -49,6 +49,8 @@ export type Job = {
   inputTokens: number;
   outputTokens: number;
   note: string;
+  holdNote?: string;
+  archivedAt?: string;
   screenshot?: string;
   approval?: Approval;
   uncertain: boolean;
@@ -333,6 +335,7 @@ export class Store {
                 : undefined,
             verification:
               typeof proof.verification === 'string' ? proof.verification : 'visible_receipt',
+            consents: job.autonomy?.consents || [],
           },
         ];
       })

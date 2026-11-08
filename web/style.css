@@ -722,3 +722,66 @@ label.check input {
 .completed-card {
   border-top: 3px solid #628267;
 }
+:root {
+  --consent-border: #dce4df;
+}
+.consent-settings {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--consent-border);
+  border-radius: 14px;
+}
+.consent-settings legend {
+  font-weight: 700;
+  padding: 0 8px;
+}
+.consent-modes {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+.consent-mode {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid var(--consent-border);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+}
+.consent-mode:has(input:checked) {
+  border-color: #2b7055;
+  background: #f1f7f3;
+}
+.consent-mode input {
+  width: auto;
+  margin-top: 5px;
+}
+.consent-mode small {
+  display: block;
+  margin-top: 5px;
+  line-height: 1.5;
+}
+.consent-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.consent-decision {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--consent-border);
+}
+.consent-notice {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.outcome-note {
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid #e5d5ad;
+  border-radius: 10px;
+  background: #fffaf0;
+}
+.outcome-note strong {
+  display: block;
+}

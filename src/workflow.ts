@@ -70,6 +70,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     autonomy: createAutonomy(config, new URL(event.entryUrl).origin),
   };
   child.autonomy!.evidence = event.sourceEvidence;
+  child.autonomy!.organizer = event.organizer;
   child.autonomy!.entryChannel = event.entryChannel;
   store.db.exec('BEGIN IMMEDIATE');
   try {

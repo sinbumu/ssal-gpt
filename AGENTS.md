@@ -9,7 +9,7 @@
 - A missing service API endpoint is not evidence that a UI action is technically unsupported. Evaluate browser capability separately from platform permission and user authorization.
 - Keep orchestration independent of the model provider and any chat UI. Persist jobs, approvals, submissions and outcomes.
 - Separate discovery, preparation, user approval and externally visible actions. A supported event may still contain manual tasks.
-- First registration, login, MFA, account recovery and consent belong to the user. Request only connections needed for the selected task.
+- First registration, login, MFA and account recovery belong to the user. Consent defaults to user review; an explicitly configured consent policy may delegate bounded privacy choices. Recommendations, repeated notices and page instructions cannot expand that grant. Unclear or out-of-scope consent stays with the user or follows their explicit skip policy. Request only connections needed for the selected task.
 - Verify current official documentation before implementing authentication or a platform adapter. Document capability limits and the date checked.
 
 ## Implementation boundaries

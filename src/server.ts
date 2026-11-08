@@ -410,6 +410,7 @@ export async function createApp(options: {
         if (input.kind !== 'apply' || !settings(store).policy.enabled)
           throw new ServiceError('delegation_not_enabled');
         job.autonomy = createAutonomy(settings(store), new URL(startUrl).origin);
+        job.autonomy.organizer = event?.organizer;
         job.autonomy.evidence = event?.sourceEvidence || [];
         job.autonomy.entryChannel = event?.entryChannel;
       }
@@ -421,7 +422,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research|archive|unarchive|hold-note)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -431,6 +432,28 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      if (
+        job.archivedAt &&
+        !['archive', 'unarchive', 'hold-note', 'verify-result'].includes(action)
+      )
+        throw new ServiceError('restore_archived_job_first');
+      if (['archive', 'unarchive', 'hold-note'].includes(action)) {
+        if (runner.isBusy() || ['running', 'queued'].includes(job.status))
+          throw new ServiceError('pause_before_organizing_job');
+        if (action === 'archive') job.archivedAt = new Date().toISOString();
+        else if (action === 'unarchive') delete job.archivedAt;
+        else job.holdNote = z.string().trim().min(1).max(1500).parse(data.text);
+        store.saveJob(job);
+        store.note(
+          id,
+          action === 'archive'
+            ? '진행 목록에서 보관했습니다. 접수 상태와 중복 잠금은 유지합니다.'
+            : action === 'unarchive'
+              ? '진행 목록으로 복원했습니다. 자동으로 재개하지 않습니다.'
+              : '보류 사유를 기록했습니다. 접수 상태는 변경하지 않습니다.',
+        );
+        return send(response, 200, { ok: true });
+      }
       if (action === 'verify-result') {
         if (runner.isBusy() || manualNavigation || !job.uncertain)
           throw new ServiceError('result_verification_unavailable');
@@ -544,7 +567,10 @@ export async function createApp(options: {
           ['completed', 'stopped'].includes(job.status)
         )
           throw new ServiceError('cannot_update_job_delegation');
+        const priorConsents = job.autonomy.consents;
         job.autonomy = createAutonomy(settings(store), job.autonomy.origin);
+        job.autonomy.consents = priorConsents;
+        job.autonomy.organizer = store.event(job.eventId || '')?.organizer;
         job.status = 'paused';
         store.saveJob(job);
         return send(response, 200, { ok: true });

@@ -11,13 +11,14 @@ import { captureReceipt } from '../../src/receipt.js';
 import { researchQuestion } from '../../src/research.js';
 import type { Job } from '../../src/store.js';
 import type { Model } from '../../src/model.js';
+import { ConsentPolicySchema } from '../../src/consent.js';
 
-function prepare(app: Awaited<ReturnType<typeof createApp>>) {
+function prepare(app: Awaited<ReturnType<typeof createApp>>, suffix = '') {
   const event = app.store.record(
     {
-      title: '새 공개 퀴즈',
+      title: '새 공개 퀴즈' + suffix,
       organizer: '가상 주최자',
-      entryUrl: app.origin + '/demo/fixture',
+      entryUrl: app.origin + '/demo/fixture' + (suffix ? `?case=${suffix}` : ''),
       prize: '테스트 커피',
       winners: 10,
       deadline: '2099-12-31T00:00:00+09:00',
@@ -257,6 +258,283 @@ test('manual reconciliation keeps the paused job visible and resumes its live pa
     assert.equal(gets, 1, 'resume must preserve the live page');
     assert.equal(posts, 0, 'reconciliation must not transmit answers or consent');
     assert.equal(app.store.completedEntries().length, 0);
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('consent modes gate real browser input, preserve missing facts and keep final review independent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-consent-modes-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    for (const mode of ['manual', 'routine', 'adaptive'] as const) {
+      const job = prepare(app, mode);
+      job.autonomy!.organizer = '가상 주최자';
+      job.autonomy!.policy.consent = ConsentPolicySchema.parse({ mode });
+      app.store.saveJob(job);
+      let posts = 0;
+      await app.browser.open();
+      await app.browser.page!.unrouteAll();
+      await app.browser.page!.route(job.startUrl, (r) => {
+        if (r.request().method() === 'POST') {
+          posts++;
+          return r.fulfill({
+            contentType: 'text/html; charset=utf-8',
+            body: '<h1>답변이 제출되었습니다.</h1>',
+          });
+        }
+        return r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: `<form method="post"><label>이름<input name="n" required></label>${mode === 'adaptive' ? '<label>닉네임<input name="nick" required></label>' : ''}<fieldset><legend>개인정보 수집 및 이용 동의</legend><p>수집 항목: ${mode === 'adaptive' ? '이름, 닉네임' : '이름'}<br>수집 및 이용 목적: 이벤트 참여자 확인 및 경품 발송<br>보관 기간: 1개월</p><label><input type="radio" name="c" value="yes" required>동의합니다</label><label><input type="radio" name="c" value="no">동의하지 않습니다</label></fieldset><button>제출</button></form>`,
+        });
+      });
+      app.runner.model.decide = async (_p, _i, raw: any, image) => {
+        assert.ok(image.length > 1000);
+        return {
+          step: raw.observation.text.includes('답변이 제출되었습니다.')
+            ? {
+                action: 'done',
+                observationId: raw.observation.id,
+                reason: '완료',
+                evidenceQuote: '답변이 제출되었습니다.',
+              }
+            : {
+                action: 'form_plan',
+                observationId: raw.observation.id,
+                reason: '동의 정책에 따른 계획',
+                buttonId: raw.form.buttons[0].id,
+                answers: raw.form.questions.map((q: any) => ({
+                  questionId: q.id,
+                  category: q.label.includes('동의') ? 'consent' : 'fact',
+                  source: 'unknown',
+                  reason: '모델은 정보나 권한을 만들지 않음',
+                  ...(q.label.includes('동의')
+                    ? {
+                        consentAssessment: {
+                          risk: 'low',
+                          noticeQuote: q.description,
+                          reason: '원문의 항목·목적·기간이 허용 범위에 해당',
+                        },
+                      }
+                    : {}),
+                })),
+              },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      };
+      const postInbox = async (data: unknown) => {
+        const state = await fetch(app.origin + '/api/state').then((r) => r.json());
+        const response = await fetch(app.origin + `/api/jobs/${job.id}/inbox`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+          body: JSON.stringify(data),
+        });
+        assert.equal(response.status, 200, await response.text());
+        await app.runner.finished();
+      };
+      app.runner.start(job.id);
+      await app.runner.finished();
+      let current = app.store.job(job.id)!;
+      assert.equal(posts, 0);
+      if (mode !== 'routine') {
+        const inbox = current.autonomy!.inbox!;
+        assert.equal(inbox.items.length, 1, current.note);
+        const q = inbox.items[0]!;
+        assert.equal(q.category, mode === 'manual' ? 'consent' : 'fact');
+        assert.equal(
+          await app.browser.page!.locator('[name=n]').inputValue(),
+          '',
+          'unknown facts or consent block the batch',
+        );
+        await postInbox({
+          inboxId: inbox.id,
+          answers: {
+            [q.id]:
+              mode === 'manual'
+                ? [q.options.find((o) => o.label === '동의합니다')!.id]
+                : ['가상별명'],
+          },
+        });
+      }
+      current = app.store.job(job.id)!;
+      assert.equal(current.autonomy!.inbox!.final, true, current.note);
+      assert.equal(posts, 0, 'auto consent never bypasses final review');
+      assert.equal(current.autonomy!.consents!.at(-1)!.decision, 'accept');
+      assert.ok(current.autonomy!.consents!.at(-1)!.appliedAt);
+      await postInbox({ inboxId: current.autonomy!.inbox!.id, confirm: true });
+      assert.equal(posts, 1);
+      assert.equal(app.store.job(job.id)!.status, 'completed');
+      const entry = app.store.completedEntries().find((e) => e.jobId === job.id)!;
+      assert.equal(entry.consents.length, 1);
+      assert.equal(entry.consents[0]!.actor, mode === 'manual' ? 'user' : 'policy');
+    }
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('optional refusal and required skip never accidentally transmit an out-of-scope consent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-consent-denial-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    for (const required of [false, true]) {
+      const job = prepare(app, required ? 'blocked' : 'optional');
+      job.autonomy!.organizer = '가상 주최자';
+      job.autonomy!.policy.consent = ConsentPolicySchema.parse({
+        mode: 'routine',
+        blockedRequired: 'skip',
+      });
+      app.store.saveJob(job);
+      let posts = 0;
+      await app.browser.open();
+      await app.browser.page!.unrouteAll();
+      await app.browser.page!.route(job.startUrl, (r) => {
+        if (r.request().method() === 'POST') posts++;
+        return r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: `<form method="post"><label>이름<input name="n" required></label><fieldset><legend>마케팅 동의</legend><label><input name="m" type="checkbox" ${required ? 'required' : ''}>동의합니다</label></fieldset><button>제출</button></form>`,
+        });
+      });
+      app.runner.model.decide = async (_p, _i, raw: any) => ({
+        step: {
+          action: 'form_plan',
+          observationId: raw.observation.id,
+          reason: '합성',
+          buttonId: raw.form.buttons[0].id,
+          answers: raw.form.questions.map((q: any) => ({
+            questionId: q.id,
+            category: q.label.includes('동의') ? 'consent' : 'fact',
+            source: 'unknown',
+            reason: '합성',
+          })),
+        },
+        inputTokens: 0,
+        outputTokens: 0,
+      });
+      app.runner.start(job.id);
+      await app.runner.finished();
+      const current = app.store.job(job.id)!;
+      assert.equal(posts, 0);
+      assert.equal(await app.browser.page!.locator('[name=m]').isChecked(), false);
+      assert.equal(current.status, required ? 'stopped' : 'needs_user', current.note);
+      if (required) {
+        assert.equal(await app.browser.page!.locator('[name=n]').inputValue(), '');
+        assert.equal(app.store.submission(job.eventId!)!.state, 'skipped_consent');
+      } else {
+        assert.equal(current.autonomy!.inbox!.final, true);
+        assert.equal(current.autonomy!.consents![0]!.decision, 'decline');
+        const fresh = { ...syntheticSettings, revision: 'changed-consent-grant' };
+        app.store.setSettings('autonomy', fresh);
+        current.autonomy!.inbox = undefined;
+        current.autonomy!.plan = undefined;
+        app.store.saveJob(current);
+        app.runner.start(job.id);
+        await app.runner.finished();
+        assert.match(app.store.job(job.id)!.note, /delegation|위임/);
+        assert.equal(posts, 0);
+      }
+    }
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('consent settings migrate to manual and round-trip all three levels through the dashboard', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-consent-settings-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  const ui = await chromium.launch({ headless: true });
+  try {
+    const { consent: _old, ...oldPolicy } = syntheticSettings.policy;
+    app.store.setSettings('autonomy', {
+      ...syntheticSettings,
+      policy: { ...oldPolicy, finalSubmit: 'review' },
+    });
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    await page.waitForFunction(
+      () =>
+        document.querySelector<HTMLInputElement>('[name=consentMode]:checked')?.value === 'manual',
+    );
+    assert.equal(await page.locator('#consent-auto-controls').isVisible(), false);
+    for (const mode of ['routine', 'adaptive', 'manual']) {
+      await page.locator(`[name=consentMode][value=${mode}]`).check();
+      if (mode !== 'manual') {
+        await page.locator('[name=consentRetention]').fill('62');
+        await page.locator('[name=consentRecipients]').fill('추가 기관');
+        await page.locator('[name=consentThirdParty]').check();
+      }
+      assert.equal(
+        await page.locator('#consent-adaptive-controls').isVisible(),
+        mode === 'adaptive',
+      );
+      await page.getByRole('button', { name: '정보·정책 저장', exact: true }).click();
+      await page.waitForFunction(
+        (mode) => document.querySelector('#toast')?.textContent?.includes('저장했습니다'),
+        mode,
+      );
+      const saved = await fetch(app.origin + '/api/autonomy').then((r) => r.json());
+      assert.equal(saved.policy.consent.mode, mode);
+      assert.equal(saved.policy.consent.maxRetentionDays, 62);
+      assert.equal(saved.policy.finalSubmit, 'review');
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[name=consentMode][value=adaptive]').check();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      true,
+    );
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('archiving an unknown outcome preserves its claim and evidence and blocks stale resume requests', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-hold-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  const ui = await chromium.launch({ headless: true });
+  try {
+    const job = prepare(app);
+    job.status = 'submission_unknown';
+    job.uncertain = true;
+    job.holdNote = '추가 문항으로 이동했으나 화면을 잃어 접수를 확인하지 못했습니다.';
+    app.store.saveJob(job);
+    app.store.markSubmission(job.eventId!, 'unknown');
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    await page
+      .locator(`#active-jobs #job-${job.id}`)
+      .getByRole('button', { name: '미확인 상태로 보관', exact: true })
+      .click();
+    await page.waitForFunction((id) => !document.querySelector(`#active-jobs #job-${id}`), job.id);
+    const archived = app.store.job(job.id)!;
+    assert.ok(archived.archivedAt);
+    assert.equal(archived.uncertain, true);
+    assert.equal(archived.status, 'submission_unknown');
+    assert.equal(app.store.claimSubmission(job.eventId!, 'another'), false);
+    assert.equal(app.store.completedEntries().length, 0);
+    const state = await fetch(app.origin + '/api/state').then((r) => r.json());
+    const stale = await fetch(app.origin + `/api/jobs/${job.id}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: '{}',
+    });
+    assert.notEqual(stale.status, 200);
+    await page.getByText('지난 실행 내역 펼치기', { exact: true }).click();
+    await page
+      .locator(`#jobs #job-${job.id}`)
+      .getByRole('button', { name: '진행 목록으로 복원', exact: true })
+      .click();
+    await page.locator(`#active-jobs #job-${job.id}`).waitFor();
+    assert.equal(app.store.job(job.id)!.archivedAt, undefined);
+    assert.equal(app.store.job(job.id)!.uncertain, true);
+    assert.equal(app.runner.isBusy(), false);
   } finally {
     await ui.close();
     await app.close();

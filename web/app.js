@@ -141,16 +141,27 @@ function renderCompleted() {
     <details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
     <p class="hint">${e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
-    <div class="card-actions">${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
+    ${renderConsents(e.consents)}<div class="card-actions">${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
         )
         .join('')
     : `<div class="empty">${query ? '검색 결과가 없습니다.' : '완료한 응모가 여기에 모입니다.'}</div>`;
+}
+function renderConsents(rows = []) {
+  if (!rows.length) return '';
+  const names = {
+    accept: '동의',
+    decline: '거부·미선택',
+    ask: '직접 확인 필요',
+    skip: '응모 중단',
+  };
+  return `<details class="consent-audit"><summary>동의 판단 내역 · ${rows.length}건</summary>${rows.map((c) => `<div class="consent-decision"><strong>${esc(c.question)}</strong><p><span class="pill ${c.decision === 'ask' || c.decision === 'skip' ? 'warning' : ''}">${esc(names[c.decision])}</span> ${c.actor === 'user' ? '사용자가 직접 선택' : `위임 ${{ manual: 1, routine: 2, adaptive: 3 }[c.mode]}단계`}</p><p>${esc(c.reason)}</p><p class="hint">${c.appliedAt ? '선택 입력 확인됨' : '판단 기록 · 아직 입력 확인 전'}</p>${c.recipient || c.retention ? `<p class="hint">${esc(c.recipient || '수신자 확인 필요')} · ${esc(c.retention || '보관 기간 확인 필요')}</p>` : ''}<details><summary>당시 동의 원문</summary><p class="consent-notice">${esc(c.notice)}</p><small>${esc(new Date(c.at).toLocaleString('ko-KR'))} · 정책 ${esc(c.revision.slice(0, 8))}</small></details></div>`).join('')}</details>`;
 }
 function renderInbox(job) {
   const a = job.autonomy;
   if (!a) return '';
   const m = a.metrics;
-  const metrics = `<p class="hint">묶음 ${m.batches}회 · 입력 검증 ${m.fields}개 · 답변 재사용 ${m.reused}개 · 확인 요청 ${m.inboxBatches}회 · 자동 복구 ${m.recoveries}회 · 모델 ${(m.modelMs / 1000).toFixed(1)}초 / 관찰·입력 ${(m.browserMs / 1000).toFixed(1)}초</p>`;
+  const metrics = `<p class="hint">묶음 ${m.batches}회 · 입력 검증 ${m.fields}개 · 답변 재사용 ${m.reused}개 · 확인 요청 ${m.inboxBatches}회 · 자동 복구 ${m.recoveries}회 · 모델 ${(m.modelMs / 1000).toFixed(1)}초 / 관찰·입력 ${(m.browserMs / 1000).toFixed(1)}초</p>${renderConsents(a.consents)}`;
+  if (job.archivedAt) return metrics;
   const changed = !a.synthetic && state.autonomy.revision !== a.revision;
   if (changed && !['completed', 'stopped'].includes(job.status))
     return (
@@ -162,8 +173,22 @@ function renderInbox(job) {
   const uncertainStage = box.final && /^(다음|next|continue)$/i.test(box.buttonLabel || '');
   return (
     metrics +
-    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : '<p class="hint">저장된 답이 없어 직접 확인이 필요합니다.</p>'}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
+    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
   );
+}
+function renderOutcome(j) {
+  if (!j.uncertain && !j.holdNote && !j.archivedAt) return '';
+  return `<div class="outcome-note">${j.archivedAt ? '<strong>보관한 작업 · 자동 실행 안 함</strong>' : ''}${j.uncertain ? '<strong>접수 결과 미확인 · 재응모 잠금 유지</strong><p>완료나 실패가 확정된 상태가 아닙니다. 중복 제출을 막기 위해 자동 재시도하지 않습니다.</p>' : ''}${j.holdNote ? `<p class="consent-notice">${esc(j.holdNote)}</p>` : ''}${j.uncertain ? '<p class="hint">접수 증거를 다시 확인하거나, 실제 미제출을 확인한 뒤 현재 화면에서 이어갈 수 있습니다. 이어갈 화면이 없다면 미확인 상태로 보관할 수 있습니다.</p>' : ''}</div>`;
+}
+function renderJobActions(j) {
+  const b = (action, label, disabled = false) =>
+    `<button data-action="${action}" data-job="${j.id}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+  if (j.archivedAt)
+    return `<div class="card-actions">${b('unarchive', '진행 목록으로 복원', state.busy)}</div>`;
+  if (j.status === 'running')
+    return `<div class="card-actions">${b('pause', '일시정지 · 직접 조작')}${b('stop', '중지')}</div>`;
+  if (['completed', 'stopped'].includes(j.status)) return '';
+  return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : b('resume', j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개', state.busy)}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
 }
 function render() {
   const auth = state.auth;
@@ -252,17 +277,22 @@ function render() {
   const cards = state.jobs.length
     ? state.jobs.map(
         (j) =>
-          `<article class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.note)}</p><div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${renderInbox(j)}${j.approval ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}<div class="card-actions">${j.status === 'running' ? `<button data-action="pause" data-job="${j.id}">일시정지 · 직접 조작</button><button data-action="stop" data-job="${j.id}">중지</button>` : !['completed', 'stopped'].includes(j.status) ? `${j.status === 'approval' ? `<button data-action="pause" data-job="${j.id}">취소 · 직접 조작</button>` : `<button data-action="resume" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>${j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개'}</button>`}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? `<button data-action="resume-current" data-job="${j.id}" ${state.busy ? 'disabled' : ''}>현재 브라우저 화면에서 재개</button>` : ''}${j.uncertain ? `<button data-action="verify-result" data-job="${j.id}">저장된 접수 증거 다시 확인</button><button data-action="reconcile" data-job="${j.id}">미제출 직접 확인</button>` : ''}` : ''}</div></article>`,
+          `<article class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.note)}</p>${renderOutcome(j)}<div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${renderInbox(j)}${j.approval && !j.archivedAt ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && !j.archivedAt && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}${renderJobActions(j)}</article>`,
       )
     : [];
   const active = (j) =>
-    !['completed', 'stopped'].includes(j.status) || j.autonomy?.inbox || j.approval || j.uncertain;
-  $('pending-count').textContent = state.jobs.filter(
-    (j) =>
-      ['paused', 'failed', 'needs_user'].includes(j.status) ||
+    !j.archivedAt &&
+    (!['completed', 'stopped'].includes(j.status) ||
       j.autonomy?.inbox ||
       j.approval ||
-      j.uncertain,
+      j.uncertain);
+  $('pending-count').textContent = state.jobs.filter(
+    (j) =>
+      !j.archivedAt &&
+      (['paused', 'failed', 'needs_user'].includes(j.status) ||
+        j.autonomy?.inbox ||
+        j.approval ||
+        j.uncertain),
   ).length;
   $('active-jobs').innerHTML =
     cards.filter((_, i) => active(state.jobs[i])).join('') ||
@@ -379,10 +409,38 @@ async function loadProfile() {
   const form = $('autonomy-form');
   for (const [key, v] of Object.entries({ ...value.profile, ...value.policy })) {
     const el = form.elements.namedItem(key);
+    if (!el) continue;
     if (el.type === 'checkbox') el.checked = v;
     else el.value = v;
   }
+  const c = value.policy.consent || {
+    mode: 'manual',
+    fields: ['name', 'email', 'phone'],
+    extraFields: ['nickname', 'interest', 'entryChannel'],
+    maxRetentionDays: 31,
+    allowThirdParty: false,
+    recipients: [],
+    declineOptional: true,
+    blockedRequired: 'ask',
+  };
+  form.elements.namedItem('consentMode').value = c.mode;
+  for (const el of form.querySelectorAll('[name="consentFields"]'))
+    el.checked = c.fields.includes(el.value);
+  for (const el of form.querySelectorAll('[name="consentExtraFields"]'))
+    el.checked = c.extraFields.includes(el.value);
+  form.elements.namedItem('consentRetention').value = c.maxRetentionDays;
+  form.elements.namedItem('consentThirdParty').checked = c.allowThirdParty;
+  form.elements.namedItem('consentRecipients').value = c.recipients.join('\n');
+  form.elements.namedItem('consentDeclineOptional').checked = c.declineOptional;
+  form.elements.namedItem('consentBlocked').value = c.blockedRequired;
+  renderConsentSettings();
 }
+function renderConsentSettings() {
+  const mode = $('autonomy-form').elements.namedItem('consentMode').value;
+  $('consent-auto-controls').hidden = mode === 'manual';
+  $('consent-adaptive-controls').hidden = mode !== 'adaptive';
+}
+$('autonomy-form').addEventListener('change', renderConsentSettings);
 $('reload-profile').onclick = guard(loadProfile);
 void loadProfile().catch((error) => toast(error.message, true));
 $('autonomy-form').onsubmit = guard(async () => {
@@ -402,6 +460,19 @@ $('autonomy-form').onsubmit = guard(async () => {
     singleChoice: f.get('singleChoice'),
     finalSubmit: f.get('finalSubmit'),
     maxRecoveries: Number(f.get('maxRecoveries')),
+    consent: {
+      mode: f.get('consentMode'),
+      fields: f.getAll('consentFields'),
+      extraFields: f.getAll('consentExtraFields'),
+      maxRetentionDays: Number(f.get('consentRetention')),
+      allowThirdParty: f.has('consentThirdParty'),
+      recipients: String(f.get('consentRecipients') || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      declineOptional: f.has('consentDeclineOptional'),
+      blockedRequired: f.get('consentBlocked'),
+    },
   };
   await api('/api/autonomy', { profile, policy });
   toast('저장했습니다. 새 응모부터 적용합니다.');

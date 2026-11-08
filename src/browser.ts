@@ -279,7 +279,7 @@ export class Browser {
           this.readOnlyPages.has(route.request().frame().page()) &&
           !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())
         ) {
-          this.readOnlyBlocks++;
+          if (route.request().isNavigationRequest()) this.readOnlyBlocks++;
           return await route.abort('blockedbyclient');
         }
         await validateUrl(url, this.demoOrigin);

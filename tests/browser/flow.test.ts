@@ -871,3 +871,66 @@ test('discovery advances an empty client-side introduction but blocks response p
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a poster URL requires a second screenshot-grounded confirmation before navigation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-visual-link-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    for (const accepted of [true, false]) {
+      const j = job(app.origin);
+      j.kind = 'discover';
+      const target = app.origin + '/demo/poster-target';
+      let visits = 0,
+        checks = 0;
+      await app.browser.navigate(j.startUrl);
+      await app.browser.page!.route('**/demo/poster-target', (r) => {
+        visits++;
+        return r.fulfill({ contentType: 'text/html; charset=utf-8', body: '<p>참여 폼 소개</p>' });
+      });
+      await app.browser.page!.setContent(
+        `<canvas width="1200" height="150"></canvas><script>const c=document.querySelector('canvas').getContext('2d');c.font='28px sans-serif';c.fillText('${target}',20,60);</script>`,
+      );
+      j.currentUrl = j.startUrl;
+      app.browser.ownerJobId = j.id;
+      app.store.saveJob(j);
+      let calls = 0;
+      const model = {
+        async decide(_p: unknown, _i: string, ctx: any, image: Buffer) {
+          assert.ok(image.length > 1000);
+          const base = { observationId: ctx.observation.id, reason: 'fixture' };
+          if (ctx.purpose === 'verify_visible_url') {
+            checks++;
+            return {
+              step: {
+                ...base,
+                action: accepted ? 'done' : 'needs_user',
+                evidenceQuote: accepted ? target : undefined,
+              },
+              inputTokens: 0,
+              outputTokens: 0,
+            };
+          }
+          calls++;
+          return {
+            step: {
+              ...base,
+              ...(calls === 1 ? { action: 'navigate', url: target } : { action: 'done' }),
+            },
+            inputTokens: 0,
+            outputTokens: 0,
+          };
+        },
+      } as unknown as Model;
+      const runner = new Runner(app.store, app.browser, model, app.origin);
+      runner.start(j.id);
+      await runner.finished();
+      assert.equal(checks, 1);
+      assert.equal(visits, accepted ? 1 : 0);
+      assert.equal(app.store.job(j.id)!.observedUrls!.includes(target), accepted);
+      await app.browser.page!.unroute('**/demo/poster-target');
+    }
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

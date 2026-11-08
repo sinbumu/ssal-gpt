@@ -481,3 +481,72 @@ test('dashboard can retry only unresolved public knowledge without approving con
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('counterless Next recovery verifies the live new page without replaying an external action', async () => {
+  const { inspectForm } = await import('../../src/forms.js');
+  const { verifyFormContinuation } = await import('../../src/form-progress.js');
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-progress-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = prepare(app);
+    const url = 'https://answer.moaform.com/answers/synthetic';
+    await app.browser.open();
+    let requests = 0;
+    await app.browser.page!.route(url, (r) => {
+      requests++;
+      return r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<title>고정 행사</title><form><input type="hidden" id="pid" value="two"><input type="hidden" id="pnumber" value="2"><label>새 필수 문항<input required></label><button id="js-prev" type="button">이전</button><button>다음</button></form>',
+      });
+    });
+    await app.browser.navigate(url);
+    app.browser.ownerJobId = job.id;
+    job.uncertain = true;
+    job.intent = {
+      url,
+      beforeText: '이름\n다음',
+      controlLabel: '다음',
+      pageMarker: { id: 'one', number: 1 },
+      kind: 'submission',
+      at: Date.now(),
+    };
+    app.store.saveJob(job);
+    const o = await app.browser.observe(true);
+    const { view } = await inspectForm(app.browser.page!);
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        assert.equal(ctx.purpose, 'verify_form_continuation');
+        return {
+          step: {
+            action: 'done',
+            observationId: ctx.observation.id,
+            evidenceQuote: '새 필수 문항',
+            reason: 'new stage',
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    assert.equal(
+      await verifyFormContinuation(
+        app.store,
+        app.browser,
+        model,
+        job,
+        o,
+        view,
+        new AbortController().signal,
+      ),
+      true,
+    );
+    assert.equal(requests, 1);
+    assert.equal(job.uncertain, false);
+    assert.equal(job.continuations!.length, 1);
+    assert.equal(app.store.submission(job.eventId!)!.state, 'in_progress');
+    assert.equal(app.store.completedEntries().length, 0);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -59,8 +59,11 @@ export type Job = {
     url: string;
     kind?: 'step' | 'submission';
     progress?: { current: number; total: number };
+    controlLabel?: string;
+    pageMarker?: { id: string; number: number };
     at?: number;
   };
+  continuations?: { at: number; screenshot: string; quote: string; from: string; page: number }[];
   sourceEvidence?: SourceEvidence[];
   visitedUrls?: string[];
   skippedUrls?: string[];

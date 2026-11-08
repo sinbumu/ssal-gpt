@@ -88,6 +88,7 @@ export type AutonomyState = {
     fingerprint: string;
     items: InboxItem[];
     final?: boolean;
+    buttonLabel?: string;
     review?: unknown;
     createdAt: number;
   };

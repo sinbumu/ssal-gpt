@@ -8,6 +8,8 @@ import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, searchUrl, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { prepareDiscoveredEntry } from './workflow.js';
+import { pageProgress } from './page-progress.js';
+export { pageProgress } from './page-progress.js';
 
 const INSTRUCTIONS = `You are ssal-gpt, a Korean giveaway discovery and browser-entry assistant.
 Search defaults to Naver; use searchEngine=google only when needed. Do not choose already started/submitted knownEvents. Record announcementDate and announcementNote only when explicitly stated in the original source; otherwise leave unknown. For a form event, inspect its introduction/required tasks read-only before recording and use the observed actual form link as entryUrl. Scroll to read questions below the fold; hasResponseFields means there are rendered fields even when not currently in the viewport. Do not require seeing later pages behind unanswered fields: the preparation stage handles those. If the current source establishes eligibility, prize, deadline and required participation tasks, record it. Missing quiz answers or user consent are preparation work, not eligibility blockers. Once those conditions are established, record the candidate immediately; the following preparation job researches unanswered quizzes. Do not delay recording for optional answer research. Prefer a short native form or Moaform single-choice/text form with no SNS engagement requirement when the goal asks for autonomous entry.
@@ -32,22 +34,12 @@ Do not navigate to sites unrelated to the event or submit in discovery. Only one
 function digest(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
-export function pageProgress(text: string) {
-  const match = text.match(/(?:^|\n)\s*(\d{1,3})\s*\/\s*(\d{1,3})\s*(?:page|페이지)(?:\s|$)/i);
-  if (!match) return undefined;
-  const current = Number(match[1]),
-    total = Number(match[2]);
-  return current >= 1 && total >= current && total <= 200 ? { current, total } : undefined;
-}
 export function intermediateAdvanced(job: Job, o: Observation) {
   if (!job.uncertain || job.intent?.kind !== 'step' || !job.intent.progress) return false;
-  const now = pageProgress(o.text),
+  const now = pageProgress(o.text, o.url),
     before = job.intent.progress;
   return (
-    !!now &&
-    now.total === before.total &&
-    now.current > before.current &&
-    new URL(o.url).origin === new URL(job.intent.url).origin
+    !!now && now.total === before.total && now.current > before.current && o.url === job.intent.url
   );
 }
 function targetElement(o: Observation, step: Step) {
@@ -248,7 +240,7 @@ export class Runner {
       job.sourceEvidence = collectEvidence(job.sourceEvidence || [], o);
       job.visitedUrls = [...new Set([...(job.visitedUrls || []), o.url])].slice(-40);
     } else captureReceipt(job, o);
-    const progress = pageProgress(o.text);
+    const progress = pageProgress(o.text, o.url);
     if (progress) job.observedProgress = { ...progress, url: o.url };
     job.observedUrls = [
       ...new Set([
@@ -308,7 +300,7 @@ export class Runner {
     if (potentialSubmission) {
       job.uncertain = true;
       const progress =
-        pageProgress(o.text) ||
+        pageProgress(o.text, o.url) ||
         (job.observedProgress?.url === o.url ? job.observedProgress : undefined);
       const intermediate =
         progress &&

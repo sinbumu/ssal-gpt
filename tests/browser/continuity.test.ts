@@ -482,6 +482,91 @@ test('dashboard can retry only unresolved public knowledge without approving con
   }
 });
 
+test('Naver numbered pages advance automatically but consent and final submission still require dashboard input', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-numbered-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = prepare(app);
+    const url = 'https://form.naver.com/response/synthetic';
+    job.startUrl = url;
+    job.allowedOrigins = ['https://form.naver.com'];
+    job.autonomy!.origin = 'https://form.naver.com';
+    app.store.saveJob(job);
+    let posts = 0;
+    await app.browser.open();
+    await app.browser.page!.route(url, (r) => {
+      if (r.request().method() === 'POST') posts++;
+      const heading = `<div>설문 진행 상태</div><div>${posts + 1}/2</div>`;
+      const body =
+        posts === 0
+          ? `${heading}<form method="post"><label>이름<input name="n" required></label><button>다음</button></form>`
+          : posts === 1
+            ? `${heading}<form method="post"><fieldset><legend>개인정보 수집 동의</legend><label><input type="checkbox" name="c" required>동의합니다</label></fieldset><button>제출</button></form>`
+            : '<h1>답변이 제출되었습니다.</h1>';
+      return r.fulfill({ contentType: 'text/html; charset=utf-8', body });
+    });
+    app.runner.model.decide = async (_p, _i, raw: any, image) => {
+      assert.ok(image.length > 1000);
+      const o = raw.observation;
+      return {
+        step: o.text.includes('답변이 제출되었습니다.')
+          ? {
+              action: 'done',
+              observationId: o.id,
+              reason: '접수 확인',
+              evidenceQuote: '답변이 제출되었습니다.',
+            }
+          : {
+              action: 'form_plan',
+              observationId: o.id,
+              reason: '합성 문항 계획',
+              buttonId: raw.form.buttons[0].id,
+              answers: raw.form.questions.map((q: any) => ({
+                questionId: q.id,
+                category: q.label.includes('동의') ? 'consent' : 'fact',
+                source: 'unknown',
+                answer: [],
+                reason: '로컬 프로필 또는 사용자 동의',
+              })),
+            },
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+    };
+    app.runner.start(job.id);
+    await app.runner.finished();
+    let current = app.store.job(job.id)!;
+    assert.equal(posts, 1, current.note);
+    assert.equal(current.uncertain, false);
+    assert.equal(current.autonomy!.inbox!.items.length, 1);
+    assert.equal(current.autonomy!.inbox!.final, undefined);
+    assert.equal(app.store.completedEntries().length, 0);
+    const post = async (data: unknown) => {
+      const state = await fetch(app.origin + '/api/state').then((r) => r.json());
+      const result = await fetch(app.origin + `/api/jobs/${job.id}/inbox`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+        body: JSON.stringify(data),
+      });
+      assert.equal(result.status, 200, await result.text());
+      await app.runner.finished();
+    };
+    const inbox = current.autonomy!.inbox!;
+    const consent = inbox.items[0]!;
+    await post({ inboxId: inbox.id, answers: { [consent.id]: [consent.options[0]!.id] } });
+    current = app.store.job(job.id)!;
+    assert.equal(posts, 1, 'consent alone cannot submit the final page');
+    assert.equal(current.autonomy!.inbox!.final, true);
+    await post({ inboxId: current.autonomy!.inbox!.id, confirm: true });
+    assert.equal(posts, 2);
+    assert.equal(app.store.job(job.id)!.status, 'completed');
+    assert.equal(app.store.completedEntries().length, 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('counterless Next recovery verifies the live new page without replaying an external action', async () => {
   const { inspectForm } = await import('../../src/forms.js');
   const { verifyFormContinuation } = await import('../../src/form-progress.js');

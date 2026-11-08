@@ -151,9 +151,19 @@ test('date-only deadlines preserve uncertainty and use the Korean calendar bound
   assert.equal(scoreCandidate({ ...candidate, ...c }, Date.parse('2030-01-01T15:00:00Z')).score, 0);
 });
 
-test('intermediate survey navigation requires observed progress on the same origin, never implies final completion', () => {
+test('intermediate survey navigation requires observed progress on the same form, never implies final completion', () => {
   assert.deepEqual(pageProgress('Survey\n1 / 26page\n2%'), { current: 1, total: 26 });
   assert.deepEqual(pageProgress('2 / 26 페이지\nQ2'), { current: 2, total: 26 });
+  const naver = 'https://form.naver.com/response/synthetic';
+  assert.deepEqual(pageProgress('Naver\n폼\n설문 진행 상태\n1/2\n설문 참여', naver), {
+    current: 1,
+    total: 2,
+  });
+  assert.equal(pageProgress('퀴즈\n1/2', naver), undefined);
+  assert.equal(pageProgress('설문 진행 상태\n1/2', 'https://example.org/form'), undefined);
+  assert.equal(pageProgress('설문 진행 상태\n3/2', naver), undefined);
+  assert.equal(pageProgress('1/2 페이지\n2/3 페이지', naver), undefined);
+  assert.equal(pageProgress('설문 진행 상태\n1/2\n2/3 페이지', naver), undefined);
   const j = makeJob();
   j.uncertain = true;
   j.intent = {
@@ -170,6 +180,7 @@ test('intermediate survey navigation requires observed progress on the same orig
   );
   assert.equal(intermediateAdvanced(j, { ...o, text: '1 / 26page\nPlease answer' }), false);
   assert.equal(intermediateAdvanced(j, { ...o, url: 'https://other.example/survey' }), false);
+  assert.equal(intermediateAdvanced(j, { ...o, url: 'https://example.com/other-survey' }), false);
   assert.equal(intermediateAdvanced(j, { ...o, text: '응모가 완료되었습니다' }), false);
   j.intent.kind = 'submission';
   assert.equal(intermediateAdvanced(j, o), false);

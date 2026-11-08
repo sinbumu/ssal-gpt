@@ -31,6 +31,8 @@ export type Approval = {
 export type Job = {
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo';
+  prepareOne?: { revision: string; expires: number; childId?: string };
+  parentId?: string;
   autonomy?: AutonomyState;
   goal: string;
   provider: ProviderChoice;

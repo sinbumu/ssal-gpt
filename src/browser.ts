@@ -430,6 +430,37 @@ export class Browser {
       this.handles.set(ref, handle as ElementHandle<HTMLElement>);
       elements.push({ ref, ...item });
     }
+    const frames = await page.locator('iframe[src]').evaluateAll((frames) =>
+      frames.flatMap((frame) => {
+        const el = frame as HTMLIFrameElement;
+        const box = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (
+          !box.width ||
+          !box.height ||
+          box.bottom <= 0 ||
+          box.top >= innerHeight ||
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          !/^https?:/.test(el.src)
+        )
+          return [];
+        return [
+          {
+            tag: 'iframe',
+            role: 'link',
+            type: 'frame',
+            label: el.title || '내장 본문을 별도 페이지로 읽기',
+            href: el.src,
+            x: Math.max(0, box.x),
+            y: Math.max(0, box.y),
+            width: box.width,
+            height: box.height,
+          },
+        ];
+      }),
+    );
+    for (const frame of frames) elements.push({ ref: `frame${elements.length + 1}`, ...frame });
     let text = await page.evaluate((fullPage) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const lines: string[] = [];

@@ -32,6 +32,7 @@ const ProviderSchema = z.object({
 const JobSchema = z.object({
   kind: z.enum(['discover', 'apply', 'demo', 'autonomy_demo']),
   autonomy: z.boolean().default(false),
+  prepareOne: z.boolean().default(false),
   demoInbox: z.boolean().default(false),
   provider: ProviderSchema,
   goal: z.string().min(1).max(2000),
@@ -343,6 +344,8 @@ export async function createApp(options: {
     if (method === 'POST' && url.pathname === '/api/jobs') {
       if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
       const input = JobSchema.parse(data);
+      if (input.prepareOne && (input.kind !== 'discover' || !settings(store).policy.enabled))
+        throw new ServiceError('delegation_not_enabled');
       await auth.bearer(input.provider);
       if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
       const event =
@@ -390,6 +393,9 @@ export async function createApp(options: {
         history: [],
         userContext: input.userContext,
         searchEngine: input.discoverySource === 'google' ? 'google' : 'naver',
+        prepareOne: input.prepareOne
+          ? { revision: settings(store).revision, expires: Date.now() + 24 * 60 * 60_000 }
+          : undefined,
       };
       if (input.kind === 'autonomy_demo') {
         job.autonomy = createAutonomy(syntheticSettings, origin, true);

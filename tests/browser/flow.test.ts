@@ -727,3 +727,51 @@ test('survey completion is recognized after submission, while thanks alone or an
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('embedded article URLs can be read without iframe clicks and a blocked discovery write recovers', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-frame-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.kind = 'discover';
+    await app.browser.open();
+    await app.browser.page!.route('**/demo/embed', (route) =>
+      route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>공식 본문</h1>' }),
+    );
+    await app.browser.navigate(j.startUrl);
+    await app.browser.page!.setContent(
+      `<iframe src="${app.origin}/demo/embed" title="공식 본문" width="800" height="500"></iframe>`,
+    );
+    j.currentUrl = j.startUrl;
+    app.browser.ownerJobId = j.id;
+    app.store.saveJob(j);
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        const o = ctx.observation;
+        calls++;
+        const s: Partial<Step> =
+          calls === 1
+            ? { action: 'type', ref: 'missing', text: 'must never type' }
+            : o.url.endsWith('/demo/embed')
+              ? { action: 'done' }
+              : { action: 'navigate', url: o.elements.find((e: any) => e.type === 'frame').href };
+        return {
+          step: { observationId: o.id, reason: 'fixture', ...s },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+    assert.equal(calls, 3);
+    assert.equal(app.browser.page!.url(), app.origin + '/demo/embed');
+    assert.ok(app.store.job(j.id)!.sourceEvidence!.some((s) => s.text.includes('공식 본문')));
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

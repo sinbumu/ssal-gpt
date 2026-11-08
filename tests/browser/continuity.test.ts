@@ -279,3 +279,98 @@ test('public research restores the original form and rejects a proposed write', 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('discovery automatically starts exactly one observed form and waits at the dashboard final review', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-chain-browser-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const config = {
+      ...syntheticSettings,
+      policy: { ...syntheticSettings.policy, finalSubmit: 'review' as const },
+    };
+    app.store.setSettings('autonomy', config);
+    const source = prepare(app); // Reuse the fixture shape, then create a distinct discovery.
+    app.store.setSettings('autonomy', config);
+    const parent = {
+      ...source,
+      id: randomUUID(),
+      kind: 'discover' as const,
+      eventId: undefined,
+      autonomy: undefined,
+      prepareOne: { revision: config.revision, expires: Date.now() + 60000 },
+      startUrl: app.origin + '/demo/source',
+    };
+    app.store.saveJob(parent);
+    const formUrl = 'https://form.naver.com/response/synthetic-fixture';
+    await app.browser.open();
+    await app.browser.page!.route('**/demo/source', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<a href="${formUrl}">공식 참여 폼</a>`,
+      }),
+    );
+    let posts = 0;
+    await app.browser.context!.route(formUrl, (r) => {
+      if (r.request().method() === 'POST') posts++;
+      return r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<h1>공식 새 이벤트</h1><form><label>이름<input required name="name"></label><button type="submit">제출</button></form>',
+      });
+    });
+    app.runner.model.decide = async (_p, _i, ctx: any) => {
+      const o = ctx.observation;
+      const base = { observationId: o.id, reason: 'fixture' };
+      if (ctx.mode === 'discover')
+        return {
+          step:
+            o.url === formUrl
+              ? {
+                  ...base,
+                  action: 'record_event',
+                  candidate: {
+                    title: '자동 선택 시험',
+                    organizer: 'fixture',
+                    entryUrl: formUrl,
+                    deadline: '2099-01-01T00:00:00Z',
+                    prize: '커피',
+                    winners: 10,
+                    requirements: ['이름 입력'],
+                    blockers: [],
+                    evidenceQuote: '공식 새 이벤트',
+                    evidenceKind: 'text',
+                    effortMinutes: 1,
+                  },
+                }
+              : { ...base, action: 'navigate', url: formUrl },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      return {
+        step: {
+          ...base,
+          action: 'form_plan',
+          answers: ctx.form.questions.map((q: any) => ({
+            questionId: q.id,
+            category: 'fact',
+            source: 'profile',
+            reason: 'profile',
+          })),
+          buttonId: ctx.form.buttons[0].id,
+        },
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+    };
+    app.runner.start(parent.id);
+    await app.runner.finished();
+    const childId = app.store.job(parent.id)!.prepareOne!.childId!;
+    assert.ok(childId);
+    assert.equal(app.store.job(childId)!.autonomy!.inbox!.final, true);
+    assert.equal(app.store.job(childId)!.status, 'needs_user');
+    assert.equal(posts, 0);
+    assert.equal(app.store.jobs().filter((j) => j.parentId === parent.id).length, 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

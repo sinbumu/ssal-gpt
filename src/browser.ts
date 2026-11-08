@@ -7,6 +7,7 @@ import { writeFile } from 'node:fs/promises';
 import { privateDirectory } from './config.js';
 import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
+import { searchUrl } from './evidence.js';
 
 export type VisibleElement = {
   ref: string;
@@ -224,6 +225,26 @@ export class Browser {
       this.engine = previous;
       throw new ServiceError('browser_channel_unavailable');
     }
+  }
+  async inReadOnlyTab<T>(read: () => Promise<T>): Promise<T> {
+    await this.open();
+    const original = this.page!;
+    const owner = this.ownerJobId;
+    const tab = await this.context!.newPage();
+    this.attach(tab);
+    try {
+      return await read();
+    } finally {
+      await tab.close().catch(() => {});
+      this.attach(original);
+      this.ownerJobId = owner;
+      await original.bringToFront().catch(() => {});
+    }
+  }
+  async evidenceImage(name: string) {
+    if (!/^[a-f0-9-]+\.png$/.test(name)) throw new ServiceError('invalid_evidence_file');
+    const { readFile } = await import('node:fs/promises');
+    return readFile(join(this.evidence, name));
   }
   private async launch() {
     this.context = await chromium.launchPersistentContext(
@@ -574,7 +595,7 @@ export class Browser {
       await this.navigate(step.url);
     } else if (step.action === 'search') {
       if (!step.text) throw new ServiceError('query_required');
-      await this.navigate(`https://www.google.com/search?q=${encodeURIComponent(step.text)}`);
+      await this.navigate(searchUrl(step.text, step.searchEngine));
     } else if (step.action === 'scroll') {
       // A page may scroll inside a panel; wheel over the observed content, not the window corner.
       const x = step.x ?? o.width / 2;

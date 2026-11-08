@@ -15,6 +15,8 @@ export const CandidateSchema = z.object({
   evidenceQuote: z.string().min(1).max(2000),
   evidenceKind: z.enum(['text', 'image']),
   effortMinutes: z.number().min(1).max(300),
+  announcementDate: z.string().date().nullable().optional(),
+  announcementNote: z.string().max(500).optional(),
 });
 export type Candidate = z.infer<typeof CandidateSchema>;
 export const StepSchema = z
@@ -31,6 +33,7 @@ export const StepSchema = z
       'done',
       'needs_user',
       'form_plan',
+      'research',
     ]),
     observationId: z.string().min(1),
     reason: z.string().min(1).max(500),
@@ -45,6 +48,9 @@ export const StepSchema = z
     evidenceQuote: z.string().max(2000).optional(),
     answers: z.array(AnswerPlanSchema).max(80).optional(),
     buttonId: z.string().optional(),
+    searchEngine: z.enum(['naver', 'google']).optional(),
+    questionId: z.string().optional(),
+    receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './store.js';
+import { searchPage, type SourceEvidence } from './evidence.js';
 
 export const ProfileSchema = z
   .object({
@@ -43,7 +44,7 @@ export const AnswerPlanSchema = z
   .object({
     questionId: z.string(),
     category: z.enum(['fact', 'preference', 'evaluation', 'knowledge', 'consent']),
-    source: z.enum(['profile', 'memory', 'recommendation', 'unknown']),
+    source: z.enum(['profile', 'memory', 'recommendation', 'evidence', 'unknown']),
     sourceId: z.string().optional(),
     answer: z.array(z.string().max(2000)).max(30).optional(),
     evidenceQuote: z.string().max(1000).optional(),
@@ -77,6 +78,9 @@ export type AutonomyState = {
   overrides: Record<string, string[]>;
   reused?: Record<string, string[]>;
   privateAnswers?: string[];
+  evidence?: SourceEvidence[];
+  entryChannel?: string;
+  researched?: string[];
   inbox?: {
     id: string;
     fingerprint: string;
@@ -226,6 +230,22 @@ export function resolveAnswer(
   }
   const exact = saved.find((a) => a.origin === state.origin && a.signature === q.signature);
   if (exact) return { answer: validateAnswer(q, exact.answer), source: 'memory' };
+  if (
+    state.entryChannel &&
+    /참여\s*경로|알게\s*된\s*경로|어떻게\s*알|접한\s*경로|유입\s*경로/.test(q.label)
+  ) {
+    const channel = state.entryChannel;
+    const aliases =
+      channel === '인스타그램'
+        ? /인스타|instagram/i
+        : channel === '네이버'
+          ? /네이버|naver/i
+          : /구글|google/i;
+    const options = q.options.filter((o) => aliases.test(o.label));
+    const answer =
+      q.kind === 'text' ? [channel] : options.length === 1 ? [options[0]!.id] : undefined;
+    if (answer) return { answer: validateAnswer(q, answer), source: 'observed_entry_channel' };
+  }
   if (!plan) return { source: 'missing_plan' };
   const factual =
     /이름|성명|이메일|전화번호|연락처|이용한|사용한|경험|구매|방문한|회원|가입|횟수|빈도|자격|성별|생년|have you|how often|previously|eligib|email|phone|friend/i.test(
@@ -253,6 +273,16 @@ export function resolveAnswer(
   if (!q.multiple && answer.length > 1 && state.policy.singleChoice === 'first')
     answer = answer.slice(0, 1);
   const valid = validateAnswer(q, answer);
+  if (plan.source === 'evidence' && plan.category === 'knowledge' && !factual && valid) {
+    const source = state.evidence?.find((s) => s.id === plan.sourceId);
+    if (
+      source &&
+      !searchPage(source.url) &&
+      plan.evidenceQuote &&
+      source.text.includes(plan.evidenceQuote)
+    )
+      return { answer: valid, source: 'observed_public_evidence' };
+  }
   const allowed =
     plan.source === 'recommendation' &&
     ((plan.category === 'preference' && !!state.policy.preferenceRule) ||

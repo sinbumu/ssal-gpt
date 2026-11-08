@@ -6,6 +6,7 @@ import type { ProviderChoice } from './auth.js';
 import type { Candidate, Step } from './model.js';
 import type { AutonomyState } from './autonomy.js';
 import type { BrowserEngine } from './browser.js';
+import type { SourceEvidence } from './evidence.js';
 
 export type JobStatus =
   | 'queued'
@@ -56,7 +57,12 @@ export type Job = {
     url: string;
     kind?: 'step' | 'submission';
     progress?: { current: number; total: number };
+    at?: number;
   };
+  sourceEvidence?: SourceEvidence[];
+  visitedUrls?: string[];
+  searchEngine?: 'google' | 'naver';
+  receiptObservations?: (SourceEvidence & { intentHash: string })[];
   userContext?: string;
   memory?: string;
   observedUrls?: string[];
@@ -73,6 +79,8 @@ export type EventRecord = Candidate & {
   scoreReasons: string[];
   entryKey: string;
   campaignKey: string;
+  sourceEvidence?: SourceEvidence[];
+  entryChannel?: string;
   reviews?: { at: string; note: string; previousEntryUrl: string; previousBlockers: string[] }[];
 };
 
@@ -203,7 +211,13 @@ export class Store {
       .run(next.entryKey, JSON.stringify(next), id);
     return next;
   }
-  record(candidate: Candidate, sourceUrl: string, jobId: string, screenshot: string) {
+  record(
+    candidate: Candidate,
+    sourceUrl: string,
+    jobId: string,
+    screenshot: string,
+    context?: Pick<EventRecord, 'sourceEvidence' | 'entryChannel'>,
+  ) {
     const entryKey = canonicalUrl(candidate.entryUrl);
     const campaignKey = createHash('sha256')
       .update(
@@ -221,6 +235,7 @@ export class Store {
     const ranked = scoreCandidate(candidate);
     const event: EventRecord = {
       ...candidate,
+      ...context,
       id: randomUUID(),
       sourceUrl,
       jobId,
@@ -249,6 +264,73 @@ export class Store {
     this.db
       .prepare('UPDATE submissions SET state=?,evidence=? WHERE event_id=?')
       .run(state, evidence || null, eventId);
+  }
+  completedEntries() {
+    return this.db
+      .prepare("SELECT * FROM submissions WHERE state='completed'")
+      .all()
+      .flatMap((row) => {
+        const event = this.event(String(row.event_id));
+        const job = this.job(String(row.job_id));
+        if (!event || !job || job.kind !== 'apply') return [];
+        let proof: Record<string, unknown> = {};
+        try {
+          proof = JSON.parse(String(row.evidence || '{}'));
+        } catch {
+          /* Legacy evidence stays private. */
+        }
+        const at = proof.observedAt || proof.completedAt || job.updatedAt;
+        return [
+          {
+            eventId: event.id,
+            jobId: job.id,
+            title: event.title,
+            organizer: event.organizer,
+            prize: event.prize,
+            entryUrl: event.entryUrl,
+            sourceUrl: event.sourceUrl,
+            completedAt: typeof at === 'number' ? new Date(at).toISOString() : String(at),
+            announcementDate: event.announcementDate,
+            announcementNote: event.announcementNote,
+            quote: typeof proof.quote === 'string' ? proof.quote : '접수 완료 화면 확인',
+            screenshot:
+              typeof proof.screenshot === 'string' && /^[a-f0-9-]+\.png$/.test(proof.screenshot)
+                ? proof.screenshot
+                : undefined,
+            verification:
+              typeof proof.verification === 'string' ? proof.verification : 'visible_receipt',
+          },
+        ];
+      })
+      .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+  }
+  complete(job: Job, proof: Record<string, unknown>) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      job.status = 'completed';
+      job.uncertain = false;
+      job.note = '완료 문구와 접수 결과를 확인했습니다.';
+      delete job.approval;
+      if (job.autonomy) {
+        job.autonomy.metrics.finishedAt = Date.now();
+        delete job.autonomy.plan;
+        delete job.autonomy.finalApproval;
+        delete job.autonomy.inbox;
+      }
+      if (typeof proof.screenshot === 'string') job.screenshot = proof.screenshot;
+      this.saveJob(job);
+      if (job.eventId)
+        this.markSubmission(
+          job.eventId,
+          'completed',
+          JSON.stringify({ completedAt: new Date().toISOString(), ...proof }),
+        );
+      this.note(job.id, job.note);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   settings<T>(key: string, fallback: T): T {
     const row = this.db.prepare('SELECT data FROM settings WHERE key=?').get(key);

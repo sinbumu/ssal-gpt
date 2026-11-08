@@ -178,3 +178,42 @@ test('semantic preference reuse requires its own delegation and cannot invert a 
     undefined,
   );
 });
+
+test('public evidence and observed route are reusable, but never authorize invented personal facts or consent', () => {
+  const a = createAutonomy(syntheticSettings, 'https://example.org');
+  a.evidence = [
+    {
+      id: 'source',
+      url: 'https://example.org/article',
+      title: '원문',
+      text: '정답은 예입니다.',
+      screenshot: 'test.png',
+      observedAt: Date.now(),
+    },
+  ];
+  const p: AnswerPlan = {
+    ...plan,
+    source: 'evidence',
+    sourceId: 'source',
+    category: 'knowledge',
+    answer: ['예'],
+    evidenceQuote: '정답은 예입니다.',
+  };
+  assert.deepEqual(resolveAnswer(q('퀴즈'), p, a, [], '').answer, ['예']);
+  assert.equal(
+    resolveAnswer(q('퀴즈'), { ...p, evidenceQuote: '거짓 근거' }, a, [], '').answer,
+    undefined,
+  );
+  for (const label of ['회원인가요?', '구매한 경험', '개인정보 동의'])
+    assert.equal(resolveAnswer(q(label), p, a, [], '').answer, undefined);
+  a.evidence[0]!.url = 'https://search.naver.com/search.naver?query=quiz';
+  assert.equal(resolveAnswer(q('퀴즈'), p, a, [], '').answer, undefined);
+  a.entryChannel = '인스타그램';
+  assert.deepEqual(resolveAnswer(q('참여 경로', 'text'), undefined, a, [], '').answer, [
+    '인스타그램',
+  ]);
+  assert.equal(
+    resolveAnswer(q('평소 이용하는 SNS', 'text'), undefined, a, [], '').answer,
+    undefined,
+  );
+});

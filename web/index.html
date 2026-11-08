@@ -12,8 +12,9 @@
         <a class="brand" href="/">쌀<span>GPT</span><i>●</i></a>
         <p class="tagline">작은 기회를 모으다.</p>
         <nav>
-          <a href="#discover">01 · 기회 탐색</a><a href="#runs">02 · 실행 기록</a
-          ><a href="#autonomy">03 · 프로필·위임</a><a href="#settings">04 · 연결 설정</a>
+          <a href="#attention">01 · 진행·확인함</a><a href="#discover">02 · 기회 탐색</a
+          ><a href="#completed">03 · 완료한 응모</a><a href="#runs">04 · 실행 기록</a
+          ><a href="#autonomy">05 · 프로필·위임</a><a href="#settings">06 · 연결 설정</a>
         </nav>
         <div class="aside-bottom">
           <span class="dot"></span> 내 컴퓨터에서 실행 중
@@ -30,6 +31,13 @@
           <span class="pill" id="connection-badge">연결 확인 중</span>
         </header>
         <div id="toast" role="status" aria-live="polite" hidden></div>
+        <section id="attention">
+          <div class="section-head">
+            <h2>진행 중 · 확인함 <span id="pending-count">0</span></h2>
+            <span class="hint">필요한 답변과 최종 확인을 한곳에서</span>
+          </div>
+          <div id="active-jobs"></div>
+        </section>
         <section class="panel discover" id="discover">
           <div class="section-head">
             <h2>기회 탐색</h2>
@@ -42,6 +50,7 @@
             <label for="discovery-source">탐색 시작점</label>
             <select id="discovery-source">
               <option value="culture">문화포털 공지 목록 · 공식 출처 예제</option>
+              <option value="naver">네이버 웹 검색</option>
               <option value="google">Google 웹 검색</option>
               <option value="custom">다른 공개 목록에서 시작</option>
             </select>
@@ -78,12 +87,28 @@
             아직 모아둔 기회가 없어요.<br /><small>AI를 연결한 뒤 첫 탐색을 시작해 보세요.</small>
           </div>
         </div>
+        <section id="completed">
+          <div class="section-head">
+            <h2>완료한 응모 <span id="completed-count">0</span></h2>
+            <span class="hint">접수 완료 · 당첨 결과는 별도 확인</span>
+          </div>
+          <label for="completed-search">응모 검색</label
+          ><input
+            id="completed-search"
+            type="search"
+            placeholder="이벤트 · 주최자 · 경품으로 찾기"
+          />
+          <div id="completed-entries" class="event-grid"></div>
+        </section>
         <section id="runs">
           <div class="section-head">
             <h2>실행 기록</h2>
-            <span class="hint">완료 증거 · 개입 요청 · 사용량</span>
+            <span class="hint">과거 작업의 상세 로그 · 사용량</span>
           </div>
-          <div id="jobs"></div>
+          <details>
+            <summary>지난 실행 내역 펼치기</summary>
+            <div id="jobs"></div>
+          </details>
         </section>
         <section class="panel" id="autonomy">
           <div class="section-head">

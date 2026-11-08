@@ -21,6 +21,8 @@ import {
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
 import { inspectForm } from './forms.js';
+import { searchUrl } from './evidence.js';
+import { verifyReceipt } from './receipt.js';
 
 const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -38,7 +40,7 @@ const JobSchema = z.object({
   maxSteps: z.number().int().min(5).max(300).default(40),
   routeConfirmed: z.boolean().optional(),
   layout: z.enum(['normal', 'shift']).optional(),
-  discoverySource: z.enum(['culture', 'google', 'custom']).default('culture'),
+  discoverySource: z.enum(['culture', 'google', 'naver', 'custom']).default('culture'),
   sourceUrl: z.string().url().optional(),
   userContext: z.string().max(6000).optional(),
 });
@@ -181,10 +183,13 @@ export async function createApp(options: {
         auth: auth.publicInfo(),
         jobs: store.jobs().map((job) => ({
           ...job,
+          sourceEvidence: undefined,
+          receiptObservations: undefined,
           autonomy: job.autonomy
             ? {
                 ...job.autonomy,
                 profile: undefined,
+                evidence: undefined,
                 overrides: undefined,
                 reused: undefined,
                 privateAnswers: undefined,
@@ -209,8 +214,11 @@ export async function createApp(options: {
             score: ranked.score,
             scoreReasons: ranked.reasons,
             deadlineState: deadlineState(event),
+            submissionState: store.submission(event.id)?.state,
+            sourceEvidence: undefined,
           };
         }),
+        completedEntries: store.completedEntries(),
         busy: runner.isBusy(),
         browser: browser.info(),
         activeId: runner.activeId,
@@ -355,7 +363,10 @@ export async function createApp(options: {
                 ? 'https://www.culture.go.kr/portal/bbs/B0000101/list.do?menuNo=200031'
                 : input.discoverySource === 'custom'
                   ? z.string().url().parse(input.sourceUrl)
-                  : `https://www.google.com/search?q=${encodeURIComponent(`${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })} ${input.goal}`)}`);
+                  : searchUrl(
+                      `${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })} ${input.goal}`,
+                      input.discoverySource === 'google' ? 'google' : 'naver',
+                    ));
       const job: Job = {
         id,
         kind: input.kind,
@@ -378,6 +389,7 @@ export async function createApp(options: {
         approvedTexts: [],
         history: [],
         userContext: input.userContext,
+        searchEngine: input.discoverySource === 'google' ? 'google' : 'naver',
       };
       if (input.kind === 'autonomy_demo') {
         job.autonomy = createAutonomy(syntheticSettings, origin, true);
@@ -391,6 +403,8 @@ export async function createApp(options: {
         if (input.kind !== 'apply' || !settings(store).policy.enabled)
           throw new ServiceError('delegation_not_enabled');
         job.autonomy = createAutonomy(settings(store), new URL(startUrl).origin);
+        job.autonomy.evidence = event?.sourceEvidence || [];
+        job.autonomy.entryChannel = event?.entryChannel;
       }
       if (event && !store.claimSubmission(event.id, id))
         throw new ServiceError('event_already_started_or_submitted');
@@ -400,7 +414,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|context|inbox|delegation)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -410,6 +424,24 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      if (action === 'verify-result') {
+        if (runner.isBusy() || manualNavigation || !job.uncertain)
+          throw new ServiceError('result_verification_unavailable');
+        manualNavigation = true;
+        try {
+          const verified = await verifyReceipt(
+            store,
+            browser,
+            model,
+            job,
+            AbortSignal.timeout(120_000),
+            true,
+          );
+          return send(response, 200, { verified });
+        } finally {
+          manualNavigation = false;
+        }
+      }
       if (
         ['resume', 'approve', 'inbox'].includes(action) &&
         (job.browserEngine || 'chromium') !== browser.engine

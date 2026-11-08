@@ -185,6 +185,7 @@ test('dashboard groups unknown facts, accepts one answer batch, preserves focus,
     assert.equal(await form.getByLabel('아니요', { exact: true }).nth(0).isChecked(), true);
     await form.getByLabel('아니요', { exact: true }).nth(1).check();
     await form.getByRole('button', { name: '한 번에 답변하고 재개' }).click();
+    await page.getByText('지난 실행 내역 펼치기', { exact: true }).click();
     await page
       .locator('#jobs .pill')
       .filter({ hasText: /^완료$/ })

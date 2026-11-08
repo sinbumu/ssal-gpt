@@ -711,3 +711,14 @@ label.check input {
     padding: 14px;
   }
 }
+#completed,
+#attention {
+  margin-bottom: 36px;
+}
+#completed-search {
+  max-width: 480px;
+  margin-bottom: 18px;
+}
+.completed-card {
+  border-top: 3px solid #628267;
+}

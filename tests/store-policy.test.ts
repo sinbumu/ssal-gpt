@@ -164,3 +164,32 @@ test('intermediate survey navigation requires observed progress on the same orig
   j.intent.kind = 'submission';
   assert.equal(intermediateAdvanced(j, o), false);
 });
+
+test('completed list excludes discoveries and unfinished entries, survives restart and preserves duplicate claims', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-list-'));
+  let store = new Store(dir);
+  try {
+    const event = store.record(candidate, candidate.entryUrl, 'discovery', 'x.png').event;
+    const job = makeJob('completed');
+    job.kind = 'apply';
+    job.eventId = event.id;
+    store.saveJob(job);
+    store.claimSubmission(event.id, job.id);
+    assert.equal(store.completedEntries().length, 0);
+    store.complete(job, {
+      quote: '답변이 제출되었습니다.',
+      verification: 'autonomous_visible_receipt',
+      observedAt: 1234567890000,
+    });
+    store.close();
+    store = new Store(dir);
+    assert.equal(store.completedEntries().length, 1);
+    assert.equal(store.completedEntries()[0]!.completedAt, new Date(1234567890000).toISOString());
+    assert.equal(store.claimSubmission(event.id, 'duplicate'), false);
+    assert.equal(store.job(job.id)!.status, 'completed');
+    assert.ok(!JSON.stringify(store.completedEntries()).includes('provider'));
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

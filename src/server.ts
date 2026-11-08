@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { Auth, ServiceError, safeMessage } from './auth.js';
 import { Browser, validateUrl } from './browser.js';
+import { openExternalBrowser } from './external-browser.js';
 import { Model } from './model.js';
 import { Store, deadlineState, scoreCandidate, type Job } from './store.js';
 import { Runner } from './runner.js';
@@ -66,6 +67,7 @@ export async function createApp(options: {
   port: number;
   headless?: boolean;
   webDir?: string;
+  externalOpen?: (url: string) => Promise<void>;
 }) {
   const store = new Store(options.dir);
   const auth = new Auth(options.dir);
@@ -210,6 +212,7 @@ export async function createApp(options: {
           };
         }),
         busy: runner.isBusy(),
+        browser: browser.info(),
         activeId: runner.activeId,
         selection: store.settings('selection', null),
       });
@@ -267,12 +270,49 @@ export async function createApp(options: {
         throw new ServiceError('pause_before_manual_control');
       manualNavigation = true;
       try {
+        browser.setManual(true);
+        browser.ownerJobId = undefined;
         await browser.navigate(z.string().url().parse(data.url));
         await browser.page?.bringToFront();
         return send(response, 200, { ok: true });
       } finally {
         manualNavigation = false;
       }
+    }
+    if (method === 'POST' && url.pathname === '/api/browser/settings') {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_changing_browser');
+      const engine = z.enum(['chromium', 'chrome']).parse(data.engine);
+      manualNavigation = true;
+      try {
+        browser.setManual(true);
+        await browser.setEngine(engine);
+        store.setSettings('browser', { engine });
+        return send(response, 200, { ok: true, browser: browser.info() });
+      } finally {
+        manualNavigation = false;
+      }
+    }
+    if (method === 'POST' && url.pathname === '/api/browser/close') {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_manual_control');
+      manualNavigation = true;
+      try {
+        await browser.close();
+        return send(response, 200, { ok: true });
+      } finally {
+        manualNavigation = false;
+      }
+    }
+    if (method === 'POST' && url.pathname === '/api/browser/check') {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_manual_control');
+      return send(response, 200, await browser.connectionStatus());
+    }
+    if (method === 'POST' && url.pathname === '/api/browser/external') {
+      const url = await validateUrl(z.string().url().parse(data.url));
+      await (options.externalOpen || openExternalBrowser)(url.toString());
+      return send(response, 200, { ok: true, mode: 'manual', sharedSession: false });
     }
     const reviewMatch = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/review$/);
     if (method === 'POST' && reviewMatch) {
@@ -321,6 +361,7 @@ export async function createApp(options: {
         kind: input.kind,
         goal: input.goal,
         provider: input.provider,
+        browserEngine: browser.engine,
         startUrl,
         status: 'queued',
         createdAt: now,
@@ -369,6 +410,11 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      if (
+        ['resume', 'approve', 'inbox'].includes(action) &&
+        (job.browserEngine || 'chromium') !== browser.engine
+      )
+        throw new ServiceError('job_browser_profile_mismatch');
       if (action === 'inbox') {
         if (
           runner.isBusy() ||
@@ -515,7 +561,10 @@ export async function createApp(options: {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('missing address');
   origin = `http://127.0.0.1:${address.port}`;
-  browser = new Browser(options.dir, origin, options.headless);
+  const engine = z
+    .enum(['chromium', 'chrome'])
+    .parse(store.settings('browser', { engine: 'chromium' }).engine);
+  browser = new Browser(options.dir, origin, options.headless, engine);
   runner = new Runner(store, browser, model, origin);
   return {
     origin,

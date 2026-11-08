@@ -226,8 +226,22 @@
             <div>
               <h3>03 / SNS·폼 로그인</h3>
               <p class="hint">
-                전용 Chromium에서 직접 로그인합니다. 인증 중에는 화면을 AI에 보내지 않습니다.
+                선택한 전용 브라우저에서 직접 로그인합니다. 인증 중에는 화면을 AI에 보내지 않습니다.
               </p>
+              <form id="browser-settings-form">
+                <label for="browser-engine">전용 브라우저</label>
+                <div class="inline">
+                  <select id="browser-engine">
+                    <option value="chromium">기본 Chromium · 기존 로그인</option>
+                    <option value="chrome">설치된 Google Chrome · 별도 전용 프로필</option></select
+                  ><button type="submit">적용</button>
+                </div>
+                <p class="hint">
+                  두 브라우저는 로그인 저장소가 별개입니다. 바꾸면 현재 전용 창을 닫고, 기존 로그인
+                  저장소는 보관합니다. 평소 쓰는 Chrome의 로그인은 가져오지 않습니다.
+                </p>
+              </form>
+              <p id="browser-status" class="hint"></p>
               <form id="browser-form">
                 <label for="login-url">열 주소</label>
                 <div class="inline">
@@ -241,8 +255,35 @@
               <div class="inline">
                 <button data-login="https://www.instagram.com/">Instagram 로그인</button
                 ><button data-login="https://www.youtube.com/">YouTube 로그인</button
-                ><button data-login="https://nid.naver.com/nidlogin.login">Naver 로그인</button>
+                ><button data-login="https://www.naver.com/">Naver 열기 · 로그인 확인</button>
               </div>
+              <p class="hint">
+                네이버는 홈 화면에서 로그인 여부를 확인하세요. 로그인할 때 ‘로그인 상태 유지’를 직접
+                체크해야 창을 닫은 뒤에도 유지될 수 있습니다.
+              </p>
+              <button id="browser-close" type="button">전용 브라우저 정상 종료</button>
+              <button id="browser-check" type="button">현재 로그인 화면 확인</button>
+              <p id="browser-check-result" class="hint" role="status"></p>
+              <details>
+                <summary>유튜브가 브라우저 로그인을 거부한다면</summary>
+                <p>
+                  정식 Chrome을 선택해 호환성을 확인할 수 있지만, Google은 자동화 브라우저의
+                  로그인을 거부할 수 있습니다.
+                </p>
+                <button type="button" data-external="https://www.youtube.com/">
+                  일반 브라우저에서 YouTube 직접 열기
+                </button>
+                <p>
+                  이 경로는 직접 참여용입니다. 일반 브라우저의 로그인은 에이전트와 공유되지 않으며,
+                  이 창은 자동 조작하지 않습니다.
+                </p>
+                <a
+                  href="https://support.google.com/accounts/answer/7675428?hl=ko"
+                  target="_blank"
+                  rel="noreferrer"
+                  >Google 로그인 안내 ↗</a
+                >
+              </details>
             </div>
             <div>
               <h3>04 / 연결 동작 확인</h3>

@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { ProviderChoice } from './auth.js';
 import type { Candidate, Step } from './model.js';
 import type { AutonomyState } from './autonomy.js';
+import type { BrowserEngine } from './browser.js';
 
 export type JobStatus =
   | 'queued'
@@ -32,6 +33,7 @@ export type Job = {
   autonomy?: AutonomyState;
   goal: string;
   provider: ProviderChoice;
+  browserEngine?: BrowserEngine;
   startUrl: string;
   currentUrl?: string;
   status: JobStatus;

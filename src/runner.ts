@@ -129,6 +129,9 @@ export class Runner {
     const job = this.store.job(id);
     if (!job || ['completed', 'stopped'].includes(job.status))
       throw new ServiceError('job_not_resumable');
+    if ((job.browserEngine || 'chromium') !== this.browser.engine)
+      throw new ServiceError('job_browser_profile_mismatch');
+    this.browser.setManual(false);
     this.controller = new AbortController();
     this.activeId = id;
     job.status = 'running';
@@ -146,6 +149,7 @@ export class Runner {
         }
       })
       .finally(() => {
+        this.browser.setManual(true);
         this.work = undefined;
         this.controller = undefined;
         this.activeId = undefined;

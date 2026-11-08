@@ -18,6 +18,7 @@ const statuses = {
 let state;
 let initial = true;
 let rendered = '';
+let renderedBrowserEngine;
 function toast(message, error = false) {
   const el = $('toast');
   el.textContent = message;
@@ -89,6 +90,14 @@ function renderInbox(job) {
 }
 function render() {
   const auth = state.auth;
+  if (state.browser) {
+    if (renderedBrowserEngine !== state.browser.engine) {
+      $('browser-engine').value = state.browser.engine;
+      renderedBrowserEngine = state.browser.engine;
+    }
+    $('browser-status').textContent =
+      `${state.browser.profile} · ${state.browser.open ? '열림' : '닫힘'} · ${state.browser.manual ? '직접 조작' : '에이전트 실행 중'}`;
+  }
   const previous = $('account').value;
   const options = auth.accounts
     .map(
@@ -217,6 +226,20 @@ $('browser-form').onsubmit = guard(async () => {
   await api('/api/browser/open', { url: $('login-url').value });
   toast('전용 브라우저에서 로그인하세요. 완료 후 작업을 시작하거나 재개할 수 있습니다.');
 });
+$('browser-settings-form').onsubmit = guard(async () => {
+  await api('/api/browser/settings', { engine: $('browser-engine').value });
+  toast('선택한 전용 브라우저를 적용했습니다. 서비스 버튼에서 로그인 상태를 확인해 주세요.');
+});
+$('browser-close').onclick = guard(async () => {
+  await api('/api/browser/close', {});
+  toast(
+    '전용 브라우저를 정상 종료했습니다. 같은 브라우저를 다시 열면 저장된 사이트 데이터가 재사용됩니다.',
+  );
+});
+$('browser-check').onclick = guard(async () => {
+  const result = await api('/api/browser/check', {});
+  $('browser-check-result').textContent = result.message;
+});
 $('discover-form').onsubmit = guard(async () => {
   await api('/api/jobs', {
     kind: 'discover',
@@ -287,6 +310,11 @@ $('autonomy-form').onsubmit = guard(async () => {
   toast('저장했습니다. 새 응모부터 적용합니다.');
 });
 const handleAutonomyClick = guard(async (event) => {
+  const external = event.target.closest('[data-external]');
+  if (external) {
+    await api('/api/browser/external', { url: external.dataset.external });
+    toast('일반 브라우저에서 직접 진행하세요. 이 창의 로그인은 에이전트와 공유되지 않습니다.');
+  }
   const login = event.target.closest('[data-login]');
   if (login) {
     await api('/api/browser/open', { url: login.dataset.login });
@@ -308,7 +336,7 @@ const handleAutonomyClick = guard(async (event) => {
   }
 });
 document.addEventListener('click', (event) => {
-  if (event.target.closest('[data-login],[data-forget],[data-recommend]'))
+  if (event.target.closest('[data-login],[data-forget],[data-recommend],[data-external]'))
     void handleAutonomyClick(event);
 });
 document.addEventListener('submit', (event) => {

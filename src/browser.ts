@@ -22,6 +22,10 @@ export type VisibleElement = {
   checked?: boolean;
   value?: string;
 };
+export type BrowserEngine = 'chromium' | 'chrome';
+export function browserProfileDirectory(dir: string, engine: BrowserEngine) {
+  return join(dir, engine === 'chrome' ? 'browser-chrome' : 'browser');
+}
 export type Observation = {
   id: string;
   url: string;
@@ -96,15 +100,21 @@ export class Browser {
   private handles = new Map<string, ElementHandle<HTMLElement>>();
   private opening?: Promise<void>;
   private evidence: string;
+  private manual = true;
+  private attached = new WeakSet<Page>();
   constructor(
     private dir: string,
     private demoOrigin: string,
     private headless = false,
+    public engine: BrowserEngine = 'chromium',
   ) {
     this.evidence = privateDirectory(join(dir, 'evidence'));
   }
   async open() {
-    if (this.context) return;
+    if (this.context) {
+      await this.ensurePage();
+      return;
+    }
     if (this.opening) return this.opening;
     this.opening = this.launch();
     try {
@@ -113,10 +123,113 @@ export class Browser {
       this.opening = undefined;
     }
   }
+  private async ensurePage() {
+    if (this.page && !this.page.isClosed()) return;
+    this.ownerJobId = undefined;
+    const page =
+      this.context!.pages().find((p) => !p.isClosed()) || (await this.context!.newPage());
+    if (this.page !== page) this.attach(page);
+  }
+  setManual(manual: boolean) {
+    this.manual = manual;
+  }
+  info() {
+    return {
+      engine: this.engine,
+      open: !!this.context,
+      manual: this.manual,
+      profile: this.engine === 'chrome' ? '쌀-GPT 전용 Chrome' : '쌀-GPT 전용 Chromium',
+    };
+  }
+  async connectionStatus() {
+    const page = this.page;
+    if (!page || page.isClosed())
+      return { state: 'closed', message: '전용 브라우저를 먼저 열어 주세요.' };
+    let host = '';
+    try {
+      host = new URL(page.url()).hostname;
+    } catch {}
+    const service = /(^|\.)naver\.com$/.test(host)
+      ? 'naver'
+      : /(^|\.)(google|youtube)\.com$/.test(host)
+        ? 'google'
+        : /(^|\.)instagram\.com$/.test(host)
+          ? 'instagram'
+          : 'other';
+    if (service === 'other')
+      return {
+        state: 'unknown',
+        service,
+        message: '이 페이지의 로그인 상태는 직접 확인해 주세요.',
+      };
+    // Only return status booleans, never page text, identifiers or cookie values.
+    const signals = await page.evaluate(() => {
+      const controls = [...document.querySelectorAll<HTMLElement>('a,button,[role=button]')]
+        .filter((el) => {
+          const s = getComputedStyle(el);
+          return !!el.getClientRects().length && s.visibility !== 'hidden' && s.display !== 'none';
+        })
+        .map((el) =>
+          (el.innerText || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim(),
+        );
+      return {
+        blocked:
+          /브라우저\s*(?:또는|나)\s*앱[\s\S]{0,30}안전하지|this browser or app may not be secure/i.test(
+            document.body.innerText,
+          ),
+        signOut: controls.some((label) => /^(로그아웃|sign out|log out)$/i.test(label)),
+        signIn: controls.some((label) =>
+          /^(?:(?:NAVER|네이버)\s*)?(로그인|sign in|log in)$/i.test(label),
+        ),
+        password: [...document.querySelectorAll('input[type=password]')].some(
+          (el) => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden',
+        ),
+      };
+    });
+    if (signals.blocked)
+      return {
+        state: 'blocked',
+        service,
+        message:
+          '사이트가 이 브라우저의 로그인을 거부했습니다. 일반 브라우저의 직접 참여 경로를 이용할 수 있습니다.',
+      };
+    if (signals.signOut)
+      return {
+        state: 'signed_in_visible',
+        service,
+        message:
+          '현재 화면에 로그아웃 버튼이 보여 로그인 상태로 판단합니다. 종료 후 다시 열어 재확인하세요.',
+      };
+    if (signals.signIn || signals.password)
+      return {
+        state: 'login_required',
+        service,
+        message:
+          '현재 화면에서 로그인이 필요합니다. 네이버는 홈에서 확인하고, 로그인 상태 유지를 직접 선택해 주세요.',
+      };
+    return {
+      state: 'unknown',
+      service,
+      message: '로그인 여부를 확정할 표시가 없습니다. 서비스 화면에서 직접 확인해 주세요.',
+    };
+  }
+  async setEngine(engine: BrowserEngine) {
+    if (engine === this.engine) return;
+    const previous = this.engine;
+    await this.close();
+    this.engine = engine;
+    try {
+      await this.open();
+    } catch {
+      this.engine = previous;
+      throw new ServiceError('browser_channel_unavailable');
+    }
+  }
   private async launch() {
     this.context = await chromium.launchPersistentContext(
-      privateDirectory(join(this.dir, 'browser')),
+      privateDirectory(browserProfileDirectory(this.dir, this.engine)),
       {
+        channel: this.engine === 'chrome' ? 'chrome' : undefined,
         headless: this.headless,
         viewport: { width: 1280, height: 840 },
         deviceScaleFactor: 1,
@@ -174,7 +287,9 @@ export class Browser {
     this.context.on('page', (page) => this.attach(page));
     this.page = this.context.pages()[0] || (await this.context.newPage());
     this.attach(this.page);
+    const context = this.context;
     this.context.on('close', () => {
+      if (this.context !== context) return;
       this.context = undefined;
       this.page = undefined;
       this.latest = undefined;
@@ -184,8 +299,20 @@ export class Browser {
   private attach(page: Page) {
     this.page = page;
     this.latest = undefined;
-    page.on('dialog', (dialog) => void dialog.dismiss().catch(() => {}));
+    if (this.attached.has(page)) return;
+    this.attached.add(page);
+    // Manual login must leave native confirmation dialogs to the person at the browser.
+    page.on('dialog', (dialog) => {
+      if (!this.manual) void dialog.dismiss().catch(() => {});
+    });
     page.on('download', (download) => void download.cancel().catch(() => {}));
+    page.on('close', () => {
+      if (this.page === page) {
+        this.page = undefined;
+        this.ownerJobId = undefined;
+        this.invalidate();
+      }
+    });
   }
   invalidate() {
     this.latest = undefined;
@@ -446,5 +573,8 @@ export class Browser {
   async close() {
     await this.context?.close();
     this.context = undefined;
+    this.page = undefined;
+    this.ownerJobId = undefined;
+    this.invalidate();
   }
 }

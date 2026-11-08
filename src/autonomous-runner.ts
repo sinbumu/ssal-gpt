@@ -32,6 +32,7 @@ export async function runAutonomous(
 ) {
   const state = job.autonomy!;
   const started = Date.now();
+  let formLoadWaits = 0;
   const assertScope = () => {
     if (
       !state.policy.enabled ||
@@ -56,8 +57,18 @@ export async function runAutonomous(
     await browser.open();
     if (!job.currentUrl) await browser.navigate(job.startUrl);
     else if (browser.ownerJobId !== job.id || browser.page?.url() === 'about:blank') {
-      // Restoring a URL can lose a POST-backed form. Explicit UI handoff is required.
-      throw new ServiceError('autonomy_live_page_required');
+      // Reopen only an untouched preparation. Never reload a page after input,
+      // intermediate submission or an uncertain external action.
+      if (
+        !job.uncertain &&
+        state.metrics.fields === 0 &&
+        state.metrics.batches === 0 &&
+        state.metrics.recoveries === 0 &&
+        !state.plan &&
+        !job.history.some((h) => h.action === 'form_batch')
+      )
+        await browser.navigate(job.currentUrl);
+      else throw new ServiceError('autonomy_live_page_required');
     }
     browser.ownerJobId = job.id;
     while (job.steps < job.maxSteps) {
@@ -94,6 +105,16 @@ export async function runAutonomous(
           }
         }
         store.saveJob(job);
+        if (
+          !job.uncertain &&
+          !view.questions.length &&
+          !view.buttons.length &&
+          formLoadWaits++ < 4
+        ) {
+          record('폼의 문항이 나타나는지 잠시 기다린 뒤 다시 확인합니다.');
+          await browser.page!.waitForTimeout(1000);
+          continue;
+        }
         const introNext = o.elements.find(
           (b) =>
             (['button', 'input'].includes(b.tag) || b.role === 'button') &&

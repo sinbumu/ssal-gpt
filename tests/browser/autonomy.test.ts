@@ -410,3 +410,45 @@ test('confirmed answers persist through dashboard API and a new job reuses them 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('an untouched preparation survives restart and waits for delayed form rendering before planning', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-delayed-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = makeJob(app.origin);
+    j.currentUrl = j.startUrl;
+    app.store.saveJob(j);
+    await app.browser.open();
+    await app.browser.page!.route('**/demo/autonomy?**', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<p>설문 준비 중</p><script>setTimeout(()=>document.body.innerHTML='<form><label>의견<input></label><button>제출</button></form>',1200)</script>`,
+      }),
+    );
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        calls++;
+        assert.equal(ctx.form.questions.length, 1);
+        return {
+          step: {
+            action: 'needs_user',
+            observationId: ctx.observation.id,
+            reason: 'fixture reached loaded form',
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    assert.equal(calls, 1);
+    assert.equal(app.store.job(j.id)!.note, 'fixture reached loaded form');
+    assert.equal(app.store.job(j.id)!.autonomy!.metrics.fields, 0);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

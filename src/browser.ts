@@ -17,6 +17,7 @@ export type VisibleElement = {
   type: string;
   label: string;
   href?: string;
+  navigationOnly?: boolean;
   x: number;
   y: number;
   width: number;
@@ -242,13 +243,19 @@ export class Browser {
     await this.open();
     const original = this.page!;
     const owner = this.ownerJobId;
+    const previousReadOnly = this.readOnlyMode;
+    this.readOnlyMode = true;
     const tab = await this.context!.newPage();
     this.attach(tab);
     this.readOnlyPages.add(tab);
     try {
       return await read();
     } finally {
+      for (const popup of this.context?.pages() || []) {
+        if (popup !== tab && (await popup.opener()) === tab) await popup.close().catch(() => {});
+      }
       await tab.close().catch(() => {});
+      this.readOnlyMode = previousReadOnly;
       this.attach(original);
       this.ownerJobId = owner;
       await original.bringToFront().catch(() => {});
@@ -277,7 +284,7 @@ export class Browser {
       if (/^(data:|blob:)/.test(url)) return route.continue();
       try {
         if (
-          this.readOnlyPages.has(route.request().frame().page()) &&
+          (this.readOnlyMode || this.readOnlyPages.has(route.request().frame().page())) &&
           !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())
         ) {
           if (route.request().isNavigationRequest()) this.readOnlyBlocks++;
@@ -425,6 +432,29 @@ export class Browser {
             el.getAttribute('placeholder') ||
             el.getAttribute('name') ||
             '';
+          let navigationArea = false;
+          for (
+            let parent = el.parentElement;
+            parent && parent !== document.body;
+            parent = parent.parentElement
+          ) {
+            if (
+              parent.matches('nav,header,[role=navigation]') ||
+              /(?:^|[\s_-])(header|nav|gnb|lnb|menu)(?:[\s_-]|$)/i.test(
+                `${parent.id} ${parent.className}`,
+              )
+            )
+              navigationArea = true;
+          }
+          const navigationOnly =
+            el instanceof HTMLAnchorElement &&
+            navigationArea &&
+            !el.closest('form') &&
+            /^(javascript:|#)/i.test(el.getAttribute('href') || '') &&
+            !!label.trim() &&
+            !/가입|로그인|로그아웃|신청|등록|응모|제출|참여|신고|삭제|저장|동의|구매|결제|해지|login|logout|sign.?up|submit|send|post|delete|save|buy|follow|like/i.test(
+              label,
+            );
           return {
             tag: el.tagName.toLowerCase(),
             role: el.getAttribute('role') || '',
@@ -434,6 +464,7 @@ export class Browser {
                 : el.getAttribute('type') || '',
             label: label.slice(0, 240),
             href: el instanceof HTMLAnchorElement ? el.href : undefined,
+            navigationOnly,
             x: Math.max(0, box.x),
             y: Math.max(0, box.y),
             width: box.width,

@@ -934,3 +934,59 @@ test('a poster URL requires a second screenshot-grounded confirmation before nav
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('discovery repairs a generated evidence paraphrase before saving any candidate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-quote-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.kind = 'discover';
+    await app.browser.navigate(j.startUrl);
+    await app.browser.page!.setContent('<p>누구나 참여하는 무료 이벤트입니다.</p>');
+    j.currentUrl = j.startUrl;
+    app.browser.ownerJobId = j.id;
+    app.store.saveJob(j);
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        calls++;
+        if (calls === 2) {
+          assert.equal(app.store.events().length, 0);
+          assert.ok(ctx.history.some((h: any) => h.action === 'record_rejected'));
+        }
+        return {
+          step: {
+            action: 'record_event',
+            observationId: ctx.observation.id,
+            reason: 'fixture',
+            candidate: {
+              title: '가상 공개 행사',
+              organizer: '합성 주최',
+              entryUrl: j.startUrl,
+              deadline: '2099-12-01T00:00:00Z',
+              prize: '가상 경품',
+              winners: 10,
+              requirements: ['폼 작성'],
+              blockers: [],
+              effortMinutes: 2,
+              evidenceKind: 'text',
+              evidenceQuote:
+                calls === 1 ? '무료로 누구나 참여 가능' : '누구나 참여하는 무료 이벤트입니다.',
+            },
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+    assert.equal(calls, 2);
+    assert.equal(app.store.events().length, 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

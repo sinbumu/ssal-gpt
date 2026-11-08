@@ -5,7 +5,7 @@ import { Model, type Step } from './model.js';
 import { Store, type Job, type Approval } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { runAutonomous } from './autonomous-runner.js';
-import { collectEvidence, channelFromTrail, searchUrl } from './evidence.js';
+import { collectEvidence, channelFromTrail, searchUrl, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { prepareDiscoveredEntry } from './workflow.js';
 
@@ -342,6 +342,7 @@ export class Runner {
     let previousFingerprint = '';
     let unchangedObservations = 0;
     let rejectedReads = 0;
+    let candidateRepairs = 0;
     try {
       if (
         job.uncertain &&
@@ -562,14 +563,45 @@ export class Runner {
           const c = step.candidate;
           if (!c) throw new ServiceError('candidate_required');
           await validateUrl(c.entryUrl, this.origin);
-          if (c.entryUrl !== o.url && !o.elements.some((e) => e.href === c.entryUrl))
-            throw new ServiceError('unobserved_entry_url');
-          if (c.evidenceKind === 'text' && !o.text.includes(c.evidenceQuote))
-            throw new ServiceError('unobserved_evidence');
-          const recorded = this.store.record(c, o.url, job.id, o.screenshot, {
-            sourceEvidence: job.sourceEvidence,
-            entryChannel: channelFromTrail(job.visitedUrls || []),
-          });
+          const entryObserved =
+            c.entryUrl === o.url || o.elements.some((e) => e.href === c.entryUrl);
+          const proof =
+            c.evidenceKind === 'text'
+              ? [...(job.sourceEvidence || [])]
+                  .reverse()
+                  .filter((s) => s.url === o.url)
+                  .map((s) => ({ source: s, quote: observedQuote(s.text, c.evidenceQuote) }))
+                  .find((s) => s.quote)
+              : undefined;
+          if (!entryObserved || (c.evidenceKind === 'text' && !proof)) {
+            if (candidateRepairs++ >= 3)
+              throw new ServiceError(
+                !entryObserved ? 'unobserved_entry_url' : 'unobserved_evidence',
+              );
+            job.history.push({
+              action: 'record_rejected',
+              reason: !entryObserved
+                ? '후보를 저장하지 않았습니다. 현재 폼 주소 또는 화면의 실제 참여 링크를 사용하세요.'
+                : '후보를 저장하지 않았습니다. evidenceQuote는 요약이나 여러 조각이 아니라 관찰 본문의 짧은 연속 원문을 그대로 복사하세요. 이미지에만 있는 근거라면 현재 화면을 보고 image로 구분하세요.',
+              url: o.url,
+            });
+            job.history = job.history.slice(-30);
+            job.note = '후보의 원문 근거를 다시 맞춰 저장합니다.';
+            this.store.note(job.id, job.note);
+            this.store.saveJob(job);
+            continue;
+          }
+          if (proof?.quote) c.evidenceQuote = proof.quote;
+          const recorded = this.store.record(
+            c,
+            o.url,
+            job.id,
+            proof?.source.screenshot || o.screenshot,
+            {
+              sourceEvidence: job.sourceEvidence,
+              entryChannel: channelFromTrail(job.visitedUrls || []),
+            },
+          );
           this.store.note(
             job.id,
             `${recorded.added ? '후보 저장' : recorded.refreshed ? '미응모 후보 재확인' : '중복 후보 생략'}: ${c.title}`,

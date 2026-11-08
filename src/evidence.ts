@@ -9,6 +9,23 @@ export type SourceEvidence = {
   observedAt: number;
 };
 
+// Text split into rendered nodes may differ only in whitespace. Return the
+// original observed span, not a generated paraphrase or a concatenated quote.
+export function observedQuote(text: string, quote: string) {
+  const compact = quote.replace(/\s/g, '');
+  if (!compact) return;
+  const indices: number[] = [];
+  let source = '';
+  for (let i = 0; i < text.length; i++)
+    if (!/\s/.test(text[i]!)) {
+      source += text[i];
+      indices.push(i);
+    }
+  const at = source.indexOf(compact);
+  if (at < 0) return;
+  return text.slice(indices[at], indices[at + compact.length - 1]! + 1);
+}
+
 export function collectEvidence(previous: SourceEvidence[], o: Observation) {
   if (previous.some((s) => s.url === o.url && s.text === o.text)) return previous;
   return [

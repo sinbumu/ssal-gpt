@@ -78,6 +78,28 @@ test('opted-in discovery chooses one observed eligible form and claims it atomic
       'x.png',
     );
     assert.equal(prepareDiscoveredEntry(store, noForm), undefined);
+    const moaUrl = 'https://moaform.com/q/fixture';
+    store.record(
+      { ...candidate, title: '모아폼 공개 퀴즈', entryUrl: moaUrl },
+      'https://example.org/official',
+      noForm.id,
+      'x.png',
+      {
+        sourceEvidence: [
+          {
+            id: 'moa',
+            url: moaUrl,
+            title: '관측한 폼',
+            text: '퀴즈',
+            screenshot: 'x.png',
+            observedAt: Date.now(),
+          },
+        ],
+      },
+    );
+    const moaChild = prepareDiscoveredEntry(store, noForm);
+    assert.ok(moaChild);
+    assert.equal(store.job(moaChild)!.startUrl, moaUrl);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

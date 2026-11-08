@@ -22,8 +22,8 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
         e.jobId === parent.id &&
         !store.submission(e.id) &&
         url.protocol === 'https:' &&
-        url.hostname === 'form.naver.com' &&
-        /^\/response\//.test(url.pathname) &&
+        ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
+          (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname))) &&
         deadlineState(e) === 'available' &&
         !e.blockers.length &&
         e.effortMinutes <= 8 &&
@@ -39,7 +39,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     )[0];
   if (!event) {
     parent.note =
-      '탐색을 마쳤습니다. 조건이 확인된 미참여 네이버 폼이 없어 자동 응모 준비를 시작하지 않았습니다.';
+      '탐색을 마쳤습니다. 조건이 확인된 미참여 지원 폼이 없어 자동 응모 준비를 시작하지 않았습니다.';
     store.saveJob(parent);
     return;
   }
@@ -77,7 +77,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
       return;
     }
     grant.childId = child.id;
-    parent.note = '조건이 확인된 네이버 폼 1건을 골라 저장된 위임으로 응모 준비를 시작합니다.';
+    parent.note = '조건이 확인된 지원 폼 1건을 골라 저장된 위임으로 응모 준비를 시작합니다.';
     store.saveJob(child);
     store.saveJob(parent);
     store.note(parent.id, parent.note);

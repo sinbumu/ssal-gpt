@@ -403,7 +403,7 @@ export class Runner {
             timezone: 'Asia/Seoul',
             goal: job.goal,
             automaticEntryScope: job.prepareOne
-              ? 'Only a new form.naver.com/response/ form, observed read-only, <=8 minutes, no purchase/visit/SNS engagement/file task. Other hosts cannot be auto-prepared; search another candidate.'
+              ? 'Only a new form.naver.com/response/ or moaform.com/q/ form, observed read-only, <=8 minutes, no purchase/visit/SNS engagement/file task. Other hosts cannot be auto-prepared; search another candidate.'
               : undefined,
             userContext: job.userContext || '',
             mode: job.kind,

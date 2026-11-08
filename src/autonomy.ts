@@ -164,7 +164,7 @@ export const syntheticSettings: Settings = {
   }),
 };
 const personal: Record<keyof Profile, RegExp> = {
-  name: /성명|이름|\bname\b/i,
+  name: /성명|성함|이름|\bname\b/i,
   email: /이메일|전자우편|\be-?mail\b/i,
   phone: /연락처|전화|휴대|\bphone\b|\bmobile\b/i,
   region: /거주|지역|\bregion\b/i,
@@ -219,7 +219,11 @@ export function resolveAnswer(
     if (key === 'phone' && q.kind === 'text') {
       const digits = value.replace(/[\s-]/g, '');
       if (/^01\d\d{7,8}$/.test(digits)) {
-        if (/하이픈.{0,12}(?:제외|없이|빼)|숫자만|digits only|without hyphens/i.test(hint))
+        if (
+          /하이픈.{0,12}(?:제외|없이|빼)|-\s*없이|(?:숫자|번호)만|digits only|without hyphens/i.test(
+            hint,
+          )
+        )
           value = digits;
         else if (/하이픈.{0,12}(?:포함|넣|입력)|with hyphens/i.test(hint))
           value = digits.replace(/^(01\d)(\d{3,4})(\d{4})$/, '$1-$2-$3');

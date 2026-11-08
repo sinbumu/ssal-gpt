@@ -73,3 +73,5 @@ OAuth 토큰은 OS 자격증명 저장소 또는 보호된 로컬 비밀정보 �
 - [YouTube 이벤트 정책](https://support.google.com/youtube/answer/1620498?hl=en-GB): 이벤트를 통한 참여 지표 조작을 금지한다.
 - [Google Forms 응답 API](https://developers.google.com/workspace/forms/api/reference/rest/v1/forms.responses): 공개된 메서드는 응답 조회용 `get`과 `list`다.
 - [Playwright 인증 상태](https://playwright.dev/docs/auth): 인증 상태를 재사용할 수 있으며, 파일에 계정을 가장할 수 있는 민감한 쿠키 등이 포함될 수 있다. 저장소에 넣지 않는다.
+
+2026-11-09 [모아폼 질문 종류 공식 안내](https://help.moaform.com/hc/ko/articles/900003444366)와 [답변하기 안내](https://help.moaform.com/hc/ko/articles/900004105306)를 확인했다. 공식 기능 종류와 앱 실행 지원은 구분한다. 현재 앱 어댑터는 렌더링된 텍스트 입력과 객관식 단일 선택에 한정하며, 복수 선택·순위·격자·파일은 지원하지 않는다. 자동화 허용이나 모든 설문의 응답 성공을 보장하는 근거로 이 문서를 사용하지 않는다.

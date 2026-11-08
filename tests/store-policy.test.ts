@@ -54,8 +54,18 @@ test('event dedup and submission claim survive restart; interrupted actions beco
     );
     assert.equal(a.event.id, b.event.id);
     assert.equal(b.added, false);
+    assert.equal(b.refreshed, true);
+    assert.equal(db.event(a.event.id)!.jobId, 'j2');
     assert.equal(db.claimSubmission(a.event.id, 'job1'), true);
     assert.equal(db.claimSubmission(a.event.id, 'job2'), false);
+    const locked = db.record(
+      { ...candidate, title: 'Do not overwrite' },
+      candidate.entryUrl,
+      'j3',
+      'x.png',
+    );
+    assert.equal(locked.refreshed, false);
+    assert.equal(db.event(a.event.id)!.jobId, 'j2');
     const job = makeJob();
     job.uncertain = true;
     db.saveJob(job);

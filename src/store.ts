@@ -233,8 +233,36 @@ export class Store {
     const existing = this.db
       .prepare('SELECT data FROM events WHERE entry_key=? OR campaign_key=? LIMIT 1')
       .get(entryKey, campaignKey);
-    if (existing)
-      return { event: JSON.parse(existing.data as string) as EventRecord, added: false };
+    if (existing) {
+      const prior = JSON.parse(existing.data as string) as EventRecord;
+      if (this.submission(prior.id)) return { event: prior, added: false, refreshed: false };
+      const ranked = scoreCandidate(candidate);
+      const event: EventRecord = {
+        ...prior,
+        ...candidate,
+        ...context,
+        entryKey,
+        campaignKey,
+        sourceUrl,
+        jobId,
+        screenshot,
+        score: ranked.score,
+        scoreReasons: ranked.reasons,
+        reviews: [
+          ...(prior.reviews || []),
+          {
+            at: new Date().toISOString(),
+            note: '미응모 후보의 원문과 조건을 에이전트가 다시 확인했습니다.',
+            previousEntryUrl: prior.entryUrl,
+            previousBlockers: prior.blockers,
+          },
+        ].slice(-10),
+      };
+      this.db
+        .prepare('UPDATE events SET entry_key=?,campaign_key=?,data=? WHERE id=?')
+        .run(entryKey, campaignKey, JSON.stringify(event), prior.id);
+      return { event, added: false, refreshed: true };
+    }
     const ranked = scoreCandidate(candidate);
     const event: EventRecord = {
       ...candidate,
@@ -252,7 +280,7 @@ export class Store {
     this.db
       .prepare('INSERT INTO events VALUES (?,?,?,?)')
       .run(event.id, entryKey, campaignKey, JSON.stringify(event));
-    return { event, added: true };
+    return { event, added: true, refreshed: false };
   }
   submission(eventId: string) {
     return this.db.prepare('SELECT * FROM submissions WHERE event_id=?').get(eventId);

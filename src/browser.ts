@@ -8,6 +8,7 @@ import { privateDirectory } from './config.js';
 import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
+import { isMoaform, moaformSnapshot } from './forms.js';
 
 export type VisibleElement = {
   ref: string;
@@ -589,6 +590,7 @@ export class Browser {
     return o;
   }
   async formSnapshot() {
+    if (isMoaform(this.page!)) return moaformSnapshot(this.page!);
     return this.page!.evaluate(() => {
       const helpers = {
         label(el: Element) {

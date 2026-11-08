@@ -8,10 +8,12 @@ export type FormView = {
   questions: Question[];
   buttons: { id: string; label: string; action: string; form: number }[];
 };
-type Binding = { indices: number[]; optionValues: string[] };
-// Rendered native controls only. Custom widgets are handed back to the visual/manual path.
+type Binding = { indices: number[]; optionValues: string[]; custom?: 'moa-radio' | 'notice' };
+export const isMoaform = (page: Page) => new URL(page.url()).hostname === 'answer.moaform.com';
+// Bind rendered controls only; never read provider-private response state.
 export async function inspectForm(page: Page) {
   const raw = await page.evaluate(() => {
+    const moa = location.hostname === 'answer.moaform.com';
     const all = [
       ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
         'input,textarea,select',
@@ -45,6 +47,7 @@ export async function inspectForm(page: Page) {
       options: { label: string; value: string }[];
       indices: number[];
       form: number;
+      custom?: 'moa-radio' | 'notice';
     }[] = [];
     const forms = [...document.forms];
     const seen = new Set<number>();
@@ -76,7 +79,9 @@ export async function inspectForm(page: Page) {
           : [el];
       const indices = group.map((e) => all.indexOf(e));
       indices.forEach((i) => seen.add(i));
-      const fieldset = el.closest('fieldset,[role=group],[role=radiogroup]');
+      const fieldset = el.closest(
+        'fieldset,[role=group],[role=radiogroup]' + (moa ? ',.js-question' : ''),
+      );
       const describedBy = (el.getAttribute('aria-describedby') || '')
         .split(/\s+/)
         .map((id) => document.getElementById(id))
@@ -84,7 +89,7 @@ export async function inspectForm(page: Page) {
         .map((node) => node.innerText)
         .join('\n');
       const heading = fieldset
-        ?.querySelector('legend,h1,h2,h3,h4,[role=heading]')
+        ?.querySelector('legend,h1,h2,h3,h4,[role=heading],.js-question-content')
         ?.textContent?.trim();
       const questionLabel = (
         heading ||
@@ -102,7 +107,19 @@ export async function inspectForm(page: Page) {
             : [];
       groups.push({
         label: questionLabel,
-        description: [describedBy, fieldset instanceof HTMLElement ? fieldset.innerText : '']
+        description: [
+          describedBy,
+          moa && fieldset?.matches('.js-question')
+            ? [
+                heading,
+                fieldset.querySelector('.wf-style-textanswer__placeholder')?.textContent?.trim(),
+              ]
+                .filter(Boolean)
+                .join('\n')
+            : fieldset instanceof HTMLElement
+              ? fieldset.innerText
+              : '',
+        ]
           .filter(Boolean)
           .join('\n')
           .slice(0, 3000),
@@ -110,12 +127,86 @@ export async function inspectForm(page: Page) {
         required:
           group.some((e) => e.required) ||
           fieldset?.getAttribute('aria-required') === 'true' ||
+          (moa && !!fieldset?.querySelector('.wf-icon-required')) ||
           /답변\s*필수/.test(questionLabel),
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
         options,
         indices,
         form: forms.indexOf(el.form!),
       });
+    }
+    if (moa) {
+      const choices = [...document.querySelectorAll('.js-question .select-one-and-many')];
+      for (const block of document.querySelectorAll<HTMLElement>('.js-question')) {
+        if (!helpers.visible(block)) continue;
+        const options = [...block.querySelectorAll('.select-one-and-many')];
+        if (!options.length) {
+          const native = [...block.querySelectorAll('textarea,input:not([type=hidden]),select')];
+          if (
+            native.length !== 1 ||
+            !groups.some((g) => g.indices.includes(all.indexOf(native[0] as HTMLInputElement)))
+          )
+            throw new Error('unsupported_moaform_question');
+          continue;
+        }
+        // Other, multiple, rank and media choices need their own verified binding.
+        if (
+          options.some(
+            (e) => !e.querySelector('.wf-radio .fi-radio-btn-no,.wf-radio .fi-radio-btn-yes-dot'),
+          ) ||
+          block.querySelector('input,textarea,select')
+        )
+          throw new Error('unsupported_moaform_question');
+        const label = block.querySelector<HTMLElement>('.js-question-content')?.innerText.trim();
+        if (!label) throw new Error('unlabelled_moaform_question');
+        if (
+          options.some(
+            (e) => !e.querySelector<HTMLElement>('.wf-style-mutiplechoice-text')?.innerText.trim(),
+          )
+        )
+          throw new Error('unlabelled_moaform_option');
+        groups.push({
+          label,
+          description: label,
+          kind: 'radio',
+          required: !!block.querySelector('.wf-icon-required'),
+          multiple: false,
+          options: options.map((e) => ({
+            label:
+              e.querySelector<HTMLElement>('.wf-style-mutiplechoice-text')?.innerText.trim() || '',
+            value: String(choices.indexOf(e)),
+          })),
+          indices: options.map((e) => choices.indexOf(e)),
+          form: forms.indexOf(block.closest('form')!),
+          custom: 'moa-radio',
+        });
+      }
+      const notice = document.body.innerText
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => /개인정보|수집.{0,20}이용|보관|폐기|동의/.test(s))
+        .join('\n')
+        .slice(0, 3000);
+      if (
+        /수집/.test(notice) &&
+        /동의/.test(notice) &&
+        !groups.some((g) => /동의|consent/i.test(g.label))
+      ) {
+        groups.push({
+          label: '개인정보 수집·이용 안내 동의',
+          description: notice,
+          kind: 'radio',
+          required: true,
+          multiple: false,
+          options: [
+            { label: '안내에 동의하고 진행', value: 'accept' },
+            { label: '동의하지 않음', value: 'decline' },
+          ],
+          indices: [],
+          form: groups[0]?.form ?? -1,
+          custom: 'notice',
+        });
+      }
     }
     const buttons = [
       ...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
@@ -151,7 +242,11 @@ export async function inspectForm(page: Page) {
       options: options.map((o) => o.label),
     });
     const id = `q${i + 1}-${signature.slice(0, 12)}`;
-    bindings.set(id, { indices: g.indices, optionValues: g.options.map((o) => o.value) });
+    bindings.set(id, {
+      indices: g.indices,
+      optionValues: g.options.map((o) => o.value),
+      custom: g.custom,
+    });
     return {
       id,
       signature,
@@ -195,6 +290,16 @@ export async function applyAnswers(
   onField: () => void,
   signal: AbortSignal,
 ) {
+  const initial = await inspectForm(page);
+  if (initial.view.fingerprint !== expected.fingerprint)
+    throw new ServiceError('form_structure_changed');
+  for (const q of expected.questions) {
+    if (
+      initial.bindings.get(q.id)?.custom === 'notice' &&
+      answers.get(q.id)?.[0] !== '안내에 동의하고 진행'
+    )
+      throw new ServiceError('privacy_notice_not_accepted');
+  }
   for (const question of expected.questions) {
     const answer = answers.get(question.id);
     if (!answer) continue;
@@ -202,6 +307,30 @@ export async function applyAnswers(
     if (fresh.view.fingerprint !== expected.fingerprint)
       throw new ServiceError('form_structure_changed');
     const binding = fresh.bindings.get(question.id)!;
+    if (binding.custom === 'notice') continue;
+    if (binding.custom === 'moa-radio') {
+      signal.throwIfAborted();
+      const selected = question.options.findIndex((o) => o.id === answer[0]);
+      if (answer.length !== 1 || selected < 0) throw new ServiceError('invalid_form_answer');
+      const options = page.locator('.js-question .select-one-and-many');
+      const target = options.nth(binding.indices[selected]!);
+      if (
+        !(await target.evaluate(
+          (e) => e.classList.contains('clicked') && !!e.querySelector('.fi-radio-btn-yes-dot'),
+        ))
+      )
+        await target.click({ timeout: 3000 });
+      for (let i = 0; i < binding.indices.length; i++) {
+        const checked = await options
+          .nth(binding.indices[i]!)
+          .evaluate(
+            (e) => e.classList.contains('clicked') && !!e.querySelector('.fi-radio-btn-yes-dot'),
+          );
+        if (checked !== (i === selected)) throw new ServiceError('field_verification_failed');
+      }
+      onField();
+      continue;
+    }
     const controls = page.locator('input,textarea,select');
     for (let i = 0; i < binding.indices.length; i++) {
       signal.throwIfAborted();
@@ -255,15 +384,49 @@ export async function applyAnswers(
 }
 export async function formValuesHash(page: Page) {
   return hash(
-    await page.locator('input,textarea,select').evaluateAll((els) =>
-      els
-        .filter((el) => !['hidden', 'password'].includes((el as HTMLInputElement).type))
-        .map((el) => ({
-          value: (el as HTMLInputElement).value,
-          checked: (el as HTMLInputElement).checked,
-        })),
-    ),
+    await page
+      .locator('input,textarea,select,.js-question .select-one-and-many')
+      .evaluateAll((els) =>
+        els
+          .filter((el) => !['hidden', 'password'].includes((el as HTMLInputElement).type))
+          .map((el) => ({
+            value: (el as HTMLInputElement).value,
+            checked: (el as HTMLInputElement).checked,
+            selected: el.matches('.select-one-and-many')
+              ? el.classList.contains('clicked')
+              : undefined,
+          })),
+      ),
   );
+}
+export async function moaformSnapshot(page: Page) {
+  const { view, bindings } = await inspectForm(page);
+  const fields = [];
+  for (const q of view.questions) {
+    const b = bindings.get(q.id)!;
+    if (b.custom === 'notice') continue;
+    if (b.custom === 'moa-radio') {
+      for (let i = 0; i < b.indices.length; i++)
+        fields.push({
+          label: q.label,
+          type: 'radio',
+          group: q.id,
+          optionLabel: q.options[i]!.label,
+          value: q.options[i]!.label,
+          checked: await page
+            .locator('.js-question .select-one-and-many')
+            .nth(b.indices[i]!)
+            .evaluate((e) => e.classList.contains('clicked')),
+        });
+    } else
+      fields.push({
+        label: q.label,
+        type: q.kind,
+        group: q.id,
+        value: await page.locator('input,textarea,select').nth(b.indices[0]!).inputValue(),
+      });
+  }
+  return [{ action: page.url(), fields }];
 }
 export async function advanceForm(
   page: Page,

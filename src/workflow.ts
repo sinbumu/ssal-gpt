@@ -23,7 +23,8 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
         !store.submission(e.id) &&
         url.protocol === 'https:' &&
         ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
-          (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname))) &&
+          (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
+          (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname))) &&
         deadlineState(e) === 'available' &&
         !e.blockers.length &&
         e.effortMinutes <= 8 &&

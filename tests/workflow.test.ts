@@ -78,7 +78,7 @@ test('opted-in discovery chooses one observed eligible form and claims it atomic
       'x.png',
     );
     assert.equal(prepareDiscoveredEntry(store, noForm), undefined);
-    const moaUrl = 'https://moaform.com/q/fixture';
+    const moaUrl = 'https://answer.moaform.com/answers/fixture';
     store.record(
       { ...candidate, title: '모아폼 공개 퀴즈', entryUrl: moaUrl },
       'https://example.org/official',

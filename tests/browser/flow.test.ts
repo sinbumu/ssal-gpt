@@ -825,7 +825,7 @@ test('discovery advances an empty client-side introduction but blocks response p
     await app.browser.navigate(j.startUrl);
     app.browser.setReadOnlyMode(true);
     await app.browser.page!.setContent(
-      '<p>1 / 2 페이지</p><button type="button" onclick="document.body.innerHTML=\'<p>2 / 2 페이지</p><label>질문<input></label>\'">다음</button>',
+      '<p>설문 소개</p><button type="button" onclick="document.body.innerHTML=\'<p>2 / 2 페이지</p><label>질문<input></label>\'">다음</button>',
     );
     let o = await app.browser.observe();
     const step: Step = {

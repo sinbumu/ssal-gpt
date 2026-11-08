@@ -40,6 +40,7 @@ export type Observation = {
   image: Buffer;
   capturedAt: number;
   revision: number;
+  hasResponseFields?: boolean;
 };
 export function privateAddress(address: string) {
   const a = address.toLowerCase().replace(/^\[|\]$/g, '');
@@ -103,6 +104,9 @@ export class Browser {
   private evidence: string;
   private manual = true;
   private attached = new WeakSet<Page>();
+  private readOnlyPages = new WeakSet<Page>();
+  private readOnlyMode = false;
+  private readOnlyBlocks = 0;
   constructor(
     private dir: string,
     private demoOrigin: string,
@@ -133,6 +137,13 @@ export class Browser {
   }
   setManual(manual: boolean) {
     this.manual = manual;
+  }
+  setReadOnlyMode(readOnly: boolean) {
+    this.readOnlyMode = readOnly;
+    if (this.page) {
+      if (readOnly) this.readOnlyPages.add(this.page);
+      else this.readOnlyPages.delete(this.page);
+    }
   }
   info() {
     return {
@@ -232,6 +243,7 @@ export class Browser {
     const owner = this.ownerJobId;
     const tab = await this.context!.newPage();
     this.attach(tab);
+    this.readOnlyPages.add(tab);
     try {
       return await read();
     } finally {
@@ -263,6 +275,13 @@ export class Browser {
       const url = route.request().url();
       if (/^(data:|blob:)/.test(url)) return route.continue();
       try {
+        if (
+          this.readOnlyPages.has(route.request().frame().page()) &&
+          !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())
+        ) {
+          this.readOnlyBlocks++;
+          return await route.abort('blockedbyclient');
+        }
         await validateUrl(url, this.demoOrigin);
         await route.continue();
       } catch {
@@ -319,6 +338,7 @@ export class Browser {
   }
   private attach(page: Page) {
     this.page = page;
+    if (this.readOnlyMode) this.readOnlyPages.add(page);
     this.latest = undefined;
     if (this.attached.has(page)) return;
     this.attached.add(page);
@@ -513,6 +533,21 @@ export class Browser {
     const screenshot = `${id}.png`;
     await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
     const viewport = page.viewportSize() || { width: 1280, height: 840 };
+    const hasResponseFields = await page
+      .locator('input,textarea,select,[role=checkbox],[role=radio],[contenteditable=true]')
+      .evaluateAll((fields) =>
+        fields.some((el) => {
+          if (['hidden', 'submit', 'button', 'reset'].includes((el as HTMLInputElement).type))
+            return false;
+          const style = getComputedStyle(el);
+          return (
+            (!!el.getClientRects().length &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden') ||
+            [...((el as HTMLInputElement).labels || [])].some((l) => !!l.getClientRects().length)
+          );
+        }),
+      );
     const fingerprint = createHash('sha256')
       .update(JSON.stringify({ url, text, elements }))
       .digest('hex');
@@ -524,6 +559,7 @@ export class Browser {
       elements,
       ...viewport,
       revision,
+      hasResponseFields,
       fingerprint,
       screenshot,
       image,
@@ -618,6 +654,7 @@ export class Browser {
   async act(step: Step) {
     const o = await this.assertFresh(step.observationId, step.action);
     const page = this.page!;
+    const blockedBefore = this.readOnlyBlocks;
     const target = step.ref ? this.handles.get(step.ref) : undefined;
     if (step.ref && !target) throw new ServiceError('unknown_element');
     this.invalidate();
@@ -673,6 +710,8 @@ export class Browser {
     } else if (step.action === 'wait') await page.waitForTimeout(750);
     else throw new ServiceError('not_a_browser_action');
     await page.waitForTimeout(250);
+    if (this.readOnlyPages.has(page) && this.readOnlyBlocks > blockedBefore)
+      throw new ServiceError('read_only_request_blocked');
   }
   async close() {
     await this.context?.close();

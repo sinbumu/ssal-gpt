@@ -81,6 +81,7 @@ export type AutonomyState = {
   evidence?: SourceEvidence[];
   entryChannel?: string;
   researched?: string[];
+  introAdvances?: number;
   inbox?: {
     id: string;
     fingerprint: string;

@@ -314,7 +314,7 @@ test('discovery automatically starts exactly one observed form and waits at the 
       if (r.request().method() === 'POST') posts++;
       return r.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: '<h1>공식 새 이벤트</h1><form><label>이름<input required name="name"></label><button type="submit">제출</button></form>',
+        body: `<h1>공식 새 이벤트</h1><p>1 / 2 페이지</p><button type="button">다음</button><script>document.querySelector('button').onclick=()=>{document.body.innerHTML='<p>2 / 2 페이지</p><form><label>이름<input required name="name"></label><button type="submit">제출</button></form>'}</script>`,
       });
     });
     app.runner.model.decide = async (_p, _i, ctx: any) => {
@@ -367,6 +367,7 @@ test('discovery automatically starts exactly one observed form and waits at the 
     assert.ok(childId);
     assert.equal(app.store.job(childId)!.autonomy!.inbox!.final, true);
     assert.equal(app.store.job(childId)!.status, 'needs_user');
+    assert.equal(app.store.job(childId)!.autonomy!.introAdvances, 1);
     assert.equal(posts, 0);
     assert.equal(app.store.jobs().filter((j) => j.parentId === parent.id).length, 1);
   } finally {

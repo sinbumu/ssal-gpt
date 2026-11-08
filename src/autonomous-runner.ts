@@ -94,6 +94,35 @@ export async function runAutonomous(
           }
         }
         store.saveJob(job);
+        const introProgress = o.text.match(/(\d+)\s*\/\s*(\d+)\s*(?:페이지|page)/i);
+        const introNext = view.buttons.find((b) =>
+          /^(다음(?:\s*(?:문항|페이지))?|next|continue)$/i.test(b.label),
+        );
+        if (
+          !job.uncertain &&
+          !view.questions.length &&
+          o.hasResponseFields === false &&
+          introProgress &&
+          Number(introProgress[1]) < Number(introProgress[2]) &&
+          introNext
+        ) {
+          if ((state.introAdvances || 0) >= 3) throw new ServiceError('introduction_not_advanced');
+          state.introAdvances = (state.introAdvances || 0) + 1;
+          job.steps++;
+          browser.setReadOnlyMode(true);
+          try {
+            await advanceForm(browser.page!, view, introNext.id, signal);
+          } finally {
+            browser.setReadOnlyMode(false);
+          }
+          job.history.push({
+            action: 'read_intro',
+            reason: '답변 없는 소개 화면을 데이터 전송 없이 넘겼습니다.',
+            url: o.url,
+          });
+          record('소개를 읽고 첫 질문으로 이동합니다.');
+          continue;
+        }
         if (state.finalApproval && state.plan) {
           const current = hash({
             structure: view.fingerprint,

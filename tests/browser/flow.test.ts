@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createApp } from '../../src/server.js';
-import { Runner } from '../../src/runner.js';
+import { Runner, actionPolicy } from '../../src/runner.js';
 import type { Model, Step } from '../../src/model.js';
 import type { Job } from '../../src/store.js';
 import type { Observation } from '../../src/browser.js';
@@ -810,6 +810,62 @@ test('discovery skips an unsupported source address without weakening URL checks
     assert.equal(app.store.job(j.id)!.status, 'completed');
     assert.equal(calls, 2);
     assert.equal(app.browser.page!.url(), j.startUrl);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('discovery advances an empty client-side introduction but blocks response pages and every POST', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-intro-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.kind = 'discover';
+    await app.browser.navigate(j.startUrl);
+    app.browser.setReadOnlyMode(true);
+    await app.browser.page!.setContent(
+      '<p>1 / 2 페이지</p><button type="button" onclick="document.body.innerHTML=\'<p>2 / 2 페이지</p><label>질문<input></label>\'">다음</button>',
+    );
+    let o = await app.browser.observe();
+    const step: Step = {
+      action: 'click',
+      observationId: o.id,
+      ref: o.elements.find((e) => e.label === '다음')!.ref,
+      reason: '소개 읽기',
+    };
+    assert.equal(actionPolicy(j, step, o), 'allow');
+    await app.browser.act(step);
+    assert.ok((await app.browser.observe()).text.includes('2 / 2 페이지'));
+    await app.browser.page!.setContent(
+      '<p>1 / 2 페이지</p><button>다음</button><div style="height:2000px"></div><label>본문 아래 답변<input></label>',
+    );
+    o = await app.browser.observe();
+    assert.equal(o.hasResponseFields, true);
+    assert.equal(
+      actionPolicy(
+        j,
+        { ...step, observationId: o.id, ref: o.elements.find((e) => e.label === '다음')!.ref },
+        o,
+      ),
+      'block',
+    );
+    let posts = 0;
+    app.server.on('request', (r) => {
+      if (r.method === 'POST') posts++;
+    });
+    await app.browser.page!.setContent(
+      `<form method="post" action="${app.origin}/demo/submit?run=read-only"><p>1 / 2 페이지</p><button type="submit">다음</button></form>`,
+    );
+    o = await app.browser.observe();
+    await assert.rejects(() =>
+      app.browser.act({
+        ...step,
+        observationId: o.id,
+        ref: o.elements.find((e) => e.label === '다음')!.ref,
+      }),
+    );
+    assert.equal(posts, 0);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

@@ -280,6 +280,7 @@ export async function createApp(options: {
       manualNavigation = true;
       try {
         browser.setManual(true);
+        browser.setReadOnlyMode(false);
         browser.ownerJobId = undefined;
         await browser.navigate(z.string().url().parse(data.url));
         await browser.page?.bringToFront();

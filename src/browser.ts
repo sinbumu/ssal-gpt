@@ -501,20 +501,67 @@ export class Browser {
     return o;
   }
   async formSnapshot() {
-    return this.page!.locator('form').evaluateAll((forms) =>
-      forms.map((form) => ({
-        action: (form as HTMLFormElement).action,
-        method: (form as HTMLFormElement).method,
-        fields: [...form.querySelectorAll('input,textarea,select')]
-          .filter((el) => !['hidden', 'password'].includes((el as HTMLInputElement).type))
-          .map((el) => ({
-            name: (el as HTMLInputElement).name || el.getAttribute('aria-label'),
-            type: (el as HTMLInputElement).type,
-            value: (el as HTMLInputElement).value,
-            checked: (el as HTMLInputElement).checked,
-          })),
-      })),
-    );
+    return this.page!.evaluate(() => {
+      const helpers = {
+        label(el: Element) {
+          return (
+            el.getAttribute('aria-label') ||
+            (el.getAttribute('aria-labelledby') || '')
+              .split(/\s+/)
+              .map((id) => document.getElementById(id)?.textContent?.trim() || '')
+              .join(' ')
+              .trim() ||
+            [...((el as HTMLInputElement).labels || [])]
+              .map((l) => l.textContent?.trim())
+              .join(' ') ||
+            ''
+          );
+        },
+      };
+      const forms = [...document.forms];
+      const scopes = forms.length ? forms : [document.body];
+      return scopes.map((form) => {
+        const groups = [...form.querySelectorAll('fieldset,[role=group],[role=radiogroup]')];
+        return {
+          action: form instanceof HTMLFormElement ? form.action : location.href,
+          method: form instanceof HTMLFormElement ? form.method : undefined,
+          fields: [
+            ...form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+              'input,textarea,select',
+            ),
+          ]
+            .filter(
+              (el) =>
+                !['hidden', 'password', 'submit', 'button', 'reset', 'file'].includes(el.type),
+            )
+            .map((el, index) => {
+              const group = el.closest('fieldset,[role=group],[role=radiogroup]');
+              const heading = group
+                ?.querySelector('legend,h1,h2,h3,h4,[role=heading]')
+                ?.textContent?.trim();
+              const choice = ['checkbox', 'radio'].includes(el.type);
+              return {
+                name: el.name || el.getAttribute('aria-label'),
+                type: el.type,
+                value: el.value,
+                checked: el instanceof HTMLInputElement ? el.checked : undefined,
+                label:
+                  heading ||
+                  (group ? helpers.label(group) : '') ||
+                  (!choice ? helpers.label(el) : ''),
+                optionLabel: choice ? helpers.label(el) : undefined,
+                displayValue:
+                  el instanceof HTMLSelectElement
+                    ? [...el.selectedOptions].map((o) => o.label)
+                    : undefined,
+                group: choice
+                  ? el.name || (group ? `group-${groups.indexOf(group)}` : `field-${index}`)
+                  : `field-${index}`,
+              };
+            }),
+        };
+      });
+    });
   }
   async act(step: Step) {
     const o = await this.assertFresh(step.observationId, step.action);

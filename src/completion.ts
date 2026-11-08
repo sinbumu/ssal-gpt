@@ -13,7 +13,7 @@ export function completionMessage(quote: string, visibleText: string) {
     )
   )
     return false;
-  return /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|설문(?:조사|응답)?(?:이|가)?\s*완료되었습니다|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
+  return /접수번호|접수.{0,12}완료|응모.{0,12}완료|제출.{0,12}완료|등록.{0,12}완료|설문(?:조사|응답)?(?:이|가)?\s*완료되었습니다|(?:답변|응답)(?:이|가)?\s*제출되었습니다|response.{0,20}recorded|successfully.{0,20}submitted|submission.{0,20}complete/i.test(
     quote,
   );
 }

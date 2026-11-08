@@ -33,6 +33,21 @@ const plan: AnswerPlan = {
   reason: 'test',
 };
 test('completion cannot be fabricated by quoting only the positive fragment of a failure', () => {
+  assert.equal(
+    completionMessage(
+      '답변이 제출되었습니다.',
+      '답변이 제출되었습니다.\n다음 달에도 참여 바랍니다.',
+    ),
+    true,
+  );
+  assert.equal(
+    completionMessage(
+      '답변이 제출되었습니다.',
+      '답변이 제출되었습니다. 처리 오류가 발견되었습니다.',
+    ),
+    false,
+  );
+  assert.equal(completionMessage('답변이 제출되었습니다.', '답변이 제출되지 않았습니다.'), false);
   assert.equal(completionMessage('제출 완료', '제출 완료되지 않았습니다.'), false);
   assert.equal(completionMessage('접수번호', '접수번호 오류가 발생했습니다.'), false);
   assert.equal(completionMessage('submission complete', 'submission complete: failed'), false);

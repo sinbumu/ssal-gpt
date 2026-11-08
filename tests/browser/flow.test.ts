@@ -674,6 +674,7 @@ test('survey completion is recognized after submission, while thanks alone or an
   try {
     for (const [message, completed] of [
       ['설문이 완료되었습니다.', true],
+      ['답변이 제출되었습니다.', true],
       ['참여해 주셔서 감사합니다.', false],
       ['설문이 완료되지 않았습니다.', false],
     ] as const) {

@@ -116,6 +116,25 @@ test('single-choice conflict uses explicit priority policy; exact memory stays o
     undefined,
   );
 });
+test('phone formatting follows the field hint without changing profile or inventing digits', () => {
+  const a = createAutonomy(syntheticSettings, 'https://example.org');
+  a.profile = { ...a.profile, phone: '01000000000' };
+  const question = { ...q('연락처', 'text'), description: '중간에 하이픈을 넣어주세요.' };
+  assert.deepEqual(resolveAnswer(question, undefined, a, [], '').answer, ['010-0000-0000']);
+  assert.equal(a.profile.phone, '01000000000');
+  assert.deepEqual(
+    resolveAnswer(q('연락처', 'text'), undefined, a, [], '하이픈을 넣어주세요').answer,
+    ['01000000000'],
+  );
+  a.profile.phone = '010-0000-0000';
+  assert.deepEqual(
+    resolveAnswer({ ...question, description: '하이픈 없이 숫자만 입력' }, undefined, a, [], '')
+      .answer,
+    ['01000000000'],
+  );
+  a.profile.phone = '+82 10 0000 0000';
+  assert.deepEqual(resolveAnswer(question, undefined, a, [], '').answer, ['+82 10 0000 0000']);
+});
 test('semantic preference reuse requires its own delegation and cannot invert a preference', () => {
   const a = createAutonomy(syntheticSettings, 'https://example.org');
   const question = {

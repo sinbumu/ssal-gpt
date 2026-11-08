@@ -207,6 +207,10 @@ export async function runAutonomous(
           const resolved = resolveAnswer(q, plan, state, memories(store), o.text);
           if (resolved.answer) {
             answers.set(q.id, resolved.answer);
+            if (resolved.source === 'profile' && q.kind === 'text')
+              state.privateAnswers = [
+                ...new Set([...(state.privateAnswers || []), ...resolved.answer]),
+              ];
             state.reused ||= {};
             state.reused[q.signature] = resolved.answer;
             if (resolved.source.includes('memory') || resolved.source === 'user')

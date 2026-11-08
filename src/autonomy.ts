@@ -32,6 +32,7 @@ export type Question = {
   id: string;
   signature: string;
   label: string;
+  description?: string;
   kind: 'text' | 'radio' | 'checkbox' | 'select';
   required: boolean;
   options: { id: string; label: string }[];
@@ -206,7 +207,19 @@ export function resolveAnswer(
     return { answer: validateAnswer(q, state.reused[q.signature]!), source: 'job_memory' };
   const key = personalKey(q);
   if (key) {
-    const value = state.profile[key];
+    let value = state.profile[key];
+    // Formatting is local and never changes the saved identity. Only honor an
+    // explicit instruction beside this field, not arbitrary page-wide text.
+    const hint = `${q.label}\n${q.description || ''}`;
+    if (key === 'phone' && q.kind === 'text') {
+      const digits = value.replace(/[\s-]/g, '');
+      if (/^01\d\d{7,8}$/.test(digits)) {
+        if (/하이픈.{0,12}(?:제외|없이|빼)|숫자만|digits only|without hyphens/i.test(hint))
+          value = digits;
+        else if (/하이픈.{0,12}(?:포함|넣|입력)|with hyphens/i.test(hint))
+          value = digits.replace(/^(01\d)(\d{3,4})(\d{4})$/, '$1-$2-$3');
+      }
+    }
     const answer =
       q.kind === 'text' ? [value] : q.options.filter((o) => o.label === value).map((o) => o.id);
     return { answer: value ? validateAnswer(q, answer) : undefined, source: 'profile' };

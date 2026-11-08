@@ -38,6 +38,7 @@ export async function inspectForm(page: Page) {
     };
     const groups: {
       label: string;
+      description: string;
       kind: 'text' | 'radio' | 'checkbox' | 'select';
       required: boolean;
       multiple: boolean;
@@ -76,6 +77,12 @@ export async function inspectForm(page: Page) {
       const indices = group.map((e) => all.indexOf(e));
       indices.forEach((i) => seen.add(i));
       const fieldset = el.closest('fieldset,[role=group],[role=radiogroup]');
+      const describedBy = (el.getAttribute('aria-describedby') || '')
+        .split(/\s+/)
+        .map((id) => document.getElementById(id))
+        .filter((node): node is HTMLElement => !!node && helpers.visible(node))
+        .map((node) => node.innerText)
+        .join('\n');
       const heading = fieldset
         ?.querySelector('legend,h1,h2,h3,h4,[role=heading]')
         ?.textContent?.trim();
@@ -95,9 +102,15 @@ export async function inspectForm(page: Page) {
             : [];
       groups.push({
         label: questionLabel,
+        description: [describedBy, fieldset instanceof HTMLElement ? fieldset.innerText : '']
+          .filter(Boolean)
+          .join('\n')
+          .slice(0, 3000),
         kind,
         required:
-          group.some((e) => e.required) || fieldset?.getAttribute('aria-required') === 'true',
+          group.some((e) => e.required) ||
+          fieldset?.getAttribute('aria-required') === 'true' ||
+          /답변\s*필수/.test(questionLabel),
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
         options,
         indices,
@@ -133,6 +146,7 @@ export async function inspectForm(page: Page) {
       throw new ServiceError('ambiguous_form_options');
     const signature = hash({
       label: g.label.replace(/\s+/g, ' ').trim(),
+      description: g.description.replace(/\s+/g, ' ').trim(),
       kind: g.kind,
       options: options.map((o) => o.label),
     });
@@ -142,6 +156,7 @@ export async function inspectForm(page: Page) {
       id,
       signature,
       label: g.label,
+      description: g.description,
       kind: g.kind,
       required: g.required,
       multiple: g.multiple,

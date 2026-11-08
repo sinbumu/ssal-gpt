@@ -116,6 +116,46 @@ test('batch plans traverse changed layouts, conditional fields and receipts with
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test('rendered required hints format profile phones locally and mask their echoed value', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-phone-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = makeJob(app.origin);
+    job.autonomy!.profile = { ...job.autonomy!.profile, phone: '01000000000' };
+    job.autonomy!.policy = { ...job.autonomy!.policy, finalSubmit: 'review' };
+    await app.browser.navigate(job.startUrl);
+    await app.browser.page!.setContent(`<form><p id="phone-hint">중간에 하이픈을 넣어주세요.</p>
+      <fieldset><h3>답변 필수 연락처</h3><input name="phone" aria-describedby="phone-hint"><output></output>
+      </fieldset><button type="submit">제출</button></form>
+      <script>document.querySelector('input').oninput=e=>document.querySelector('output').textContent=e.target.value</script>`);
+    const before = await inspectForm(app.browser.page!);
+    assert.equal(before.view.questions[0]!.required, true);
+    assert.ok(before.view.questions[0]!.description!.includes('하이픈'));
+    // Echoed values are outside the fieldset hint, as on many result previews.
+    await app.browser.page!.evaluate(() => document.body.append(document.querySelector('output')!));
+    job.currentUrl = job.startUrl;
+    app.browser.ownerJobId = job.id;
+    app.store.saveJob(job);
+    const runner = new Runner(app.store, app.browser, syntheticModel(), app.origin);
+    runner.start(job.id);
+    await runner.finished();
+    const result = app.store.job(job.id)!;
+    assert.equal(result.autonomy!.inbox!.final, true, result.note);
+    assert.equal(await app.browser.page!.locator('input').inputValue(), '010-0000-0000');
+    assert.equal(result.autonomy!.profile.phone, '01000000000');
+    assert.ok(result.autonomy!.privateAnswers!.includes('010-0000-0000'));
+    const o = await app.browser.observe(true, result.autonomy!.privateAnswers);
+    assert.ok(!o.text.includes('010-0000-0000'));
+    const previous = (await inspectForm(app.browser.page!)).view.fingerprint;
+    await app.browser
+      .page!.locator('#phone-hint')
+      .evaluate((el) => (el.textContent = '숫자만 입력'));
+    assert.notEqual((await inspectForm(app.browser.page!)).view.fingerprint, previous);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('dashboard groups unknown facts, accepts one answer batch, preserves focus, then resumes without model re-prompt', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-inbox-'));
   const app = await createApp({ dir, port: 0, headless: true });

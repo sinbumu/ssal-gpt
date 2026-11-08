@@ -11,7 +11,9 @@
 - ‘현재 로그인 화면 확인’은 보이는 로그인/로그아웃 표시 또는 브라우저 거부 문구만 분류한다. 계정 이름·쿠키 값·페이지 텍스트는 반환하지 않으며, 모호하면 미확인으로 표시한다. 쿠키 존재를 로그인 성공으로 취급하지 않는다.
 - Google의 브라우저 보안 거부에는 일반 브라우저에서 직접 여는 경로를 제공한다. 이 경로는 수동 참여용이며 자동화 창으로 로그인 쿠키를 가져오지 않는다. Chrome 채널 선택도 Google 로그인 성공을 보장하지 않는다.
 
-실제 Chromium 재실행에서 합성 영구 쿠키·localStorage 유지, 세션 쿠키의 정상 만료, 수동 확인창 보존, 닫힌 탭 복구를 검사했다. 설치된 Chrome의 별도 프로필과 Chromium으로 돌아왔을 때 기존 데이터 유지도 로컬에서 통과했다. 실제 네이버 계정의 종료 후 로그인 유지와 Google의 로그인 수락은 사용자 재검증이 필요하다. 브라우저를 위장하거나 보안 설정을 끄는 방식은 적용하지 않았다.
+실제 Chromium 재실행에서 합성 영구 쿠키·localStorage 유지, 세션 쿠키의 정상 만료, 수동 확인창 보존, 닫힌 탭 복구를 검사했다. 설치된 Chrome의 별도 프로필과 Chromium으로 돌아왔을 때 기존 데이터 유지도 로컬에서 통과했다. 브라우저를 위장하거나 보안 설정을 끄는 방식은 적용하지 않았다.
+
+사용자 재검증 결과 (2026-11-08, 사용자 보고): 네이버는 수정 후 전용 브라우저를 정상 종료하고 다시 열어도 로그인 상태가 유지됐다. YouTube는 전용 Chromium과 설치된 Chrome 자동화 경로 모두 같은 보안 안내로 로그인이 거부됐으며, 일반 브라우저 직접 열기 경로에서만 로그인됐다. 따라서 해당 환경의 YouTube 로그인 필요 작업은 현재 수동 참여 경로로 취급한다. 일반 브라우저의 성공을 에이전트 로그인 연동 성공으로 기록하지 않는다. 이 결과는 해당 환경의 사용자 보고이며 모든 계정·기기에서의 동작을 보장하지 않는다.
 
 확인한 공식 근거 (2026-11-08): [네이버 로그인 상태 유지](https://help.naver.com/service/5640/contents/19013?lang=ko), [Google의 지원 브라우저 및 자동화 브라우저 차단 안내](https://support.google.com/accounts/answer/7675428?hl=ko), [Playwright 지속 프로필](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context), [설치된 Chrome 채널](https://playwright.dev/docs/browsers#google-chrome--microsoft-edge).
 

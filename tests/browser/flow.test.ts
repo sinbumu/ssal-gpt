@@ -511,6 +511,42 @@ test('hidden form timers do not invalidate observation but visible field changes
   }
 });
 
+test('animated pages permit reading by scroll but invalidate clicks and navigation changes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-animation-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    await app.browser.navigate(`${app.origin}/demo/event?run=animation`);
+    await app.browser.page!.evaluate(() => {
+      const banner = document.createElement('div');
+      banner.id = 'animated-banner';
+      banner.textContent = 'Decorative animation';
+      document.body.prepend(banner);
+      document.body.style.minHeight = '3000px';
+    });
+    const o = await app.browser.observe();
+    await app.browser.page!.locator('#animated-banner').evaluate((el) => {
+      el.setAttribute('style', 'transform: translateX(1px)');
+    });
+    await assert.rejects(() => app.browser.assertFresh(o.id, 'click'), /stale_observation/);
+    await app.browser.assertFresh(o.id, 'navigate');
+    await app.browser.act({
+      action: 'scroll',
+      observationId: o.id,
+      delta: 650,
+      reason: 'Read more',
+    });
+    await app.browser.page!.waitForTimeout(150);
+    assert.ok(await app.browser.page!.evaluate(() => scrollY > 0));
+    const next = await app.browser.observe();
+    await app.browser.navigate(`${app.origin}/demo/event?run=different`);
+    await assert.rejects(() => app.browser.assertFresh(next.id, 'scroll'), /stale_observation/);
+    await assert.rejects(() => app.browser.assertFresh(next.id, 'navigate'), /stale_observation/);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('explicit manual handoff resumes a live form without GET reloading it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-live-form-'));
   const app = await createApp({ dir, port: 0, headless: true });

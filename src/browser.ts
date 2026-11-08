@@ -480,7 +480,7 @@ export class Browser {
     this.latest = observation;
     return observation;
   }
-  async assertFresh(id: string) {
+  async assertFresh(id: string, action?: Step['action']) {
     const o = this.latest;
     if (
       !o ||
@@ -492,7 +492,12 @@ export class Browser {
     )
       throw new ServiceError('stale_observation');
     const revision = await this.page.evaluate(() => Number((window as any).__ssalRevision || 0));
-    if (revision !== o.revision) throw new ServiceError('stale_observation');
+    // Reading or opening an explicitly validated URL does not use a DOM target.
+    // Decorative animations must not prevent obtaining the next observation.
+    // Clicks/inputs/evidence still require the exact revision. Tab, URL and age
+    // checks apply to every action, including these read-only operations.
+    if (revision !== o.revision && !['scroll', 'wait', 'navigate', 'search'].includes(action || ''))
+      throw new ServiceError('stale_observation');
     return o;
   }
   async formSnapshot() {
@@ -512,7 +517,7 @@ export class Browser {
     );
   }
   async act(step: Step) {
-    const o = await this.assertFresh(step.observationId);
+    const o = await this.assertFresh(step.observationId, step.action);
     const page = this.page!;
     const target = step.ref ? this.handles.get(step.ref) : undefined;
     if (step.ref && !target) throw new ServiceError('unknown_element');

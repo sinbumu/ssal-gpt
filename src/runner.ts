@@ -360,7 +360,14 @@ export class Runner {
         job.note = step.reason;
         this.store.saveJob(job);
         try {
-          await this.browser.assertFresh(step.observationId);
+          // Discovery links are opened as validated URLs, never by executing a
+          // possibly changed DOM target or its click handler (see execute).
+          const readingLink =
+            job.kind === 'discover' && step.action === 'click' && targetElement(o, step)?.href;
+          await this.browser.assertFresh(
+            step.observationId,
+            readingLink ? 'navigate' : step.action,
+          );
         } catch (error) {
           if (error instanceof ServiceError && error.code === 'stale_observation') {
             this.store.note(job.id, '화면이 변경되어 다시 관찰합니다.');

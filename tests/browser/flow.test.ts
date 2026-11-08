@@ -775,3 +775,43 @@ test('embedded article URLs can be read without iframe clicks and a blocked disc
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('discovery skips an unsupported source address without weakening URL checks or requiring user repair', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-read-recovery-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const j = job(app.origin);
+    j.kind = 'discover';
+    await app.browser.navigate(j.startUrl);
+    const blocked = 'https://example.org:8443/unsupported';
+    await app.browser.page!.setContent(`<a href="${blocked}">접근 불가 출처</a>`);
+    j.currentUrl = j.startUrl;
+    app.browser.ownerJobId = j.id;
+    app.store.saveJob(j);
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        calls++;
+        if (calls === 2) assert.deepEqual(ctx.skippedUrls, [blocked]);
+        return {
+          step: {
+            observationId: ctx.observation.id,
+            reason: 'fixture',
+            ...(calls === 1 ? { action: 'navigate', url: blocked } : { action: 'done' }),
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    const runner = new Runner(app.store, app.browser, model, app.origin);
+    runner.start(j.id);
+    await runner.finished();
+    assert.equal(app.store.job(j.id)!.status, 'completed');
+    assert.equal(calls, 2);
+    assert.equal(app.browser.page!.url(), j.startUrl);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

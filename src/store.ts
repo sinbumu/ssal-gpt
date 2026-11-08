@@ -63,6 +63,7 @@ export type Job = {
   };
   sourceEvidence?: SourceEvidence[];
   visitedUrls?: string[];
+  skippedUrls?: string[];
   searchEngine?: 'google' | 'naver';
   receiptObservations?: (SourceEvidence & { intentHash: string })[];
   userContext?: string;

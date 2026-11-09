@@ -49,7 +49,13 @@ import {
 } from './operations.js';
 import { verifyReceipt } from './receipt.js';
 import { journeyTasks, journeyPage, acceptJourney } from './journey-demo.js';
-import { approveTask, buildTasks, PermissionSchema, taskPermission } from './tasks.js';
+import {
+  approveTask,
+  buildTasks,
+  PermissionSchema,
+  taskPermission,
+  instagramBrowser,
+} from './tasks.js';
 import { SelectionSchema, selection, evaluateCandidate } from './selection.js';
 import {
   report,
@@ -247,6 +253,9 @@ export async function createApp(options: {
           tasks: job.tasks?.map((task) => ({
             ...task,
             permitted: taskPermission(store, task, job.autonomy?.synthetic),
+            route: /(^|\.)instagram\.com$/.test(new URL(task.url).hostname)
+              ? 'instagram_browser'
+              : 'registered_permission',
           })),
           sourceEvidence: undefined,
           receiptObservations: undefined,
@@ -290,6 +299,7 @@ export async function createApp(options: {
         operations: operations(store),
         schedules: schedules(store),
         selectionPolicy: selection(store),
+        instagramBrowser: { ...instagramBrowser(store), platformPermission: 'not_verified' },
         taskPermissions: store.settings('taskPermissions', []),
         usage: usage(store),
         busy: runner.isBusy(),
@@ -331,6 +341,12 @@ export async function createApp(options: {
     }
     if (method === 'POST' && url.pathname === '/api/activity') {
       recordActivity(store, ActivitySchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/instagram-browser') {
+      const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(data);
+      if (runner.isBusy()) throw new ServiceError('pause_before_changing_delegation');
+      store.setSettings('instagramBrowser', { enabled, revision: randomUUID() });
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/task-permission') {

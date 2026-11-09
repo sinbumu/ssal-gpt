@@ -51,8 +51,8 @@
               준비까지 이어가기</label
             >
             <p class="hint">
-              저장한 프로필·위임을 적용합니다. 네이버 폼·모아폼 중 구매·방문·SNS 과제가 없는 짧은
-              폼만 선택하며, 위임 범위 밖의 동의와 설정된 최종 확인은 확인함에서 받습니다.
+              저장한 프로필·위임을 적용합니다. 지원 폼 또는 지원하는 SNS 과제 중 구매·방문이 없는
+              짧은 폼만 선택하며, 위임 범위 밖의 동의와 설정된 최종 확인은 확인함에서 받습니다.
             </p>
             <label for="goal">어떤 이벤트를 찾아볼까요?</label
             ><textarea id="goal" rows="2">
@@ -414,6 +414,18 @@
                 </p>
               </form>
               <p id="browser-status" class="hint"></p>
+              <form id="instagram-browser-form">
+                <label
+                  ><input id="instagram-browser-enabled" type="checkbox" /> 인스타 브라우저 대행
+                  사용</label
+                >
+                <p class="hint">
+                  연결된 계정으로 선택한 게시물의 댓글·좋아요·팔로우를 처리합니다. 작업마다 대상과
+                  게시 문구를 한 번에 확인합니다. 서비스 공식 승인과는 별개이며, 계정 경고·추가
+                  인증이 나타나면 멈춥니다.
+                </p>
+                <button type="submit">인스타 대행 설정 저장</button>
+              </form>
               <form id="browser-form">
                 <label for="login-url">열 주소</label>
                 <div class="inline">
@@ -686,8 +698,9 @@
             <summary>서비스 운영자의 자동 실행 허용 근거 등록</summary>
             <p class="hint">
               응모 대행 승인과 별개입니다. 해당 서비스가 공개한 허용 또는 운영자로부터 받은 권한이
-              있는 정확한 대상만 등록합니다. Instagram·YouTube 소비자 계정 쓰기는 이 버전에서 자동
-              실행 경로가 검증되지 않아 등록해도 직접 수행으로 남습니다.
+              있는 정확한 대상만 등록합니다. 인스타 브라우저 대행은 위의 사용자 위임 설정과 작업별
+              승인을 사용하며 공식 허용으로 표시하지 않습니다. YouTube 자동 쓰기는 지원하지
+              않습니다.
             </p>
             <div id="task-permission-list"></div>
             <form id="task-permission-form">

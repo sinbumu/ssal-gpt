@@ -16,6 +16,9 @@ import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
 import { isMoaform, moaformSnapshot } from './forms.js';
+import { inspectInstagram, type InstagramTarget, type InstagramView } from './instagram.js';
+const observableControls =
+  'a[href],button,input,textarea,select,[contenteditable=true],[role=textbox],[role=button],[role=checkbox],summary';
 
 export type VisibleElement = {
   ref: string;
@@ -50,6 +53,7 @@ export type Observation = {
   capturedAt: number;
   revision: number;
   hasResponseFields?: boolean;
+  instagram?: InstagramView;
 };
 export function privateAddress(address: string) {
   const a = address.toLowerCase().replace(/^\[|\]$/g, '');
@@ -430,7 +434,11 @@ export class Browser {
       );
     }
   }
-  async observe(fullPage = false, secrets: string[] = []): Promise<Observation> {
+  async observe(
+    fullPage = false,
+    secrets: string[] = [],
+    instagram?: InstagramTarget,
+  ): Promise<Observation> {
     await this.open();
     const page = this.page!;
     if (page.isClosed()) throw new ServiceError('browser_closed');
@@ -457,11 +465,13 @@ export class Browser {
     for (const handle of this.handles.values()) await handle.dispose().catch(() => {});
     this.handles.clear();
     const id = randomUUID();
-    const handles = await page
-      .locator('a[href],button,input,textarea,select,[role="button"],[role="checkbox"],summary')
-      .elementHandles();
+    const handles = await page.locator(observableControls).elementHandles();
     const elements: VisibleElement[] = [];
-    for (const handle of handles.slice(0, 300)) {
+    const social = instagram
+      ? await inspectInstagram(page, instagram, observableControls)
+      : undefined;
+    const socialRefs: InstagramView['controls'] = {};
+    for (const [index, handle] of handles.slice(0, 500).entries()) {
       const item = await handle
         .evaluate((el: HTMLElement) => {
           const box = el.getBoundingClientRect();
@@ -480,6 +490,7 @@ export class Browser {
           const input = el as HTMLInputElement;
           const label =
             el.getAttribute('aria-label') ||
+            el.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
             (input.labels ? [...input.labels].map((l) => l.innerText).join(' ') : '') ||
             el.innerText ||
             el.getAttribute('placeholder') ||
@@ -539,6 +550,10 @@ export class Browser {
       const ref = `e${elements.length + 1}`;
       this.handles.set(ref, handle as ElementHandle<HTMLElement>);
       elements.push({ ref, ...item });
+      if (social)
+        for (const [kind, targetIndex] of Object.entries(social.controls)) {
+          if (index === targetIndex) socialRefs[kind as keyof typeof socialRefs] = ref;
+        }
     }
     const frames = await page.locator('iframe[src]').evaluateAll((frames) =>
       frames.flatMap((frame) => {
@@ -611,7 +626,9 @@ export class Browser {
       animations: 'disabled',
       fullPage,
       mask: [
-        page.locator('input:not([type=radio]):not([type=checkbox]),textarea,select,[data-private]'),
+        page.locator(
+          'input:not([type=radio]):not([type=checkbox]),textarea,select,[contenteditable=true],[role=textbox],[data-private]',
+        ),
         ...secrets
           .filter((v) => v.length >= 2)
           .map((value) => page.getByText(value, { exact: false })),
@@ -652,6 +669,7 @@ export class Browser {
       ...viewport,
       revision,
       hasResponseFields,
+      instagram: social ? { ...social, controls: socialRefs } : undefined,
       fingerprint,
       screenshot,
       image,

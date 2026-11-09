@@ -19,6 +19,7 @@ let state;
 let initial = true;
 let rendered = '';
 let renderedBrowserEngine;
+let renderedInstagramRevision;
 function toast(message, error = false) {
   const el = $('toast');
   el.textContent = message;
@@ -890,6 +891,10 @@ $('journey-demo').onclick = guard(async () => {
 
 let selectionLoaded = false;
 function renderSelection() {
+  if (state.instagramBrowser && renderedInstagramRevision !== state.instagramBrowser.revision) {
+    $('instagram-browser-enabled').checked = state.instagramBrowser.enabled;
+    renderedInstagramRevision = state.instagramBrowser.revision;
+  }
   $('task-permission-list').innerHTML = (state.taskPermissions || [])
     .map(
       (p) =>
@@ -937,7 +942,7 @@ function renderTasks(job) {
     manual_reported: '사용자 완료 보고',
   };
   const pending = job.tasks.filter((t) => ['review', 'attempted'].includes(t.state));
-  return `<div class="inbox"><h4>참여 과제</h4><ol>${job.tasks.map((t) => `<li>${esc(labels[t.kind])} · ${esc(status[t.state])} — ${esc(t.instruction)}${t.proof ? `<small> · ${esc(t.proof.quote)}</small>` : ''}</li>`).join('')}</ol>${!job.archivedAt && pending.length ? `<form data-task-review="${esc(job.id)}">${pending.map((t) => `<fieldset><legend>${esc(labels[t.kind])} · ${esc(t.instruction)}</legend>${safeLink(t.url, '과제 대상 열기')}<blockquote>${esc(t.quote)}</blockquote>${t.permitted && !t.attempt ? `<p class="hint">자동 실행 허용 근거가 등록된 경로입니다. 아래 내용은 이 작업·대상에만 적용합니다.</p><input type="hidden" name="mode-${esc(t.id)}" value="approve">${t.kind === 'comment' ? `<label>게시할 정확한 내용<textarea name="text-${esc(t.id)}" required maxlength="2000">${esc(t.draft || '')}</textarea></label>` : ''}` : `<p class="hint">자동 실행 ${t.attempt ? '결과가 불명확합니다' : '허용 경로가 확인되지 않았습니다'}. 직접 확인한 결과만 기록하세요.</p><input type="hidden" name="mode-${esc(t.id)}" value="manual"><label>직접 수행·확인한 결과<textarea name="evidence-${esc(t.id)}" required maxlength="2000"></textarea></label>`}</fieldset>`).join('')}<button type="submit" ${state.busy ? 'disabled' : ''}>과제 확인을 한 번에 저장하고 계속</button></form>` : ''}</div>`;
+  return `<div class="inbox"><h4>참여 과제</h4><ol>${job.tasks.map((t) => `<li>${esc(labels[t.kind])} · ${esc(status[t.state])} — ${esc(t.instruction)}${t.proof ? `<small> · ${esc(t.proof.quote)}</small>` : ''}</li>`).join('')}</ol>${!job.archivedAt && pending.length ? `<form data-task-review="${esc(job.id)}">${pending.map((t) => `<fieldset><legend>${esc(labels[t.kind])} · ${esc(t.instruction)}</legend>${safeLink(t.url, '과제 대상 열기')}<blockquote>${esc(t.quote)}</blockquote>${t.permitted && !t.attempt ? `<p class="hint">${t.route === 'instagram_browser' ? '인스타 브라우저 대행입니다. 이 작업에서 확인한 계정·대상·문구만 실행하며 플랫폼 공식 승인으로 표시하지 않습니다.' : '자동 실행 허용 근거가 등록된 경로입니다. 아래 내용은 이 작업·대상에만 적용합니다.'}</p>${t.preview ? `<p><strong>실행 계정</strong> @${esc(t.preview.actor)} · <strong>대상 계정</strong> @${esc(t.preview.subject)}</p>` : t.route === 'instagram_browser' ? '<p class="hint">현재 계정·대상 확인이 필요합니다. 아래 ‘새 화면에서 재개’를 눌러 다시 확인하세요.</p>' : ''}<input type="hidden" name="mode-${esc(t.id)}" value="approve">${t.kind === 'comment' ? `<label>게시할 정확한 내용<textarea name="text-${esc(t.id)}" required maxlength="2000">${esc(t.draft || '')}</textarea></label>` : ''}` : `<p class="hint">자동 실행 ${t.attempt ? '결과가 불명확합니다' : '허용 경로가 확인되지 않았습니다'}. 직접 확인한 결과만 기록하세요.</p><input type="hidden" name="mode-${esc(t.id)}" value="manual"><label>직접 수행·확인한 결과<textarea name="evidence-${esc(t.id)}" required maxlength="2000"></textarea></label>`}</fieldset>`).join('')}<button type="submit" ${state.busy || pending.some((t) => t.route === 'instagram_browser' && t.permitted && !t.attempt && !t.preview) ? 'disabled' : ''}>과제 확인을 한 번에 저장하고 계속</button></form>` : ''}</div>`;
 }
 document.addEventListener('submit', (event) => {
   const form = event.target;
@@ -982,6 +987,10 @@ $('selection-policy-form').onsubmit = guard(async () => {
     switchOnBurden: f.switchOnBurden.checked,
   });
   toast('기회 선택 기준을 저장했습니다.');
+});
+$('instagram-browser-form').onsubmit = guard(async () => {
+  await api('/api/instagram-browser', { enabled: $('instagram-browser-enabled').checked });
+  toast('인스타 브라우저 대행 설정을 저장했습니다. 게시 내용과 대상은 작업별로 확인합니다.');
 });
 $('task-permission-form').onsubmit = guard(async () => {
   const data = new FormData($('task-permission-form'));

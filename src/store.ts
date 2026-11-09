@@ -103,6 +103,11 @@ export type EventRecord = Candidate & {
 export function canonicalUrl(raw: string) {
   const url = new URL(raw);
   url.hash = '';
+  if (['instagram.com', 'www.instagram.com'].includes(url.hostname)) {
+    url.hostname = 'www.instagram.com';
+    url.pathname = url.pathname.replace(/^\/[\w.]+\/(p|reel)\//, '/$1/');
+    if (/^\/(p|reel)\/[\w-]+$/.test(url.pathname)) url.pathname += '/';
+  }
   for (const key of [...url.searchParams.keys()])
     if (/^utm_|^(fbclid|igsh|gclid|ref)$/i.test(key)) url.searchParams.delete(key);
   url.searchParams.sort();
@@ -356,11 +361,29 @@ export class Store {
       job.status = 'completed';
       job.uncertain = false;
       job.note = '완료 문구와 접수 결과를 확인했습니다.';
-      if (job.taskFormStarted && job.tasks?.at(-1)?.kind === 'form')
-        job.tasks.at(-1)!.state = 'verified';
+      const formTask = job.taskFormStarted
+        ? job.tasks?.find((t) => t.kind === 'form' && t.state !== 'verified')
+        : undefined;
+      if (formTask) {
+        formTask.state = 'verified';
+        formTask.proof = {
+          quote: String(proof.quote || '폼 접수 확인'),
+          url: String(proof.url || job.currentUrl),
+          screenshot: typeof proof.screenshot === 'string' ? proof.screenshot : undefined,
+          at: Date.now(),
+          actor: 'browser',
+        };
+        delete job.intent;
+        delete job.receiptObservations;
+      }
+      const remaining = job.tasks?.some((t) => !['verified', 'manual_reported'].includes(t.state));
+      if (remaining) {
+        job.status = 'running';
+        job.note = '폼 접수를 확인했습니다. 남은 참여 과제를 계속합니다.';
+      }
       delete job.approval;
       if (job.autonomy) {
-        job.autonomy.metrics.finishedAt = Date.now();
+        if (!remaining) job.autonomy.metrics.finishedAt = Date.now();
         delete job.autonomy.plan;
         delete job.autonomy.finalApproval;
         delete job.autonomy.inbox;
@@ -370,8 +393,19 @@ export class Store {
       if (job.eventId)
         this.markSubmission(
           job.eventId,
-          'completed',
-          JSON.stringify({ completedAt: new Date().toISOString(), ...proof }),
+          remaining ? 'in_progress' : 'completed',
+          remaining
+            ? undefined
+            : JSON.stringify({
+                completedAt: new Date().toISOString(),
+                ...proof,
+                tasks: job.tasks?.map((t) => ({
+                  id: t.id,
+                  kind: t.kind,
+                  state: t.state,
+                  proof: t.proof,
+                })),
+              }),
         );
       this.note(job.id, job.note);
       this.db.exec('COMMIT');

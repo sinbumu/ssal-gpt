@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
 import { canonicalUrl, deadlineState, scoreCandidate, type Job, type Store } from './store.js';
 import { evaluateCandidate } from './selection.js';
-import { buildTasks } from './tasks.js';
+import { buildTasks, taskPermission } from './tasks.js';
 
 // A narrow, opt-in route. This is not permission for arbitrary SNS engagement.
 export function prepareDiscoveredEntry(store: Store, parent: Job) {
@@ -20,7 +20,13 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     .events()
     .filter((e) => {
       try {
-        buildTasks(e);
+        const tasks = buildTasks(e);
+        if (
+          tasks?.some(
+            (t) => t.kind !== 'form' && (t.kind === 'manual' || !taskPermission(store, t)),
+          )
+        )
+          return false;
       } catch {
         return false;
       }

@@ -259,15 +259,8 @@ export async function runAutonomous(
             url: o.url,
             verification: 'autonomous_visible_receipt',
           };
-          if (job.eventId) store.markSubmission(job.eventId, 'completed', JSON.stringify(proof));
-          job.status = 'completed';
-          job.uncertain = false;
-          state.metrics.finishedAt = Date.now();
-          if (job.taskFormStarted && job.tasks?.at(-1)?.kind === 'form')
-            job.tasks.at(-1)!.state = 'verified';
-          delete state.plan;
-          delete state.finalApproval;
-          record('완료 문구와 접수 결과를 확인했습니다.');
+          store.complete(job, proof);
+          record(job.note);
           break;
         }
         if (step.action === 'needs_user') {
@@ -493,6 +486,13 @@ export async function runAutonomous(
         throw error;
       }
     }
+    if (
+      job.status === 'running' &&
+      job.taskFormStarted &&
+      job.tasks?.some((t) => t.kind === 'form' && t.state === 'verified') &&
+      job.tasks.some((t) => !['verified', 'manual_reported'].includes(t.state))
+    )
+      return;
     if (job.status === 'running') {
       job.status = job.uncertain ? 'submission_unknown' : 'paused';
       job.note = '판단 한도에 도달했습니다. 대시보드에서 한도를 추가할 수 있습니다.';

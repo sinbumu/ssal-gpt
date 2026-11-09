@@ -150,6 +150,17 @@ test('opted-in discovery chooses one observed eligible form and claims it atomic
       },
     ).event;
     assert.throws(() => buildTasks({ ...mixed, tasks: [tasks[1]!] }), /required_task_missing/);
+    assert.equal(prepareDiscoveredEntry(store, mixedParent), undefined);
+    store.setSettings('taskPermissions', [
+      {
+        taskUrl: social,
+        kinds: ['like'],
+        sourceUrl: 'https://example.org/permission',
+        evidence: 'Fixture operator explicitly permits this exact synthetic route',
+        basis: 'operator_authorization',
+        expires: Date.now() + 10000,
+      },
+    ]);
     const mixedId = prepareDiscoveredEntry(store, mixedParent)!;
     assert.ok(mixedId);
     assert.deepEqual(

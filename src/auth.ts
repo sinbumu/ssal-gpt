@@ -49,6 +49,20 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  instagram_preview_required:
+    '현재 계정과 과제 대상을 다시 확인해야 합니다. 새 화면에서 재개한 뒤 승인하세요.',
+  instagram_account_not_identified:
+    '현재 인스타 로그인 계정을 화면에서 확정하지 못했습니다. 전용 브라우저에서 로그인 상태를 확인하세요.',
+  instagram_target_not_identified:
+    '현재 인스타 화면에서 대상 게시물과 필요한 동작을 구분하지 못했습니다. 새 화면에서 재개해 다시 확인할 수 있습니다.',
+  instagram_account_or_target_changed:
+    '승인 이후 인스타 계정 또는 대상이 바뀌었습니다. 동작하지 않았으며 새 화면에서 재개해 다시 승인해야 합니다.',
+  instagram_account_restricted:
+    '인스타가 계정 제한이나 자동화 경고를 표시했습니다. 추가 동작 없이 중단했습니다.',
+  instagram_follow_requested:
+    '팔로우 요청 상태입니다. 상대의 수락 전에는 팔로우 완료로 표시하지 않습니다.',
+  completion_comment_requires_form:
+    '참여 완료 댓글은 실제 폼 접수 뒤에 배치해야 합니다. 과제 순서를 다시 확인하세요.',
   picker_existing_file_requires_review:
     '같은 이름의 첨부가 있지만 이 허용으로 선택한 파일인지 확인할 수 없습니다. 브라우저에서 실제 파일을 확인하세요. 자동 교체·재업로드하지 않습니다.',
   task_target_ambiguous:

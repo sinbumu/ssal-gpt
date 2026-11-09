@@ -137,11 +137,11 @@ function renderCompleted() {
     <h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>
     <dl><dt>접수 확인</dt><dd>${esc(new Date(e.completedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}</dd>
     <dt>당첨 발표</dt><dd>${esc(e.announcementDate || e.announcementNote || '일정 미확인')}</dd>
-    <dt>당첨 결과</dt><dd>아직 확인하지 않음</dd></dl>
+    <dt>당첨 결과</dt><dd>${esc(outcomeLabel(e.eventId))}</dd></dl>
     <details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
     <p class="hint">${e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
-    ${renderConsents(e.consents)}<div class="card-actions">${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
+    ${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
         )
         .join('')
     : `<div class="empty">${query ? '검색 결과가 없습니다.' : '완료한 응모가 여기에 모입니다.'}</div>`;
@@ -191,6 +191,8 @@ function renderJobActions(j) {
   return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : b('resume', j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개', state.busy)}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
 }
 function render() {
+  renderOperations();
+  renderOutcomeSummary();
   const auth = state.auth;
   if (state.browser) {
     if (renderedBrowserEngine !== state.browser.engine) {
@@ -250,6 +252,7 @@ function render() {
     jobs: state.jobs,
     busy: state.busy,
     completedEntries: state.completedEntries,
+    outcomes: state.outcomes,
   });
   if (contentKey === rendered) return;
   rendered = contentKey;
@@ -600,3 +603,181 @@ document.addEventListener('submit', (event) => {
 });
 
 $('completed-search').addEventListener('input', renderCompleted);
+
+let operationsLoaded = false;
+function renderOperations() {
+  if (!state.operations) return;
+  const u = state.usage;
+  $('usage-summary').textContent =
+    `오늘 AI 호출 ${u.calls}회 · 보고 토큰 ${u.tokens.toLocaleString()} · 가격이 설정된 호출의 추정 비용 $${u.estimatedUsd.toFixed(4)} · 사용량 미확인 ${u.unknown}회 · 단가 미설정 ${u.unpriced}회`;
+  if (!operationsLoaded) {
+    const form = $('operations-form');
+    for (const key of [
+      'queueEnabled',
+      'dailyCalls',
+      'dailyTokens',
+      'dailyEstimatedUsd',
+      'maxPending',
+    ]) {
+      const el = form.elements.namedItem(key);
+      if (el.type === 'checkbox') el.checked = state.operations[key];
+      else el.value = state.operations[key] ?? '';
+    }
+    const rate = state.operations.rates.find((r) => r.model === state.selection?.model);
+    form.elements.inputRate.value = rate?.inputPerMillion ?? '';
+    form.elements.outputRate.value = rate?.outputPerMillion ?? '';
+    operationsLoaded = true;
+  }
+  $('schedules').innerHTML = (state.schedules || [])
+    .map(
+      (s) =>
+        `<article class="event-card"><div class="card-top"><span class="pill">${s.enabled ? '활성' : '정지'}</span><button data-schedule-delete="${esc(s.id)}">예약 삭제</button></div><h3>${esc(s.name)}</h3><p>${esc(s.intervalMinutes)}분 간격 · ${esc(s.startHour)}–${esc(s.endHour)}시 · 하루 ${esc(s.maxRunsPerDay)}회</p><p>${esc(s.provider.kind)} / ${esc(s.provider.model)}</p><p>${esc(s.note || '다음 운영 시간에 실행합니다.')}</p></article>`,
+    )
+    .join('');
+}
+$('operations-form').onsubmit = guard(async () => {
+  const f = new FormData($('operations-form')),
+    c = choice();
+  let rates = state.operations.rates;
+  if (f.get('inputRate') !== '' && f.get('outputRate') !== '') {
+    if (c.kind !== 'api' || !c.model)
+      throw new Error('비용 단가는 연결 설정에서 선택한 API 모델에 적용합니다.');
+    rates = [
+      ...rates.filter((r) => r.model !== c.model),
+      {
+        model: c.model,
+        inputPerMillion: Number(f.get('inputRate')),
+        outputPerMillion: Number(f.get('outputRate')),
+      },
+    ];
+  }
+  await api('/api/operations', {
+    queueEnabled: f.has('queueEnabled'),
+    dailyCalls: Number(f.get('dailyCalls')),
+    dailyTokens: Number(f.get('dailyTokens')),
+    maxPending: Number(f.get('maxPending')),
+    dailyEstimatedUsd:
+      f.get('dailyEstimatedUsd') === '' ? null : Number(f.get('dailyEstimatedUsd')),
+    rates,
+  });
+  toast('운영 설정을 저장했습니다.');
+});
+$('schedule-form').onsubmit = guard(async () => {
+  const f = new FormData($('schedule-form'));
+  await api('/api/schedules', {
+    name: f.get('name'),
+    sourceUrl: f.get('sourceUrl'),
+    enabled: f.has('enabled'),
+    intervalMinutes: Number(f.get('intervalMinutes')),
+    startHour: Number(f.get('startHour')),
+    endHour: Number(f.get('endHour')),
+    maxRunsPerDay: Number(f.get('maxRunsPerDay')),
+    provider: requireChoice(),
+    browserEngine: state.browser.engine,
+    goal: $('goal').value,
+    prepareOne: $('prepare-one').checked,
+  });
+  toast('탐색 예약을 저장했습니다.');
+});
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-schedule-delete]');
+  if (b) void guard(() => api('/api/schedules/delete', { id: b.dataset.scheduleDelete }))(e);
+});
+
+function outcomeLabel(eventId) {
+  return (
+    {
+      pending: '발표 대기',
+      unconfirmed: '확인 불가',
+      won: '당첨 · 사용자 확인',
+      lost: '낙첨 · 사용자 확인',
+    }[state.outcomes?.find((o) => o.eventId === eventId)?.status] || '아직 확인하지 않음'
+  );
+}
+function renderOutcomeSummary() {
+  const rows = state.outcomes || [],
+    won = rows.filter((o) => o.status === 'won');
+  const realized = won.reduce(
+    (sum, o) => sum + (o.reward?.status === 'used' ? o.reward.realizedValue : 0),
+    0,
+  );
+  $('outcome-summary').textContent =
+    `접수 ${state.completedEntries.length}건 · 확인한 당첨 ${won.length}건 · 수령 ${won.filter((o) => ['received', 'used'].includes(o.reward?.status)).length}건 · 실현 가치 ${realized.toLocaleString()}원`;
+  $('outcome-alerts').innerHTML = (state.outcomeAlerts || [])
+    .map(
+      (a) =>
+        `<p><button data-outcome="${esc(a.eventId)}">${esc(a.title)}</button> ${esc(a.message)}</p>`,
+    )
+    .join('');
+}
+document.addEventListener('click', (event) => {
+  const b = event.target.closest('[data-outcome]');
+  if (!b) return;
+  const e = state.completedEntries.find((e) => e.eventId === b.dataset.outcome);
+  const o = state.outcomes.find((o) => o.eventId === e.eventId),
+    form = $('outcome-form');
+  form.reset();
+  form.hidden = false;
+  $('reward-code').textContent = '';
+  $('outcome-title').textContent = e.title;
+  const values = {
+    eventId: e.eventId,
+    sourceUrl: o?.sourceUrl || e.sourceUrl,
+    status: o?.status || 'pending',
+    note: o?.note || '',
+    claimBy: o?.claimBy || '',
+    checkDate: o?.nextCheckAt
+      ? new Date(o.nextCheckAt).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })
+      : e.announcementDate || '',
+    rewardName: o?.reward?.name || '',
+    rewardStatus: o?.reward?.status || 'expected',
+    expiresOn: o?.reward?.expiresOn || '',
+    faceValue: o?.reward?.faceValue || 0,
+    realizedValue: o?.reward?.realizedValue || 0,
+  };
+  for (const [k, v] of Object.entries(values)) form.elements.namedItem(k).value = v;
+  form.elements.autoCheck.checked = !!o?.autoCheck;
+  $('outcome-proof').innerHTML = o?.check
+    ? `<blockquote>${esc(o.check.quote)}</blockquote><p>${safeLink(o.check.url, '확인한 발표')} · ${esc(new Date(o.check.at).toLocaleString())}</p><a href="/evidence/${esc(o.check.screenshot)}" target="_blank">확인 당시 화면 ↗</a>`
+    : '';
+  location.hash = 'rewards';
+});
+$('outcome-form').onsubmit = guard(async () => {
+  const f = new FormData($('outcome-form'));
+  await api('/api/outcomes', {
+    eventId: f.get('eventId'),
+    sourceUrl: f.get('sourceUrl'),
+    status: f.get('status'),
+    note: f.get('note'),
+    autoCheck: f.has('autoCheck'),
+    nextCheckAt: f.get('checkDate') ? Date.parse(`${f.get('checkDate')}T09:00:00+09:00`) : null,
+    claimBy: f.get('claimBy') || null,
+    reward:
+      f.get('status') === 'won'
+        ? {
+            name: f.get('rewardName'),
+            status: f.get('rewardStatus'),
+            expiresOn: f.get('expiresOn') || null,
+            faceValue: Number(f.get('faceValue')),
+            realizedValue: Number(f.get('realizedValue')),
+            code: f.get('code'),
+          }
+        : undefined,
+  });
+  $('outcome-form').elements.code.value = '';
+  $('reward-code').textContent = '';
+  toast('결과·경품을 저장했습니다.');
+});
+$('check-outcome').onclick = guard(async () => {
+  await api('/api/outcomes/check', {
+    eventId: $('outcome-form').elements.eventId.value,
+    provider: requireChoice(),
+  });
+  toast('저장된 공식 발표 주소를 읽는 작업을 시작했습니다.');
+});
+$('show-reward-code').onclick = guard(async () => {
+  const result = await api('/api/outcomes/code', {
+    eventId: $('outcome-form').elements.eventId.value,
+  });
+  $('reward-code').textContent = result.code || '저장된 코드 없음';
+});

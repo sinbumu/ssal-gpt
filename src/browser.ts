@@ -105,6 +105,7 @@ export class Browser {
   private opening?: Promise<void>;
   private evidence: string;
   private manual = true;
+  private jobPages = new Map<string, Page>();
   private attached = new WeakSet<Page>();
   private readOnlyPages = new WeakSet<Page>();
   private readOnlyMode = false;
@@ -136,6 +137,23 @@ export class Browser {
     const page =
       this.context!.pages().find((p) => !p.isClosed()) || (await this.context!.newPage());
     if (this.page !== page) this.attach(page);
+  }
+  async selectJob(id: string) {
+    await this.open();
+    // Keep POST-backed forms alive while an independent job uses its own tab.
+    if (this.ownerJobId && this.page && !this.page.isClosed())
+      this.jobPages.set(this.ownerJobId, this.page);
+    const saved = this.jobPages.get(id);
+    if (saved && !saved.isClosed()) {
+      this.attach(saved);
+      this.ownerJobId = id;
+    } else if (this.ownerJobId && this.ownerJobId !== id) {
+      this.attach(await this.context!.newPage());
+      this.ownerJobId = undefined;
+    }
+    this.jobPages.set(id, this.page!);
+    this.invalidate();
+    await this.page!.bringToFront();
   }
   setManual(manual: boolean) {
     this.manual = manual;
@@ -754,6 +772,7 @@ export class Browser {
     this.context = undefined;
     this.page = undefined;
     this.ownerJobId = undefined;
+    this.jobPages.clear();
     this.invalidate();
   }
 }

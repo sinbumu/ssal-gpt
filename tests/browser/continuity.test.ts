@@ -275,7 +275,7 @@ test('consent modes gate real browser input, preserve missing facts and keep fin
       job.autonomy!.policy.consent = ConsentPolicySchema.parse({ mode });
       app.store.saveJob(job);
       let posts = 0;
-      await app.browser.open();
+      await app.browser.selectJob(job.id);
       await app.browser.page!.unrouteAll();
       await app.browser.page!.route(job.startUrl, (r) => {
         if (r.request().method() === 'POST') {
@@ -390,7 +390,7 @@ test('optional refusal and required skip never accidentally transmit an out-of-s
       });
       app.store.saveJob(job);
       let posts = 0;
-      await app.browser.open();
+      await app.browser.selectJob(job.id);
       await app.browser.page!.unrouteAll();
       await app.browser.page!.route(job.startUrl, (r) => {
         if (r.request().method() === 'POST') posts++;

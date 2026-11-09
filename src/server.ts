@@ -22,6 +22,25 @@ import {
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
 import { inspectForm } from './forms.js';
 import { searchUrl } from './evidence.js';
+import {
+  OutcomeSchema,
+  saveOutcome,
+  publicOutcomes,
+  outcomes,
+  outcomeAlerts,
+  queueResultCheck,
+} from './outcomes.js';
+import {
+  Scheduler,
+  ScheduleSchema,
+  OperationsSchema,
+  operations,
+  schedules,
+  saveSchedule,
+  usage,
+  meteredModel,
+  dayKey,
+} from './operations.js';
 import { verifyReceipt } from './receipt.js';
 
 const ProviderSchema = z.object({
@@ -78,6 +97,7 @@ export async function createApp(options: {
   let origin = '';
   let browser: Browser;
   let runner: Runner;
+  let scheduler: Scheduler;
   let manualNavigation = false;
   const model = new Model(auth);
   const server = createServer((request, response) => {
@@ -220,11 +240,56 @@ export async function createApp(options: {
           };
         }),
         completedEntries: store.completedEntries(),
+        outcomes: publicOutcomes(store),
+        outcomeAlerts: outcomeAlerts(store, dayKey()),
+        operations: operations(store),
+        schedules: schedules(store),
+        usage: usage(store),
         busy: runner.isBusy(),
         browser: browser.info(),
         activeId: runner.activeId,
         selection: store.settings('selection', null),
       });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes') {
+      const input = OutcomeSchema.parse(data);
+      await validateUrl(input.sourceUrl, origin);
+      if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
+        throw new ServiceError('pause_before_updating_outcome');
+      saveOutcome(store, input);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/check') {
+      const id = z.string().uuid().parse(data.eventId),
+        provider = ProviderSchema.parse(data.provider);
+      const jobId = queueResultCheck(store, id, provider, browser.engine);
+      if (!runner.isBusy() && !manualNavigation) runner.start(jobId);
+      return send(response, 200, { id: jobId });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/code') {
+      const id = z.string().uuid().parse(data.eventId);
+      return send(response, 200, {
+        code: outcomes(store).find((o) => o.eventId === id)?.reward?.code || '',
+      });
+    }
+    if (method === 'POST' && url.pathname === '/api/operations') {
+      store.setSettings('operations', OperationsSchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/schedules') {
+      const input = ScheduleSchema.parse(data);
+      await validateUrl(input.sourceUrl, origin);
+      if (input.prepareOne && !settings(store).policy.enabled)
+        throw new ServiceError('delegation_not_enabled');
+      return send(response, 200, saveSchedule(store, input));
+    }
+    if (method === 'POST' && url.pathname === '/api/schedules/delete') {
+      const id = z.string().uuid().parse(data.id);
+      store.setSettings(
+        'schedules',
+        schedules(store).filter((s) => s.id !== id),
+      );
+      return send(response, 200, { ok: true });
     }
     if (method === 'GET' && url.pathname === '/api/autonomy')
       return send(response, 200, settings(store));
@@ -277,8 +342,10 @@ export async function createApp(options: {
     if (method === 'POST' && url.pathname === '/api/browser/open') {
       if (runner.isBusy() || manualNavigation)
         throw new ServiceError('pause_before_manual_control');
+      store.setSettings('operations', { ...operations(store), queueEnabled: false });
       manualNavigation = true;
       try {
+        await browser.selectJob('__manual__');
         browser.setManual(true);
         browser.setReadOnlyMode(false);
         browser.ownerJobId = undefined;
@@ -348,7 +415,8 @@ export async function createApp(options: {
       if (input.prepareOne && (input.kind !== 'discover' || !settings(store).policy.enabled))
         throw new ServiceError('delegation_not_enabled');
       await auth.bearer(input.provider);
-      if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+      if (manualNavigation || (runner.isBusy() && !operations(store).queueEnabled))
+        throw new ServiceError('browser_busy', 409);
       const event =
         input.kind === 'apply' && input.eventId ? store.event(input.eventId) : undefined;
       if (input.kind === 'apply' && (!event || !input.routeConfirmed))
@@ -418,7 +486,7 @@ export async function createApp(options: {
         throw new ServiceError('event_already_started_or_submitted');
       store.saveJob(job);
       store.setSettings('selection', input.provider);
-      runner.start(id);
+      if (!runner.isBusy()) runner.start(id);
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
@@ -462,7 +530,7 @@ export async function createApp(options: {
           const verified = await verifyReceipt(
             store,
             browser,
-            model,
+            meteredModel(store, model, job),
             job,
             AbortSignal.timeout(120_000),
             true,
@@ -520,43 +588,49 @@ export async function createApp(options: {
           inbox = state.inbox!;
         if (data.inboxId !== inbox.id || Date.now() - inbox.createdAt > 24 * 60 * 60_000)
           throw new ServiceError('inbox_expired');
-        if (browser.ownerJobId !== job.id || !browser.page)
-          throw new ServiceError('autonomy_live_page_required');
-        if (inbox.final) {
-          if (data.confirm !== true) throw new ServiceError('final_confirmation_required');
-          state.finalApproval = inbox.fingerprint;
-        } else {
-          if ((await inspectForm(browser.page)).view.fingerprint !== inbox.fingerprint)
-            throw new ServiceError('inbox_page_changed');
-          const answers = z
-            .record(z.string(), z.array(z.string().max(2000)).max(30))
-            .parse(data.answers);
-          const validated = inbox.items.map((q) => ({
-            q,
-            answer: validateAnswer(q, answers[q.id] || []),
-          }));
-          if (validated.some((v) => !v.answer)) throw new ServiceError('invalid_inbox_answer');
-          for (const { q, answer } of validated) {
-            state.overrides[q.signature] = answer!;
-            if (q.kind === 'text')
-              state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
-            if (data.remember === true && !state.synthetic)
-              saveAnswer(store, {
-                signature: q.signature,
-                question: q.label,
-                kind: q.kind,
-                category: q.category,
-                answer: answer!,
-                origin: state.origin,
-              });
+        manualNavigation = true;
+        try {
+          await browser.selectJob(job.id);
+          if (browser.ownerJobId !== job.id || !browser.page)
+            throw new ServiceError('autonomy_live_page_required');
+          if (inbox.final) {
+            if (data.confirm !== true) throw new ServiceError('final_confirmation_required');
+            state.finalApproval = inbox.fingerprint;
+          } else {
+            if ((await inspectForm(browser.page)).view.fingerprint !== inbox.fingerprint)
+              throw new ServiceError('inbox_page_changed');
+            const answers = z
+              .record(z.string(), z.array(z.string().max(2000)).max(30))
+              .parse(data.answers);
+            const validated = inbox.items.map((q) => ({
+              q,
+              answer: validateAnswer(q, answers[q.id] || []),
+            }));
+            if (validated.some((v) => !v.answer)) throw new ServiceError('invalid_inbox_answer');
+            for (const { q, answer } of validated) {
+              state.overrides[q.signature] = answer!;
+              if (q.kind === 'text')
+                state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
+              if (data.remember === true && !state.synthetic)
+                saveAnswer(store, {
+                  signature: q.signature,
+                  question: q.label,
+                  kind: q.kind,
+                  category: q.category,
+                  answer: answer!,
+                  origin: state.origin,
+                });
+            }
           }
+          state.metrics.waitingMs = (state.metrics.waitingMs || 0) + Date.now() - inbox.createdAt;
+          delete state.inbox;
+          job.status = 'paused';
+          store.saveJob(job);
+          runner.start(id);
+          return send(response, 200, { ok: true });
+        } finally {
+          manualNavigation = false;
         }
-        state.metrics.waitingMs = (state.metrics.waitingMs || 0) + Date.now() - inbox.createdAt;
-        delete state.inbox;
-        job.status = 'paused';
-        store.saveJob(job);
-        runner.start(id);
-        return send(response, 200, { ok: true });
       }
       if (action === 'delegation') {
         if (
@@ -575,8 +649,10 @@ export async function createApp(options: {
         store.saveJob(job);
         return send(response, 200, { ok: true });
       }
-      if (action === 'pause' || action === 'stop') await runner.pause(id, action === 'stop');
-      else if (action === 'resume') {
+      if (action === 'pause' || action === 'stop') {
+        store.setSettings('operations', { ...operations(store), queueEnabled: false });
+        await runner.pause(id, action === 'stop');
+      } else if (action === 'resume') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
         if (job.status === 'approval') throw new ServiceError('review_pending_action_first');
         if (job.autonomy?.inbox && data.useCurrentPage !== true)
@@ -662,6 +738,8 @@ export async function createApp(options: {
     .parse(store.settings('browser', { engine: 'chromium' }).engine);
   browser = new Browser(options.dir, origin, options.headless, engine);
   runner = new Runner(store, browser, model, origin);
+  scheduler = new Scheduler(store, runner, () => manualNavigation);
+  scheduler.start();
   return {
     origin,
     server,
@@ -669,7 +747,9 @@ export async function createApp(options: {
     auth,
     browser,
     runner,
+    scheduler,
     async close() {
+      scheduler.stop();
       if (runner.activeId) await runner.pause(runner.activeId);
       await browser.close();
       await new Promise<void>((r, j) => server.close((e) => (e ? j(e) : r())));

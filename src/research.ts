@@ -1,5 +1,5 @@
 import type { Browser } from './browser.js';
-import type { Model } from './model.js';
+import type { ModelClient } from './model.js';
 import type { Job, Store } from './store.js';
 import { collectEvidence, searchUrl } from './evidence.js';
 import { redactContext } from './autonomy.js';
@@ -8,7 +8,7 @@ import { ServiceError } from './auth.js';
 export async function researchQuestion(
   store: Store,
   browser: Browser,
-  model: Model,
+  model: ModelClient,
   job: Job,
   query: string,
   signal: AbortSignal,

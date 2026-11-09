@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { inspectForm, type FormView } from './forms.js';
 import type { Job, Store } from './store.js';
 import type { Browser, Observation } from './browser.js';
-import type { Model } from './model.js';
+import type { ModelClient } from './model.js';
 import { redactContext } from './autonomy.js';
 import { observedQuote } from './evidence.js';
 
@@ -64,7 +64,7 @@ export function continuationCandidate(
 export async function verifyFormContinuation(
   store: Store,
   browser: Browser,
-  model: Model,
+  model: ModelClient,
   job: Job,
   o: Observation,
   view: FormView,

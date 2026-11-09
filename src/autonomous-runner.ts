@@ -1,7 +1,7 @@
 import { completionMessage } from './completion.js';
 import { randomUUID } from 'node:crypto';
 import type { Browser } from './browser.js';
-import type { Model } from './model.js';
+import type { ModelClient } from './model.js';
 import type { Job, Store } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
 import {
@@ -31,7 +31,7 @@ Use done only after an explicit visible completion/receipt, with the exact evide
 export async function runAutonomous(
   store: Store,
   browser: Browser,
-  model: Model,
+  model: ModelClient,
   job: Job,
   signal: AbortSignal,
 ) {

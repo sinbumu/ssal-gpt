@@ -2,7 +2,7 @@ import { completionMessage, receiptLineSafe } from './completion.js';
 import { hash, redactContext } from './autonomy.js';
 import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
-import type { Model } from './model.js';
+import type { ModelClient } from './model.js';
 import { collectEvidence, type SourceEvidence } from './evidence.js';
 
 export function captureReceipt(job: Job, o: Observation) {
@@ -40,7 +40,7 @@ export function freshReceipt(
 export async function verifyReceipt(
   store: Store,
   browser: Browser,
-  model: Model,
+  model: ModelClient,
   job: Job,
   signal: AbortSignal,
   semantic = false,

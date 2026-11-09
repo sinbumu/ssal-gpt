@@ -50,6 +50,7 @@ export const StepSchema = z
     buttonId: z.string().optional(),
     searchEngine: z.enum(['naver', 'google']).optional(),
     questionId: z.string().optional(),
+    resultKind: z.enum(['announced', 'pending', 'unavailable']).optional(),
     receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
   })
   .strict();
@@ -110,6 +111,8 @@ export async function readSSE(response: Response) {
     throw new ServiceError('inference_stream_interrupted', 502);
   return completed;
 }
+
+export type ModelClient = Pick<Model, 'decide'>;
 
 export class Model {
   constructor(private auth: Auth) {}

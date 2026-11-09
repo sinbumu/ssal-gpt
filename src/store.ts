@@ -30,9 +30,10 @@ export type Approval = {
 };
 export type Job = {
   id: string;
-  kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo';
+  kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
   prepareOne?: { revision: string; expires: number; childId?: string };
   parentId?: string;
+  scheduleId?: string;
   autonomy?: AutonomyState;
   goal: string;
   provider: ProviderChoice;
@@ -142,6 +143,7 @@ export class Store {
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+      CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, day TEXT NOT NULL, job_id TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, estimated_usd REAL, state TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, entry_key TEXT UNIQUE NOT NULL, campaign_key TEXT NOT NULL, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS submissions (event_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, state TEXT NOT NULL, evidence TEXT);
@@ -150,7 +152,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS demo_receipts (run TEXT PRIMARY KEY, receipt TEXT NOT NULL);
     `);
     for (const job of this.jobs()) {
-      if (['running', 'queued', 'approval'].includes(job.status)) {
+      if (['running', 'approval'].includes(job.status)) {
         job.status = job.uncertain ? 'submission_unknown' : 'paused';
         delete job.approval;
         job.note = '앱이 재시작되었습니다. 현재 화면을 확인한 뒤 재개하세요.';

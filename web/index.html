@@ -14,7 +14,8 @@
         <nav>
           <a href="#attention">01 · 진행·확인함</a><a href="#discover">02 · 기회 탐색</a
           ><a href="#completed">03 · 완료한 응모</a><a href="#runs">04 · 실행 기록</a
-          ><a href="#autonomy">05 · 프로필·위임</a><a href="#settings">06 · 연결 설정</a>
+          ><a href="#autonomy">05 · 프로필·위임</a><a href="#settings">06 · 연결 설정</a
+          ><a href="#operations">07 · 예약·운영</a><a href="#rewards">08 · 결과·경품</a>
         </nav>
         <div class="aside-bottom">
           <span class="dot"></span> 내 컴퓨터에서 실행 중
@@ -468,6 +469,199 @@
               </div>
             </div>
           </div>
+        </section>
+        <section class="panel" id="operations">
+          <div class="section-head">
+            <h2>07 · 예약·운영</h2>
+            <span class="pill">서울 시간 기준</span>
+          </div>
+          <p class="hint">
+            앱과 컴퓨터가 켜져 있을 때 실행합니다. 놓친 예약은 한 번만 실행하며, 답변 대기 중인 폼은
+            별도 탭에 보존합니다.
+          </p>
+          <div id="usage-summary" class="hint"></div>
+          <form id="operations-form">
+            <label class="check"
+              ><input type="checkbox" name="queueEnabled" />예약 및 대기열 자동 실행</label
+            >
+            <div class="form-row">
+              <label
+                >하루 AI 호출 한도<input
+                  name="dailyCalls"
+                  type="number"
+                  min="1"
+                  max="10000"
+                  required
+              /></label>
+              <label
+                >하루 보고 토큰 한도<input
+                  name="dailyTokens"
+                  type="number"
+                  min="1"
+                  max="100000000"
+                  required
+              /></label>
+              <label
+                >진행·대기 작업 상한<input
+                  name="maxPending"
+                  type="number"
+                  min="1"
+                  max="30"
+                  required
+              /></label>
+            </div>
+            <details>
+              <summary>API 추정 비용 제한</summary>
+              <p class="hint">
+                선택한 API 모델의 100만 토큰당 USD 단가를 직접 입력합니다. ChatGPT 크레딧은 환산하지
+                않습니다. 토큰·추정 비용은 응답 후 집계하므로 마지막 호출만큼 초과할 수 있습니다.
+                실제 결제 상한은 공급자 설정에서 관리하세요.
+              </p>
+              <div class="form-row">
+                <label
+                  >하루 추정 USD 상한 (비우면 해제)<input
+                    name="dailyEstimatedUsd"
+                    type="number"
+                    min="0.01"
+                    step="0.01" /></label
+                ><label
+                  >입력 단가<input name="inputRate" type="number" min="0" step="0.001" /></label
+                ><label
+                  >출력 단가<input name="outputRate" type="number" min="0" step="0.001"
+                /></label>
+              </div>
+            </details>
+            <button>운영 설정 저장</button>
+          </form>
+          <h3>반복 탐색 추가</h3>
+          <form id="schedule-form">
+            <label
+              >예약 이름<input
+                name="name"
+                maxlength="100"
+                required
+                placeholder="아침 커피 이벤트 탐색"
+            /></label>
+            <label
+              >시작할 공개 목록 주소<input
+                name="sourceUrl"
+                type="url"
+                required
+                placeholder="https://…"
+            /></label>
+            <p class="hint">
+              현재 선택한 AI 연결·모델, 탐색 조건, 브라우저를 사용합니다. 자동 응모 준비를
+              선택했다면 현재 위임 정책도 함께 저장합니다.
+            </p>
+            <div class="form-row">
+              <label
+                >간격 (분)<input
+                  name="intervalMinutes"
+                  type="number"
+                  min="15"
+                  value="720"
+                  required /></label
+              ><label
+                >시작 시각<input
+                  name="startHour"
+                  type="number"
+                  min="0"
+                  max="23"
+                  value="9"
+                  required /></label
+              ><label
+                >종료 시각<input
+                  name="endHour"
+                  type="number"
+                  min="0"
+                  max="23"
+                  value="22"
+                  required /></label
+              ><label
+                >하루 횟수<input
+                  name="maxRunsPerDay"
+                  type="number"
+                  min="1"
+                  max="24"
+                  value="2"
+                  required
+              /></label>
+            </div>
+            <label class="check"><input name="enabled" type="checkbox" />저장 후 예약 활성화</label>
+            <button>예약 저장</button>
+          </form>
+          <div id="schedules"></div>
+        </section>
+        <section class="panel" id="rewards">
+          <div class="section-head"><h2>08 · 결과·경품</h2></div>
+          <div id="outcome-summary"></div>
+          <div id="outcome-alerts"></div>
+          <p class="hint">
+            완료한 응모의 ‘결과·경품 관리’에서 기록을 선택하세요. 발표를 찾은 것과 본인의 당첨은
+            구분하며, 확인 실패를 낙첨으로 기록하지 않습니다.
+          </p>
+          <form id="outcome-form" hidden>
+            <h3 id="outcome-title"></h3>
+            <input name="eventId" type="hidden" />
+            <label>공식 발표 주소<input name="sourceUrl" type="url" required /></label>
+            <label
+              >결과<select name="status">
+                <option value="pending">발표 대기</option>
+                <option value="unconfirmed">확인 불가</option>
+                <option value="won">당첨 직접 확인</option>
+                <option value="lost">낙첨 직접 확인</option>
+              </select></label
+            >
+            <label
+              >확인 근거·메모<textarea
+                name="note"
+                rows="2"
+                placeholder="공식 발표 또는 받은 안내에서 확인한 내용"
+              ></textarea>
+            </label>
+            <label class="check"
+              ><input name="autoCheck" type="checkbox" />매일 공식 발표를 읽고 확인함에 알리기
+              (예약·대기열 실행 필요)</label
+            >
+            <label>첫 발표 확인 날짜<input name="checkDate" type="date" /></label>
+            <label>수령 기한<input name="claimBy" type="date" /></label>
+            <fieldset>
+              <legend>당첨 경품</legend>
+              <label>경품명<input name="rewardName" /></label>
+              <div class="form-row">
+                <label
+                  >상태<select name="rewardStatus">
+                    <option value="expected">수령 대기</option>
+                    <option value="received">수령 완료</option>
+                    <option value="used">사용·처분 완료</option>
+                    <option value="expired">만료</option>
+                  </select></label
+                ><label>만료일<input name="expiresOn" type="date" /></label>
+              </div>
+              <div class="form-row">
+                <label>액면가 (원)<input name="faceValue" type="number" min="0" value="0" /></label
+                ><label
+                  >실제 사용 가치·판매대금 (원)<input
+                    name="realizedValue"
+                    type="number"
+                    min="0"
+                    value="0"
+                /></label>
+              </div>
+              <label
+                >쿠폰 코드 (로컬 보관)<input
+                  name="code"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="비우면 저장된 코드 유지"
+              /></label>
+              <button type="button" id="show-reward-code">저장된 코드 보기</button
+              ><output id="reward-code"></output>
+            </fieldset>
+            <div id="outcome-proof"></div>
+            <button>결과·경품 저장</button
+            ><button type="button" id="check-outcome">저장한 발표 주소 지금 확인</button>
+          </form>
         </section>
         <footer>
           쌀-GPT · Local-first, open source. <span>실제 당첨·수령은 별도 확인이 필요합니다.</span>

@@ -38,6 +38,25 @@ export function instagramTarget(raw: string, kind: string) {
 
 // Read only rendered DOM. No internal APIs, cookies, React state or CSS class dependencies.
 // Element indexes refer to Browser.observe's freshly captured handle list.
+export async function waitForInstagram(page: Page, target: InstagramTarget, selector: string) {
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (
+      /\/login|\/signin|\/challenge|\/checkpoint/i.test(page.url()) ||
+      (await page.locator('input[type=password]').count())
+    )
+      return;
+    const view = await inspectInstagram(page, target, selector);
+    if (
+      view.ready ||
+      !['instagram_account_not_identified', 'instagram_target_not_identified'].includes(
+        view.reason || '',
+      )
+    )
+      return;
+    await page.waitForTimeout(250);
+  }
+}
 export async function inspectInstagram(page: Page, target: InstagramTarget, selector: string) {
   return page.evaluate(
     ({ target, selector }) => {

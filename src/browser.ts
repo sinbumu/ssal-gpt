@@ -16,7 +16,12 @@ import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
 import { isMoaform, moaformSnapshot } from './forms.js';
-import { inspectInstagram, type InstagramTarget, type InstagramView } from './instagram.js';
+import {
+  inspectInstagram,
+  waitForInstagram,
+  type InstagramTarget,
+  type InstagramView,
+} from './instagram.js';
 const observableControls =
   'a[href],button,input,textarea,select,[contenteditable=true],[role=textbox],[role=button],[role=checkbox],summary';
 
@@ -442,6 +447,7 @@ export class Browser {
     await this.open();
     const page = this.page!;
     if (page.isClosed()) throw new ServiceError('browser_closed');
+    if (instagram) await waitForInstagram(page, instagram, observableControls);
     const url = page.url();
     if (
       /google\.[^/]+\/sorry\//i.test(url) ||

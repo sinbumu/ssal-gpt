@@ -55,7 +55,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     )[0];
   if (!event) {
     parent.note =
-      '탐색을 마쳤습니다. 조건이 확인된 미참여 지원 폼이 없어 자동 응모 준비를 시작하지 않았습니다.';
+      '탐색을 마쳤습니다. 조건과 실행 경로가 확인된 미참여 이벤트가 없어 자동 응모 준비를 시작하지 않았습니다.';
     store.saveJob(parent);
     return;
   }
@@ -95,7 +95,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
       return;
     }
     grant.childId = child.id;
-    parent.note = '조건이 확인된 지원 폼 1건을 골라 저장된 위임으로 응모 준비를 시작합니다.';
+    parent.note = '조건이 확인된 이벤트 1건을 골라 저장된 위임으로 응모 준비를 시작합니다.';
     store.saveJob(child);
     store.saveJob(parent);
     store.note(parent.id, parent.note);

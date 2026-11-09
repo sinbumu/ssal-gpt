@@ -65,7 +65,10 @@ export function buildTasks(event: Pick<EventRecord, 'tasks' | 'requirements' | '
       throw new ServiceError('task_source_not_observed');
     if (
       !event.sourceEvidence.some(
-        (s) => canonicalUrl(s.url) === canonicalUrl(task.url) || s.text.includes(task.url),
+        (s) =>
+          canonicalUrl(s.url) === canonicalUrl(task.url) ||
+          s.links?.some((url) => canonicalUrl(url) === canonicalUrl(task.url)) ||
+          s.text.includes(task.url),
       )
     )
       throw new ServiceError('task_url_not_observed');

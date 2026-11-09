@@ -56,3 +56,41 @@ test('Instagram route is an exact public post or follow profile; completion clai
     /completion_comment_requires_form/,
   );
 });
+test('task targets accept actual rendered links and reject invented profile links', async () => {
+  const { collectEvidence } = await import('../src/evidence.js');
+  const source = 'https://www.instagram.com/p/fixture/',
+    profile = 'https://www.instagram.com/fixture_host/';
+  const observation = {
+    id: 'observed',
+    url: source,
+    title: 'fixture',
+    text: '공식 계정 팔로우',
+    screenshot: 'fixture.png',
+    capturedAt: Date.now(),
+    elements: [{ href: profile }],
+  } as any;
+  const evidence = collectEvidence([], observation);
+  const task = {
+    id: 'follow',
+    kind: 'follow' as const,
+    url: profile,
+    instruction: '공식 계정 팔로우',
+    quote: observation.text,
+    dependsOn: [],
+  };
+  assert.equal(
+    buildTasks({ tasks: [task], requirements: ['팔로우'], sourceEvidence: evidence })![0]!.url,
+    profile,
+  );
+  assert.throws(
+    () =>
+      buildTasks({
+        tasks: [{ ...task, url: 'https://www.instagram.com/invented/' }],
+        requirements: ['팔로우'],
+        sourceEvidence: evidence,
+      }),
+    /task_url_not_observed/,
+  );
+  assert.equal(collectEvidence(evidence, observation).length, 1);
+  assert.equal(collectEvidence(evidence, { ...observation, elements: [] }).length, 2);
+});

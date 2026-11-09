@@ -7,6 +7,7 @@ export type SourceEvidence = {
   text: string;
   screenshot: string;
   observedAt: number;
+  links?: string[];
 };
 
 // Text split into rendered nodes may differ only in whitespace. Return the
@@ -27,7 +28,20 @@ export function observedQuote(text: string, quote: string) {
 }
 
 export function collectEvidence(previous: SourceEvidence[], o: Observation) {
-  if (previous.some((s) => s.url === o.url && s.text === o.text)) return previous;
+  const links = [
+    ...new Set(
+      o.elements.map((e) => e.href).filter((u): u is string => !!u && /^https?:\/\//.test(u)),
+    ),
+  ].slice(0, 300);
+  if (
+    previous.some(
+      (s) =>
+        s.url === o.url &&
+        s.text === o.text &&
+        JSON.stringify(s.links || []) === JSON.stringify(links),
+    )
+  )
+    return previous;
   return [
     ...previous,
     {
@@ -37,6 +51,7 @@ export function collectEvidence(previous: SourceEvidence[], o: Observation) {
       text: o.text,
       screenshot: o.screenshot,
       observedAt: o.capturedAt,
+      links,
     },
   ].slice(-20);
 }

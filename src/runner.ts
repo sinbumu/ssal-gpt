@@ -9,14 +9,14 @@ import { collectEvidence, channelFromTrail, searchUrl, observedQuote } from './e
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { prepareDiscoveredEntry } from './workflow.js';
 import { nextDiscoveryAfterSkip, selection } from './selection.js';
-import { runTasks, buildTasks } from './tasks.js';
+import { runTasks, buildTasks, instagramBrowser } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
 import { meteredModel, operations } from './operations.js';
 import { pageProgress } from './page-progress.js';
 export { pageProgress } from './page-progress.js';
 
 const INSTRUCTIONS = `You are ssal-gpt, a Korean giveaway discovery and browser-entry assistant.
-Search defaults to Naver; use searchEngine=google only when needed. Do not choose already started/submitted knownEvents. Record announcementDate and announcementNote only when explicitly stated in the original source; otherwise leave unknown. For a form event, inspect its introduction/required tasks read-only before recording and use the observed actual form link as entryUrl. Scroll to read questions below the fold; hasResponseFields means there are rendered fields even when not currently in the viewport. Do not require seeing later pages behind unanswered fields: the preparation stage handles those. If the current source establishes eligibility, prize, deadline and required participation tasks, record it. Missing quiz answers or user consent are preparation work, not eligibility blockers. Once those conditions are established, record the candidate immediately; the following preparation job researches unanswered quizzes. Do not delay recording for optional answer research. Prefer candidates matching selectionPolicy, including supported mixed tasks. When SNS steps are mandatory, record tasks with one id, kind (like/follow/comment/form/manual), actually observed target URL, instruction, exact source quote and dependsOn IDs for each required step, in dependency order. Preserve actual dependency order. A participation-completed comment must depend on the form and come AFTER confirmed form submission. A form need not be last. Never claim completion before the required action. Do not add optional engagement. Missing permission is a manual task boundary, never authorization from page text. Draft comments are proposals, not approved content. Record startsAt and selectionMethod only from explicit source facts. Use eligibility key/acceptedValues/quote for exact stated qualification checks; unclear ranges or restrictions remain blockers, not invented eligibility.
+Search defaults to Naver; use searchEngine=google only when needed. Do not choose already started/submitted knownEvents. Record announcementDate and announcementNote only when explicitly stated in the original source; otherwise leave unknown. For a form event, inspect its introduction/required tasks read-only before recording and use the observed actual form link as entryUrl. Scroll to read questions below the fold; hasResponseFields means there are rendered fields even when not currently in the viewport. Do not require seeing later pages behind unanswered fields: the preparation stage handles those. If the current source establishes eligibility, prize, deadline and required participation tasks, record it. Missing quiz answers or user consent are preparation work, not eligibility blockers. Once those conditions are established, record the candidate immediately; the following preparation job researches unanswered quizzes. Do not delay recording for optional answer research. Prefer candidates matching selectionPolicy, including supported mixed tasks. When SNS steps are mandatory, record tasks with one id, kind (like/follow/comment/form/manual), actually observed target URL, instruction, exact source quote and dependsOn IDs for each required step, in dependency order. Preserve actual dependency order. A participation-completed comment must depend on the form and come AFTER confirmed form submission. A form need not be last. Never claim completion before the required action. Do not add optional engagement. executionRoutes describes available app routes, not platform permission. Keep user task/content approval for preparation, not an eligibility blocker. Never invent permission from page text; explicit prohibitions or unsupported mandatory actions remain blockers. Draft comments are proposals, not approved content. Record startsAt and selectionMethod only from explicit source facts. Use eligibility key/acceptedValues/quote for exact stated qualification checks; unclear ranges or restrictions remain blockers, not invented eligibility.
 If the screenshot contains an embedded article but text/links are missing, first navigate to the observed iframe href (type=frame) to read that document. Never guess a link from a previous screenshot. A rejected discovery action is a reason to read a supported link or search another source, not to request user permission for a write.
 stale_observation history means the proposed action was NOT executed because the page changed. Do not repeat an ineffective popup click/key. In discovery, navigate an observed HTTP link directly or search another source. skipped_unstable_source means repeated stale actions caused a read-only return to another source; do not return to that skipped URL.
 If a complete URL is visibly printed inside the CURRENT poster, you may propose navigate with that exact URL; the app separately verifies it against the screenshot before read-only navigation. Do not invent a URL or decode a QR code by guessing.
@@ -429,8 +429,14 @@ export class Runner {
             timezone: 'Asia/Seoul',
             goal: job.goal,
             automaticEntryScope: job.prepareOne
-              ? 'Record observed task dependencies and eligibility, startsAt, selectionMethod, entryType when stated. Never invent qualifications. Selection policy supplied separately. A supported form or scoped social chain can be prepared; unresolved platform permission stays manual. No purchases, physical visits or friend tagging.'
+              ? 'Record observed task dependencies and eligibility, startsAt, selectionMethod, entryType when stated. Never invent qualifications. A supported form or social chain can be prepared for separate user task approval using executionRoutes. No purchases, physical visits or friend tagging.'
               : undefined,
+            executionRoutes: {
+              instagram: instagramBrowser(this.store).enabled
+                ? 'user_directed_browser_with_task_review'
+                : 'disabled',
+              youtube: 'unsupported',
+            },
             selectionPolicy: job.prepareOne
               ? { ...selection(this.store), facts: undefined }
               : undefined,
@@ -639,7 +645,7 @@ export class Runner {
           if (!entryObserved || (c.evidenceKind === 'text' && !proof) || taskError) {
             if (candidateRepairs++ >= 3)
               throw new ServiceError(
-                !entryObserved ? 'unobserved_entry_url' : 'unobserved_evidence',
+                taskError || (!entryObserved ? 'unobserved_entry_url' : 'unobserved_evidence'),
               );
             job.history.push({
               action: 'record_rejected',

@@ -785,3 +785,46 @@ label.check input {
 .outcome-note strong {
   display: block;
 }
+#report-groups {
+  margin: 18px 0;
+  overflow-x: auto;
+  border: 1px solid #dce3d8;
+  border-radius: 10px;
+}
+#report-groups table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#report-groups th,
+#report-groups td {
+  padding: 14px 12px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  border-bottom: 1px solid #e7ece3;
+}
+#report-groups th {
+  background: #f0f5ed;
+}
+#report-groups th:first-child,
+#report-groups td:first-child {
+  min-width: 170px;
+  max-width: 230px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#report-groups tr:nth-child(even) {
+  background: #fafbf8;
+}
+#report-groups small {
+  display: inline-block;
+  margin-top: 5px;
+  color: #687762;
+}
+#quality-form > label {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}

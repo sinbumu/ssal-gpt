@@ -33,7 +33,7 @@ export type EntryTask = TaskSpec & {
     actor: 'browser' | 'user';
   };
 };
-export function buildTasks(event: EventRecord) {
+export function buildTasks(event: Pick<EventRecord, 'tasks' | 'requirements' | 'sourceEvidence'>) {
   if (!event.tasks?.length) return undefined;
   for (const [pattern, kind] of [
     [/좋아요/, 'like'],

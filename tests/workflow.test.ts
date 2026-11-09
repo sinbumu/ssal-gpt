@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { Store, type Job } from '../src/store.js';
 import { syntheticSettings } from '../src/autonomy.js';
 import { prepareDiscoveredEntry } from '../src/workflow.js';
+import { buildTasks } from '../src/tasks.js';
 
 test('opted-in discovery chooses one observed eligible form and claims it atomically; changed policy blocks chaining', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-chain-'));
@@ -100,6 +101,61 @@ test('opted-in discovery chooses one observed eligible form and claims it atomic
     const moaChild = prepareDiscoveredEntry(store, noForm);
     assert.ok(moaChild);
     assert.equal(store.job(moaChild)!.startUrl, moaUrl);
+    const mixedParent = {
+      ...parent,
+      id: 'mixed',
+      prepareOne: { revision: syntheticSettings.revision, expires: Date.now() + 10000 },
+    };
+    store.saveJob(mixedParent);
+    const social = 'https://example.org/post/1',
+      form = 'https://form.naver.com/response/mixed';
+    const tasks = [
+      {
+        id: 'like',
+        kind: 'like' as const,
+        url: social,
+        instruction: '좋아요',
+        quote: '좋아요 후 설문',
+        dependsOn: [],
+      },
+      {
+        id: 'form',
+        kind: 'form' as const,
+        url: form,
+        instruction: '설문',
+        quote: '좋아요 후 설문',
+        dependsOn: ['like'],
+      },
+    ];
+    const mixed = store.record(
+      {
+        ...candidate,
+        title: 'SNS와 폼 혼합',
+        entryUrl: form,
+        requirements: ['좋아요 후 설문'],
+        tasks,
+      },
+      social,
+      mixedParent.id,
+      'x.png',
+      {
+        sourceEvidence: [social, form].map((url, i) => ({
+          id: String(i),
+          url,
+          title: '공식 조건',
+          text: '좋아요 후 설문',
+          screenshot: 'x.png',
+          observedAt: Date.now(),
+        })),
+      },
+    ).event;
+    assert.throws(() => buildTasks({ ...mixed, tasks: [tasks[1]!] }), /required_task_missing/);
+    const mixedId = prepareDiscoveredEntry(store, mixedParent)!;
+    assert.ok(mixedId);
+    assert.deepEqual(
+      store.job(mixedId)!.tasks!.map((t) => t.kind),
+      ['like', 'form'],
+    );
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

@@ -9,7 +9,7 @@ import { collectEvidence, channelFromTrail, searchUrl, observedQuote } from './e
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { prepareDiscoveredEntry } from './workflow.js';
 import { nextDiscoveryAfterSkip, selection } from './selection.js';
-import { runTasks } from './tasks.js';
+import { runTasks, buildTasks } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
 import { meteredModel, operations } from './operations.js';
 import { pageProgress } from './page-progress.js';
@@ -618,16 +618,24 @@ export class Runner {
                   .map((s) => ({ source: s, quote: observedQuote(s.text, c.evidenceQuote) }))
                   .find((s) => s.quote)
               : undefined;
-          if (!entryObserved || (c.evidenceKind === 'text' && !proof)) {
+          let taskError = '';
+          try {
+            buildTasks({ ...c, sourceEvidence: job.sourceEvidence });
+          } catch (error) {
+            taskError = error instanceof ServiceError ? error.code : 'invalid_tasks';
+          }
+          if (!entryObserved || (c.evidenceKind === 'text' && !proof) || taskError) {
             if (candidateRepairs++ >= 3)
               throw new ServiceError(
                 !entryObserved ? 'unobserved_entry_url' : 'unobserved_evidence',
               );
             job.history.push({
               action: 'record_rejected',
-              reason: !entryObserved
-                ? '후보를 저장하지 않았습니다. 현재 폼 주소 또는 화면의 실제 참여 링크를 사용하세요.'
-                : '후보를 저장하지 않았습니다. evidenceQuote는 요약이나 여러 조각이 아니라 관찰 본문의 짧은 연속 원문을 그대로 복사하세요. 이미지에만 있는 근거라면 현재 화면을 보고 image로 구분하세요.',
+              reason: taskError
+                ? `과제 목록을 저장하지 않았습니다 (${taskError}). 필수 행동 누락·의존 순서·실제 방문 대상·연속 원문 인용을 고치세요. 허용 근거나 사용자 승인을 생성하지 마세요.`
+                : !entryObserved
+                  ? '후보를 저장하지 않았습니다. 현재 폼 주소 또는 화면의 실제 참여 링크를 사용하세요.'
+                  : '후보를 저장하지 않았습니다. evidenceQuote는 요약이나 여러 조각이 아니라 관찰 본문의 짧은 연속 원문을 그대로 복사하세요. 이미지에만 있는 근거라면 현재 화면을 보고 image로 구분하세요.',
               url: o.url,
             });
             job.history = job.history.slice(-30);

@@ -121,9 +121,14 @@ export function report(
         missed: q?.status === 'missed' ? 1 : 0,
         won: result?.status === 'won' ? 1 : 0,
         lost: result?.status === 'lost' ? 1 : 0,
-        resultPending: r.event && !['won', 'lost'].includes(result?.status || '') ? 1 : 0,
+        resultPending:
+          r.jobs.some((j) => j.kind === 'apply' && j.status === 'completed') &&
+          !['won', 'lost'].includes(result?.status || '')
+            ? 1
+            : 0,
         humanMs: human.some(Boolean) ? human.reduce((s, t) => s + (t?.ms || 0), 0) : null,
         activeMs: r.jobs.reduce((s, j) => s + (j.activeMs || 0), 0),
+        activeSamples: r.jobs.filter((j) => typeof j.activeMs === 'number').length,
         waitingMs: r.jobs.reduce((s, j) => s + (j.autonomy?.metrics.waitingMs || 0), 0),
         calls: calls.length,
         inputTokens: r.jobs.reduce(
@@ -168,6 +173,7 @@ export function report(
     'lost',
     'resultPending',
     'activeMs',
+    'activeSamples',
     'waitingMs',
     'calls',
     'inputTokens',
@@ -216,6 +222,7 @@ export function reportCsv(value: ReturnType<typeof report>) {
     'qualityReason',
     'humanMs',
     'activeMs',
+    'waitingMs',
     'calls',
     'inputTokens',
     'outputTokens',

@@ -20,7 +20,12 @@ import {
   validateAnswer,
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
-import { AttachmentSchema, addAttachment } from './attachments.js';
+import {
+  AttachmentSchema,
+  addAttachment,
+  DriveSelectionSchema,
+  addDriveSelection,
+} from './attachments.js';
 import { inspectForm } from './forms.js';
 import { searchUrl } from './evidence.js';
 import {
@@ -43,6 +48,16 @@ import {
   dayKey,
 } from './operations.js';
 import { verifyReceipt } from './receipt.js';
+import { approveTask, buildTasks, PermissionSchema, taskPermission } from './tasks.js';
+import { SelectionSchema, selection, evaluateCandidate } from './selection.js';
+import {
+  report,
+  reportCsv,
+  QualitySchema,
+  recordQuality,
+  ActivitySchema,
+  recordActivity,
+} from './reporting.js';
 
 const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -208,6 +223,10 @@ export async function createApp(options: {
         auth: auth.publicInfo(),
         jobs: store.jobs().map((job) => ({
           ...job,
+          tasks: job.tasks?.map((task) => ({
+            ...task,
+            permitted: taskPermission(store, task, job.autonomy?.synthetic),
+          })),
           sourceEvidence: undefined,
           receiptObservations: undefined,
           autonomy: job.autonomy
@@ -239,6 +258,7 @@ export async function createApp(options: {
             score: ranked.score,
             scoreReasons: ranked.reasons,
             deadlineState: deadlineState(event),
+            assessment: evaluateCandidate(store, event),
             submissionState: store.submission(event.id)?.state,
             sourceEvidence: undefined,
           };
@@ -248,6 +268,7 @@ export async function createApp(options: {
         outcomeAlerts: outcomeAlerts(store, dayKey()),
         operations: operations(store),
         schedules: schedules(store),
+        selectionPolicy: selection(store),
         usage: usage(store),
         busy: runner.isBusy(),
         browser: browser.info(),
@@ -261,6 +282,47 @@ export async function createApp(options: {
         200,
         await addAttachment(store, options.dir, AttachmentSchema.parse(data)),
       );
+    }
+    if (method === 'POST' && url.pathname === '/api/drive-selection')
+      return send(response, 200, addDriveSelection(store, DriveSelectionSchema.parse(data)));
+    if (method === 'GET' && ['/api/report', '/api/report.csv'].includes(url.pathname)) {
+      const filters = z
+        .object({
+          from: z.string().date().optional(),
+          to: z.string().date().optional(),
+          source: z.string().max(200).optional(),
+          type: z.string().max(30).optional(),
+        })
+        .parse(Object.fromEntries(url.searchParams));
+      const value = report(store, filters);
+      return url.pathname.endsWith('.csv')
+        ? send(response, 200, reportCsv(value), 'text/csv; charset=utf-8')
+        : send(response, 200, value);
+    }
+    if (method === 'POST' && url.pathname === '/api/selection-policy') {
+      store.setSettings('selectionPolicy', SelectionSchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/quality') {
+      recordQuality(store, QualitySchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/activity') {
+      recordActivity(store, ActivitySchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/task-permission') {
+      const input = PermissionSchema.parse(data);
+      await validateUrl(input.sourceUrl, origin);
+      await validateUrl(input.taskUrl, origin);
+      if (input.expires > Date.now() + 30 * 24 * 60 * 60_000)
+        throw new ServiceError('permission_expiry_too_long');
+      const existing = store.settings<z.infer<typeof PermissionSchema>[]>('taskPermissions', []);
+      store.setSettings('taskPermissions', [
+        ...existing.filter((p) => p.taskUrl !== input.taskUrl),
+        input,
+      ]);
+      return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/outcomes') {
       const input = OutcomeSchema.parse(data);
@@ -453,6 +515,8 @@ export async function createApp(options: {
         throw new ServiceError('event_and_route_confirmation_required');
       if (event && (deadlineState(event) !== 'available' || event.blockers.length))
         throw new ServiceError('event_not_eligible');
+      if (event && evaluateCandidate(store, event).state !== 'eligible')
+        throw new ServiceError('event_qualification_review_required');
       const id = randomUUID();
       const now = new Date().toISOString();
       const startUrl =
@@ -517,6 +581,7 @@ export async function createApp(options: {
         job.autonomy.evidence = event?.sourceEvidence || [];
         job.autonomy.entryChannel = event?.entryChannel;
       }
+      if (event?.tasks?.length) job.tasks = buildTasks(event);
       if (event && !store.claimSubmission(event.id, id))
         throw new ServiceError('event_already_started_or_submitted');
       store.saveJob(job);
@@ -525,7 +590,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research|archive|unarchive|hold-note)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research|archive|unarchive|hold-note|task)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -535,6 +600,31 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      if (action === 'task') {
+        if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+        const items = z
+          .array(
+            z.object({
+              taskId: z.string().max(80),
+              mode: z.enum(['approve', 'manual']),
+              text: z.string().max(2000).optional(),
+              evidence: z.string().max(2000).optional(),
+            }),
+          )
+          .min(1)
+          .max(20)
+          .parse(data.items);
+        store.db.exec('BEGIN IMMEDIATE');
+        try {
+          for (const input of items) approveTask(store, job, input);
+          store.db.exec('COMMIT');
+        } catch (error) {
+          store.db.exec('ROLLBACK');
+          throw error;
+        }
+        runner.start(id);
+        return send(response, 200, { ok: true });
+      }
       if (
         job.archivedAt &&
         !['archive', 'unarchive', 'hold-note', 'verify-result'].includes(action)

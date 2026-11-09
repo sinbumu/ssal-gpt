@@ -49,6 +49,27 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  event_qualification_review_required:
+    '저장한 자격·선택 기준을 충족하지 않거나 원문 조건이 불명확합니다. 기회 선택 기준과 원문을 확인하세요.',
+  task_route_not_permitted:
+    '해당 서비스의 자동 실행 허용 경로가 확인되지 않았거나 만료됐습니다. 과제 확인함에서 직접 수행 결과를 기록할 수 있습니다.',
+  task_action_outside_grant:
+    '계획한 과제·대상·게시 내용과 동작이 일치하지 않아 실행하지 않았습니다.',
+  task_target_changed:
+    '과제 대상 주소가 바뀌어 중단했습니다. 기존 승인을 다른 게시물에 적용하지 않습니다.',
+  possible_existing_comment:
+    '같은 댓글이 이미 보여 중복 게시를 중단했습니다. 본인의 기존 참여인지 확인하세요.',
+  comment_content_changed: '게시할 댓글이 승인한 내용과 달라 전송하지 않았습니다.',
+  picker_login_required:
+    '파일 선택기에 Google 로그인이 필요합니다. 전용 브라우저에서 직접 로그인한 뒤 재개하세요.',
+  picker_not_visible:
+    '지원하는 파일 선택기를 확인하지 못했습니다. 전용 브라우저의 현재 파일 선택 화면을 확인하세요.',
+  picker_control_ambiguous:
+    '파일 또는 선택 버튼이 여러 개이거나 불명확합니다. 직접 대상 파일을 확인하세요.',
+  picker_recipient_not_authorized:
+    'Google Drive와 이 폼 주최자에게 선택 파일을 전달하는 허용이 필요합니다.',
+  rank_not_changed:
+    '드래그 후 순위가 바뀌지 않았습니다. 화면을 다시 확인하거나 직접 순위를 선택하세요.',
   daily_call_limit:
     '오늘 설정한 AI 호출 한도에 도달했습니다. 다음 날 재개하거나 운영 설정을 조정하세요.',
   daily_token_limit: '오늘 보고된 토큰 사용량이 설정 한도에 도달했습니다.',

@@ -522,7 +522,12 @@ export class Browser {
             y: Math.max(0, box.y),
             width: box.width,
             height: box.height,
-            checked: 'checked' in input ? input.checked : undefined,
+            checked:
+              'checked' in input
+                ? input.checked
+                : el.hasAttribute('aria-pressed')
+                  ? el.getAttribute('aria-pressed') === 'true'
+                  : undefined,
             value: input.type === 'radio' || input.type === 'checkbox' ? input.value : undefined,
           };
         })
@@ -678,7 +683,9 @@ export class Browser {
   async formSnapshot() {
     if (
       isMoaform(this.page!) ||
-      (await this.page!.locator('[role=radio]:not(input),[role=checkbox]:not(input)').count())
+      (await this.page!.locator(
+        '[role=radio]:not(input),[role=checkbox]:not(input),[draggable=true],fieldset button,[role=listitem] [role=button]',
+      ).count())
     )
       return moaformSnapshot(this.page!);
     return this.page!.evaluate(() => {

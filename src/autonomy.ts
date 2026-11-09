@@ -44,7 +44,8 @@ export type Question = {
   signature: string;
   label: string;
   description?: string;
-  kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file';
+  kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file' | 'rank';
+  picker?: boolean;
   required: boolean;
   options: { id: string; label: string }[];
   multiple: boolean;
@@ -208,11 +209,12 @@ export function consentQuestion(q: Question) {
 export function validateAnswer(q: Question, answer: string[]): string[] | undefined {
   if (q.kind === 'file')
     return (!q.required && answer.length === 0) ||
-      (answer.length === 1 && /^asset:[a-f0-9-]{36}$/.test(answer[0]!))
+      (answer.length === 1 && /^(asset|drive):[a-f0-9-]{36}$/.test(answer[0]!))
       ? answer
       : undefined;
   if (q.kind === 'text')
     return answer.length === 1 && (!q.required || !!answer[0]?.trim()) ? answer : undefined;
+  if (q.kind === 'rank' && answer.length !== q.options.length) return undefined;
   if (!q.multiple && answer.length > 1) return undefined;
   if (q.maxChoices && answer.length > q.maxChoices) return undefined;
   if (q.required && !answer.length) return undefined;

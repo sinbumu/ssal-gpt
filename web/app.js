@@ -139,7 +139,7 @@ function renderCompleted() {
     <dt>당첨 발표</dt><dd>${esc(e.announcementDate || e.announcementNote || '일정 미확인')}</dd>
     <dt>당첨 결과</dt><dd>${esc(outcomeLabel(e.eventId))}</dd></dl>
     <details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
-    <p class="hint">${e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
+    <p class="hint">${e.verification === 'user_reported' ? '사용자 완료 보고 · 앱 접수 검증 없음' : e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
     ${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
         )
@@ -173,7 +173,7 @@ function renderInbox(job) {
   const uncertainStage = box.final && /^(다음|next|continue)$/i.test(box.buttonLabel || '');
   return (
     metrics +
-    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'file' ? `<input name="${esc(q.id)}" type="file" accept=".png,.jpg,.jpeg,.pdf" ${q.required ? 'required' : ''}><label class="check"><input type="checkbox" name="upload-${esc(q.id)}" ${q.required ? 'required' : ''}>선택한 실제 파일을 이 응모 주최자에게 첨부하는 데 동의합니다 (최대 5MB).</label>` : q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
+    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'file' ? `<input name="${esc(q.id)}" type="file" accept=".png,.jpg,.jpeg,.pdf" ${q.required && !q.picker ? 'required' : ''}>${q.picker ? `<label>또는 Drive에서 선택할 정확한 파일명<input name="drive-${esc(q.id)}" maxlength="180" placeholder="같은 이름이 여러 개면 직접 선택이 필요합니다"></label>` : ''}<label class="check"><input type="checkbox" name="upload-${esc(q.id)}" ${q.required ? 'required' : ''}>선택한 실제 파일을 ${q.picker ? 'Google Drive 및 ' : ''}이 응모 주최자에게 첨부하는 데 동의합니다 (기기 파일 최대 5MB).</label>` : q.kind === 'rank' ? q.options.map((_, i) => `<label>${i + 1}순위<select name="${esc(q.id)}" required><option value="">선택</option>${q.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`).join('') : q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
   );
 }
 function renderOutcome(j) {
@@ -191,6 +191,7 @@ function renderJobActions(j) {
   return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : b('resume', j.steps >= j.maxSteps ? '20회 추가해 재개' : '새 화면에서 재개', state.busy)}${['paused', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
 }
 function render() {
+  renderSelection();
   renderOperations();
   renderOutcomeSummary();
   $('result-attention').innerHTML = $('outcome-alerts').innerHTML;
@@ -255,6 +256,7 @@ function render() {
     completedEntries: state.completedEntries,
     outcomes: state.outcomes,
   });
+  if (document.activeElement?.closest('[data-task-review]')) return;
   if (contentKey === rendered) return;
   rendered = contentKey;
   renderCompleted();
@@ -263,8 +265,12 @@ function render() {
         .sort((a, b) => b.score - a.score)
         .map((e) => {
           const ended = e.deadlineState === 'ended';
-          const blocked = e.deadlineState !== 'available' || e.blockers.length || e.submissionState;
-          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '진행한 응모' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p><dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '이미 시작한 응모' : '응모 준비'}</button></div></article>`;
+          const blocked =
+            (e.assessment && e.assessment.state !== 'eligible') ||
+            e.deadlineState !== 'available' ||
+            e.blockers.length ||
+            e.submissionState;
+          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '진행한 응모' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p><dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><p class="hint">${(e.assessment?.reasons || []).map(esc).join(' · ')}</p><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '이미 시작한 응모' : '응모 준비'}</button></div></article>`;
         })
         .join('')
     : '<div class="empty">아직 모아둔 기회가 없어요.<br><small>AI를 연결한 뒤 첫 탐색을 시작해 보세요.</small></div>';
@@ -281,7 +287,7 @@ function render() {
   const cards = state.jobs.length
     ? state.jobs.map(
         (j) =>
-          `<article class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ result: '당첨 발표 확인', discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.note)}</p>${renderOutcome(j)}<div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${renderInbox(j)}${j.approval && !j.archivedAt ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && !j.archivedAt && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}${renderJobActions(j)}</article>`,
+          `<article data-activity-job="${esc(j.id)}" class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(statuses[j.status])}</span><h3>${esc({ result: '당첨 발표 확인', discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.note)}</p>${renderOutcome(j)}<div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${renderTasks(j)}${renderInbox(j)}${j.approval && !j.archivedAt ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && !j.archivedAt && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}${renderJobActions(j)}</article>`,
       )
     : [];
   const active = (j) =>
@@ -498,13 +504,15 @@ const handleAutonomyClick = guard(async (event) => {
   if (recommend) {
     const box = state.jobs.find((j) => j.id === recommend.dataset.recommend).autonomy.inbox;
     const form = recommend.closest('form');
-    for (const q of box.items.filter((q) => q.recommended))
+    for (const q of box.items.filter((q) => q.recommended)) {
+      let rankIndex = 0;
       for (const el of form.elements) {
         if (el.name !== q.id) continue;
         if (el.type === 'checkbox' || el.type === 'radio')
           el.checked = q.recommended.includes(el.value);
-        else el.value = q.recommended[0] || '';
+        else el.value = q.recommended[q.kind === 'rank' ? rankIndex++ : 0] || '';
       }
+    }
   }
 });
 document.addEventListener('click', (event) => {
@@ -521,7 +529,21 @@ document.addEventListener('submit', (event) => {
       box.items.filter((q) => q.kind !== 'file').map((q) => [q.id, f.getAll(q.id)]),
     );
     for (const q of box.items.filter((q) => q.kind === 'file')) {
-      const file = f.get(q.id);
+      const file = f.get(q.id),
+        driveName = f.get(`drive-${q.id}`)?.trim();
+      if (driveName) {
+        if (file?.size) throw new Error('기기 파일 또는 Drive 파일 중 하나만 선택해 주세요.');
+        if (!f.has(`upload-${q.id}`))
+          throw new Error('Drive와 주최자에게 파일 전달을 허용해 주세요.');
+        const saved = await api('/api/drive-selection', {
+          jobId: form.dataset.inbox,
+          questionId: q.id,
+          name: driveName,
+          allowPicker: true,
+        });
+        answers[q.id] = [saved.id];
+        continue;
+      }
       if (!file?.size) {
         answers[q.id] = [];
         continue;
@@ -541,6 +563,7 @@ document.addEventListener('submit', (event) => {
         name: file.name,
         base64,
         allowUpload: true,
+        allowPicker: !!q.picker,
       });
       answers[q.id] = [saved.id];
     }
@@ -841,3 +864,151 @@ $('autonomy-demo-extended').onclick = guard(async () => {
   });
   toast('실제 경품이 없는 확장 합성 테스트를 시작했습니다. 모델 사용량은 발생합니다.');
 });
+
+let selectionLoaded = false;
+function renderSelection() {
+  if (!selectionLoaded && state.selectionPolicy) {
+    const f = $('selection-policy-form'),
+      p = state.selectionPolicy;
+    f.elements.facts.value = p.facts.map((v) => `${v.key}=${v.value}`).join('\n');
+    f.elements.preferredPrizes.value = p.preferredPrizes.join(', ');
+    for (const option of f.elements.excludedTypes.options)
+      option.selected = p.excludedTypes.includes(option.value);
+    for (const k of ['maxMinutes', 'maxQuestions', 'maxCalls', 'maxSwitches'])
+      f.elements[k].value = p[k];
+    f.elements.switchOnBurden.checked = p.switchOnBurden;
+    selectionLoaded = true;
+    void loadReport().catch((e) => toast(e.message, true));
+  }
+  const select = $('quality-form').elements.eventId,
+    previous = select.value;
+  const html = state.events
+    .map((e) => `<option value="${esc(e.id)}">${esc(e.title)}</option>`)
+    .join('');
+  if (select.innerHTML !== html) {
+    select.innerHTML = html;
+    if (previous) select.value = previous;
+  }
+}
+function renderTasks(job) {
+  if (!job.tasks?.length) return '';
+  const labels = {
+    like: '좋아요',
+    follow: '팔로우',
+    comment: '댓글',
+    form: '응모 폼',
+    manual: '직접 수행',
+  };
+  const status = {
+    pending: '대기',
+    review: '확인 필요',
+    approved: '위임됨',
+    attempted: '결과 불명',
+    verified: '화면 확인',
+    manual_reported: '사용자 완료 보고',
+  };
+  const pending = job.tasks.filter((t) => ['review', 'attempted'].includes(t.state));
+  return `<div class="inbox"><h4>참여 과제</h4><ol>${job.tasks.map((t) => `<li>${esc(labels[t.kind])} · ${esc(status[t.state])} — ${esc(t.instruction)}${t.proof ? `<small> · ${esc(t.proof.quote)}</small>` : ''}</li>`).join('')}</ol>${!job.archivedAt && pending.length ? `<form data-task-review="${esc(job.id)}">${pending.map((t) => `<fieldset><legend>${esc(labels[t.kind])} · ${esc(t.instruction)}</legend>${safeLink(t.url, '과제 대상 열기')}<blockquote>${esc(t.quote)}</blockquote>${t.permitted && !t.attempt ? `<p class="hint">자동 실행 허용 근거가 등록된 경로입니다. 아래 내용은 이 작업·대상에만 적용합니다.</p><input type="hidden" name="mode-${esc(t.id)}" value="approve">${t.kind === 'comment' ? `<label>게시할 정확한 내용<textarea name="text-${esc(t.id)}" required maxlength="2000">${esc(t.draft || '')}</textarea></label>` : ''}` : `<p class="hint">자동 실행 ${t.attempt ? '결과가 불명확합니다' : '허용 경로가 확인되지 않았습니다'}. 직접 확인한 결과만 기록하세요.</p><input type="hidden" name="mode-${esc(t.id)}" value="manual"><label>직접 수행·확인한 결과<textarea name="evidence-${esc(t.id)}" required maxlength="2000"></textarea></label>`}</fieldset>`).join('')}<button type="submit" ${state.busy ? 'disabled' : ''}>과제 확인을 한 번에 저장하고 계속</button></form>` : ''}</div>`;
+}
+document.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (!form.matches('[data-task-review]')) return;
+  void guard(async () => {
+    const job = state.jobs.find((j) => j.id === form.dataset.taskReview),
+      values = new FormData(form);
+    await api(`/api/jobs/${job.id}/task`, {
+      items: job.tasks
+        .filter((t) => ['review', 'attempted'].includes(t.state))
+        .map((t) => ({
+          taskId: t.id,
+          mode: values.get(`mode-${t.id}`),
+          text: values.get(`text-${t.id}`) || undefined,
+          evidence: values.get(`evidence-${t.id}`) || undefined,
+        })),
+    });
+  })(event);
+});
+$('selection-policy-form').onsubmit = guard(async () => {
+  const f = $('selection-policy-form').elements;
+  const facts = f.facts.value
+    .split('\n')
+    .filter((v) => v.trim())
+    .map((line) => {
+      const i = line.indexOf('=');
+      if (i < 1 || !line.slice(i + 1).trim())
+        throw new Error('자격은 항목=값 형식으로 적어 주세요.');
+      return { key: line.slice(0, i).trim(), value: line.slice(i + 1).trim() };
+    });
+  await api('/api/selection-policy', {
+    facts,
+    preferredPrizes: f.preferredPrizes.value
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
+    excludedTypes: [...f.excludedTypes.selectedOptions].map((o) => o.value),
+    maxMinutes: +f.maxMinutes.value,
+    maxQuestions: +f.maxQuestions.value,
+    maxCalls: +f.maxCalls.value,
+    maxSwitches: +f.maxSwitches.value,
+    switchOnBurden: f.switchOnBurden.checked,
+  });
+  toast('기회 선택 기준을 저장했습니다.');
+});
+$('task-permission-form').onsubmit = guard(async () => {
+  const data = new FormData($('task-permission-form'));
+  await api('/api/task-permission', {
+    taskUrl: data.get('taskUrl'),
+    sourceUrl: data.get('sourceUrl'),
+    basis: data.get('basis'),
+    kinds: data.getAll('kinds'),
+    evidence: data.get('evidence'),
+    expires: Date.now() + Number(data.get('days')) * 86400000,
+  });
+  toast('서비스 허용 근거를 등록했습니다. 실제 과제 대상과 게시 내용 승인은 별도입니다.');
+});
+async function loadReport() {
+  const query = new URLSearchParams(
+    [...new FormData($('report-filter'))].filter(([, value]) => value),
+  ).toString();
+  const data = await api(`/api/report?${query}`);
+  $('report-note').textContent = data.notes;
+  $('report-download').href = `/api/report.csv?${query}`;
+  $('report-groups').innerHTML =
+    `<table><thead><tr><th>출처 · 유형</th><th>접수 / 미확인</th><th>무효 / 누락</th><th>사람 조작</th><th>AI 호출 · 토큰</th><th>추정 USD</th><th>당첨 / 수령</th><th>실현 KRW</th></tr></thead><tbody>${data.groups.map((g) => `<tr><td>${esc(g.source)} · ${esc(g.type)}</td><td>${g.completed} / ${g.unknown}</td><td>${g.invalid} / ${g.missed}</td><td>${g.humanMs === null ? '미계측' : (g.humanMs / 60000).toFixed(1) + '분'}<br><small>미계측 ${g.unmeasuredHuman}건</small></td><td>${g.calls}회 · ${(g.inputTokens + g.outputTokens).toLocaleString()}</td><td>${g.estimatedUsd === null ? '미산정' : '$' + g.estimatedUsd.toFixed(4)}<br><small>단가 미산정 ${g.unpricedCalls}회</small></td><td>${g.won} / ${g.received}</td><td>${g.realizedKrw.toLocaleString()}원</td></tr>`).join('')}</tbody></table>`;
+  $('quality-records').innerHTML = data.rows
+    .filter((r) => r.qualityReason)
+    .map(
+      (r) =>
+        `<p><strong>${esc(r.title)}</strong> · ${esc({ valid: '유효', invalid: '무효', missed: '누락', unconfirmed: '미확인' }[r.quality])}<br>${esc(r.qualityReason)}</p>`,
+    )
+    .join('');
+}
+$('report-filter').onsubmit = guard(loadReport);
+$('quality-form').onsubmit = guard(async () => {
+  await api('/api/quality', Object.fromEntries(new FormData($('quality-form'))));
+  await loadReport();
+  toast('확인 근거를 기록했습니다. 접수 상태는 변경하지 않습니다.');
+});
+const activitySession = crypto.randomUUID();
+let activitySequence = 0,
+  activityJob,
+  lastActivity = 0;
+for (const eventName of ['pointerdown', 'keydown', 'input'])
+  document.addEventListener(eventName, (event) => {
+    const target = event.target.closest('[data-activity-job], [data-inbox], [data-job]');
+    if (!target) return;
+    activityJob = target.dataset.activityJob || target.dataset.inbox || target.dataset.job;
+    lastActivity = Date.now();
+  });
+setInterval(() => {
+  if (!state || !activityJob) return;
+  void api('/api/activity', {
+    jobId: activityJob,
+    sessionId: activitySession,
+    sequence: ++activitySequence,
+    active:
+      document.visibilityState === 'visible' &&
+      document.hasFocus() &&
+      Date.now() - lastActivity < 30000,
+  }).catch(() => {});
+}, 5000);

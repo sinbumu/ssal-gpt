@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
 import { canonicalUrl, deadlineState, scoreCandidate, type Job, type Store } from './store.js';
+import { evaluateCandidate } from './selection.js';
+import { buildTasks } from './tasks.js';
 
 // A narrow, opt-in route. This is not permission for arbitrary SNS engagement.
 export function prepareDiscoveredEntry(store: Store, parent: Job) {
@@ -24,19 +26,21 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
         url.protocol === 'https:' &&
         ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
           (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
-          (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname))) &&
+          (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname)) ||
+          (url.hostname === 'docs.google.com' && /^\/forms\//.test(url.pathname)) ||
+          !!e.tasks?.length) &&
         deadlineState(e) === 'available' &&
         !e.blockers.length &&
-        e.effortMinutes <= 8 &&
-        !/구매|결제|방문|친구.*태그|팔로우|좋아요|구독|리그램|댓글|인증샷|첨부/.test(
-          e.requirements.join(' '),
-        ) &&
+        evaluateCandidate(store, e).state === 'eligible' &&
+        !/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')) &&
+        (!/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) || !!e.tasks?.length) &&
         e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl))
       );
     })
     .sort(
       (a, b) =>
-        scoreCandidate(b).score - scoreCandidate(a).score || a.effortMinutes - b.effortMinutes,
+        evaluateCandidate(store, b).score - evaluateCandidate(store, a).score ||
+        a.effortMinutes - b.effortMinutes,
     )[0];
   if (!event) {
     parent.note =
@@ -68,6 +72,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     approvedTexts: [],
     history: [],
     autonomy: createAutonomy(config, new URL(event.entryUrl).origin),
+    tasks: buildTasks(event),
   };
   child.autonomy!.evidence = event.sourceEvidence;
   child.autonomy!.organizer = event.organizer;

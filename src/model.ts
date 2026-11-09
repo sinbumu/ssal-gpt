@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Auth, ServiceError, type ProviderChoice } from './auth.js';
 import { AnswerPlanSchema } from './autonomy.js';
+import { TaskSpecSchema } from './tasks.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -17,6 +18,20 @@ export const CandidateSchema = z.object({
   effortMinutes: z.number().min(1).max(300),
   announcementDate: z.string().date().nullable().optional(),
   announcementNote: z.string().max(500).optional(),
+  startsAt: z.string().datetime({ offset: true }).nullable().optional(),
+  selectionMethod: z.enum(['draw', 'first_come', 'judged', 'all', 'unknown']).optional(),
+  entryType: z.enum(['survey', 'quiz', 'social', 'mixed', 'other']).optional(),
+  eligibility: z
+    .array(
+      z.object({
+        key: z.string().min(1).max(100),
+        acceptedValues: z.array(z.string().min(1).max(200)).min(1).max(30),
+        quote: z.string().min(1).max(1000),
+      }),
+    )
+    .max(20)
+    .optional(),
+  tasks: z.array(TaskSpecSchema).max(20).optional(),
 });
 export type Candidate = z.infer<typeof CandidateSchema>;
 export const StepSchema = z

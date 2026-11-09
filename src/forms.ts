@@ -1,4 +1,12 @@
 import type { Page } from 'playwright';
+import {
+  applyRank,
+  applyPicker,
+  rankOrder,
+  rankLists,
+  pickerContainer,
+  type Upload,
+} from './complex-controls.js';
 import { hash, type Question } from './autonomy.js';
 import { ServiceError } from './auth.js';
 
@@ -11,7 +19,7 @@ export type FormView = {
 type Binding = {
   indices: number[];
   optionValues: string[];
-  custom?: 'moa-radio' | 'notice' | 'aria-choice';
+  custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'rank' | 'picker';
 };
 export const isMoaform = (page: Page) => new URL(page.url()).hostname === 'answer.moaform.com';
 // Bind rendered controls only; never read provider-private response state.
@@ -45,15 +53,78 @@ export async function inspectForm(page: Page) {
     const groups: {
       label: string;
       description: string;
-      kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file';
+      kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file' | 'rank';
       required: boolean;
       multiple: boolean;
       options: { label: string; value: string }[];
       indices: number[];
       form: number;
-      custom?: 'moa-radio' | 'notice' | 'aria-choice';
+      custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'rank' | 'picker';
     }[] = [];
     const forms = [...document.forms];
+    const lists = [...document.querySelectorAll('[role=listbox],[role=list],ol,ul')];
+    for (let index = 0; index < lists.length; index++) {
+      const list = lists[index]!;
+      const label =
+        list.getAttribute('aria-label') ||
+        list.closest('fieldset')?.querySelector('legend')?.textContent?.trim() ||
+        '';
+      const items = [...list.querySelectorAll(':scope > [draggable=true],:scope > [role=option]')];
+      if (
+        !helpers.visible(list) ||
+        !/순위|순서|우선|rank|order/i.test(label) ||
+        !items.length ||
+        !items.every((el) => el.getAttribute('draggable') === 'true' && helpers.visible(el))
+      )
+        continue;
+      groups.push({
+        label,
+        description: '모든 항목을 원하는 순서로 배치',
+        kind: 'rank',
+        required: true,
+        multiple: true,
+        options: items
+          .map((el) => ({
+            label: el.getAttribute('aria-label') || (el as HTMLElement).innerText.trim(),
+            value: '',
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+        indices: [index],
+        form: forms.indexOf(list.closest('form')!),
+        custom: 'rank',
+      });
+    }
+    if (location.hostname === 'docs.google.com' || location.pathname.startsWith('/demo/')) {
+      const controls = [
+        ...document.querySelectorAll<HTMLElement>('button,[role=button],input[type=button]'),
+      ];
+      for (let index = 0; index < controls.length; index++) {
+        const button = controls[index]!;
+        if (
+          !helpers.visible(button) ||
+          !/^(파일 추가|파일 업로드|add file|upload file)$/i.test(button.innerText.trim())
+        )
+          continue;
+        const block = button.closest('[role=listitem],fieldset');
+        if (!block || block.querySelector('input[type=file]')) continue;
+        const label =
+          block.getAttribute('aria-label') ||
+          block.querySelector('legend,[role=heading]')?.textContent?.trim();
+        if (!label) throw new Error('unlabelled_file_picker');
+        groups.push({
+          label,
+          description: '파일이 Google Drive 및 폼 주최자에게 전달될 수 있습니다.',
+          kind: 'file',
+          required: block.getAttribute('aria-required') === 'true' || /\*/.test(label),
+          multiple: false,
+          options: [],
+          indices: [index],
+          form: forms.indexOf(block.closest('form')!),
+          custom: 'picker',
+        });
+      }
+    }
+
     const seen = new Set<number>();
     for (let index = 0; index < all.length; index++) {
       const el = all[index]!;
@@ -315,6 +386,7 @@ export async function inspectForm(page: Page) {
       kind: g.kind,
       required: g.required,
       multiple: g.multiple,
+      picker: g.custom === 'picker' || undefined,
       maxChoices: g.multiple
         ? Number((g.label + ' ' + g.description).match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) ||
           undefined
@@ -350,10 +422,7 @@ export async function applyAnswers(
   answers: Map<string, string[]>,
   onField: () => void,
   signal: AbortSignal,
-  attachment?: (
-    ref: string,
-    question: Question,
-  ) => Promise<{ name: string; mimeType: string; buffer: Buffer; beforeUpload?: () => void }>,
+  attachment?: (ref: string, question: Question) => Promise<Upload>,
 ) {
   const initial = await inspectForm(page);
   if (initial.view.fingerprint !== expected.fingerprint)
@@ -373,6 +442,18 @@ export async function applyAnswers(
       throw new ServiceError('form_structure_changed');
     const binding = fresh.bindings.get(question.id)!;
     if (binding.custom === 'notice') continue;
+    if (binding.custom === 'rank') {
+      await applyRank(page, binding.indices[0]!, answer, signal);
+      onField();
+      continue;
+    }
+    if (binding.custom === 'picker') {
+      if (!answer.length && !question.required) continue;
+      if (!attachment) throw new ServiceError('attachment_resolver_required');
+      await applyPicker(page, binding.indices[0]!, await attachment(answer[0]!, question), signal);
+      onField();
+      continue;
+    }
     if (binding.custom === 'aria-choice') {
       const controls = page.locator('[role=radio],[role=checkbox]');
       // Select radio target first; clicking the old radio would reselect it.
@@ -436,6 +517,7 @@ export async function applyAnswers(
         if (!answer.length) continue;
         if (!attachment) throw new ServiceError('attachment_resolver_required');
         const file = await attachment(answer[0]!, question);
+        if (file.fromDrive) throw new ServiceError('drive_file_requires_picker');
         const accepted = ((await control.getAttribute('accept')) || '')
           .split(',')
           .map((s) => s.trim().toLowerCase())
@@ -538,7 +620,7 @@ export async function formValuesHash(page: Page) {
   return hash(
     await page
       .locator(
-        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox]',
+        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[draggable=true],[role=listitem] a,fieldset a',
       )
       .evaluateAll((els) =>
         els
@@ -547,6 +629,9 @@ export async function formValuesHash(page: Page) {
             value: (el as HTMLInputElement).value,
             checked: (el as HTMLInputElement).checked,
             ariaChecked: el.getAttribute('aria-checked'),
+            text: el.matches('[draggable=true],a')
+              ? el.getAttribute('aria-label') || el.textContent
+              : undefined,
             files: Array.from((el as HTMLInputElement).files || []).map((f) => ({
               name: f.name,
               size: f.size,
@@ -565,6 +650,25 @@ export async function moaformSnapshot(page: Page) {
   for (const q of view.questions) {
     const b = bindings.get(q.id)!;
     if (b.custom === 'notice') continue;
+    if (b.custom === 'rank') {
+      fields.push({
+        label: q.label,
+        type: q.kind,
+        group: q.id,
+        value: (await rankOrder(page.locator(rankLists).nth(b.indices[0]!))).join(' → '),
+      });
+      continue;
+    }
+    if (b.custom === 'picker') {
+      const { container } = await pickerContainer(page, b.indices[0]!);
+      fields.push({
+        label: q.label,
+        type: q.kind,
+        group: q.id,
+        value: await container.locator('a').allTextContents(),
+      });
+      continue;
+    }
     if (b.custom === 'moa-radio' || b.custom === 'aria-choice') {
       for (let i = 0; i < b.indices.length; i++)
         fields.push({

@@ -7,6 +7,7 @@ import type { Candidate, Step } from './model.js';
 import type { AutonomyState } from './autonomy.js';
 import type { BrowserEngine } from './browser.js';
 import type { SourceEvidence } from './evidence.js';
+import type { EntryTask } from './tasks.js';
 
 export type JobStatus =
   | 'queued'
@@ -31,7 +32,13 @@ export type Approval = {
 export type Job = {
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
-  prepareOne?: { revision: string; expires: number; childId?: string };
+  prepareOne?: { revision: string; expires: number; childId?: string; switches?: number };
+  activeMs?: number;
+  transmitted?: boolean;
+  switchReason?: string;
+  seenQuestions?: string[];
+  tasks?: EntryTask[];
+  taskFormStarted?: boolean;
   parentId?: string;
   scheduleId?: string;
   autonomy?: AutonomyState;
@@ -349,6 +356,8 @@ export class Store {
       job.status = 'completed';
       job.uncertain = false;
       job.note = '완료 문구와 접수 결과를 확인했습니다.';
+      if (job.taskFormStarted && job.tasks?.at(-1)?.kind === 'form')
+        job.tasks.at(-1)!.state = 'verified';
       delete job.approval;
       if (job.autonomy) {
         job.autonomy.metrics.finishedAt = Date.now();

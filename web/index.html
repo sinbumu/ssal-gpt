@@ -618,6 +618,145 @@
           </form>
           <div id="schedules"></div>
         </section>
+        <section class="panel" id="selection-policy">
+          <h2>기회 선택 기준</h2>
+          <p class="hint">
+            자격은 직접 확인한 사실만 저장합니다. 원문의 조건과 정확히 비교할 수 없으면 확인
+            대상으로 남습니다.
+          </p>
+          <form id="selection-policy-form">
+            <label
+              >확인한 자격 (한 줄에 항목=값)<textarea
+                name="facts"
+                placeholder="거주지역=서울
+회원 여부=비회원"
+              ></textarea>
+            </label>
+            <label>선호 경품 (쉼표 구분)<input name="preferredPrizes" /></label>
+            <label
+              >제외 유형<select name="excludedTypes" multiple>
+                <option value="survey">설문</option>
+                <option value="quiz">퀴즈</option>
+                <option value="social">SNS</option>
+                <option value="mixed">혼합 과제</option>
+                <option value="other">기타</option>
+              </select></label
+            >
+            <div class="form-row">
+              <label
+                >실행 시간 상한 (분)<input
+                  name="maxMinutes"
+                  type="number"
+                  min="1"
+                  max="120"
+                  required /></label
+              ><label
+                >문항 수 상한<input
+                  name="maxQuestions"
+                  type="number"
+                  min="1"
+                  max="200"
+                  required /></label
+              ><label
+                >판단 횟수 상한<input
+                  name="maxCalls"
+                  type="number"
+                  min="1"
+                  max="300"
+                  required /></label
+              ><label
+                >대체 후보 최대 횟수<input
+                  name="maxSwitches"
+                  type="number"
+                  min="0"
+                  max="5"
+                  required
+              /></label>
+            </div>
+            <label
+              ><input name="switchOnBurden" type="checkbox" />전송 전 부담이 상한을 넘으면 다음 적격
+              후보로 전환</label
+            >
+            <button type="submit">선택 기준 저장</button>
+          </form>
+        </section>
+        <section class="panel" id="task-permissions">
+          <details>
+            <summary>서비스 운영자의 자동 실행 허용 근거 등록</summary>
+            <p class="hint">
+              응모 대행 승인과 별개입니다. 해당 서비스가 공개한 허용 또는 운영자로부터 받은 권한이
+              있는 정확한 대상만 등록합니다. Instagram·YouTube 소비자 계정 쓰기는 이 버전에서 자동
+              실행 경로가 검증되지 않아 등록해도 직접 수행으로 남습니다.
+            </p>
+            <form id="task-permission-form">
+              <label>허용 대상 URL<input name="taskUrl" type="url" required /></label
+              ><label>허용 근거 URL<input name="sourceUrl" type="url" required /></label
+              ><label
+                >허용 종류<select name="basis">
+                  <option value="published_permission">서비스가 공개한 허용</option>
+                  <option value="operator_authorization">운영자가 부여한 권한</option>
+                </select></label
+              ><label
+                >허용된 동작<select name="kinds" multiple required>
+                  <option value="like">좋아요</option>
+                  <option value="follow">팔로우</option>
+                  <option value="comment">댓글</option>
+                </select></label
+              ><label
+                >권한의 대상·범위·근거<textarea
+                  name="evidence"
+                  required
+                  minlength="20"
+                  maxlength="2000"
+                ></textarea></label
+              ><label
+                >유효 기간 (일, 최대 30)<input
+                  name="days"
+                  type="number"
+                  value="1"
+                  min="1"
+                  max="30"
+                  required /></label
+              ><button type="submit">허용 근거 등록</button>
+            </form>
+          </details>
+        </section>
+        <section class="panel" id="performance">
+          <h2>운영 성과</h2>
+          <form id="report-filter" class="form-row">
+            <label>발견일 시작<input name="from" type="date" /></label
+            ><label>발견일 끝<input name="to" type="date" /></label
+            ><label>출처 도메인<input name="source" placeholder="전체" /></label
+            ><label
+              >유형<select name="type">
+                <option value="">전체</option>
+                <option value="survey">설문</option>
+                <option value="quiz">퀴즈</option>
+                <option value="social">SNS</option>
+                <option value="mixed">혼합</option>
+                <option value="other">기타</option>
+                <option value="discovery">탐색 비용</option>
+              </select></label
+            ><button type="submit">보고서 갱신</button>
+          </form>
+          <p id="report-note" class="hint"></p>
+          <div id="report-groups" style="overflow-x: auto"></div>
+          <a id="report-download" href="/api/report.csv" download="ssal-report.csv">CSV 내려받기</a>
+          <h3>누락·무효 확인</h3>
+          <form id="quality-form">
+            <label>기회<select name="eventId" required></select></label
+            ><label
+              >확인 결과<select name="status">
+                <option value="unconfirmed">미확인</option>
+                <option value="valid">유효 확인</option>
+                <option value="invalid">응모 무효</option>
+                <option value="missed">참여 누락</option>
+              </select></label
+            ><label>확인 근거<textarea name="reason" required></textarea></label
+            ><button type="submit">확인 결과 기록</button>
+          </form>
+          <div id="quality-records"></div>
+        </section>
         <section class="panel" id="rewards">
           <div class="section-head"><h2>08 · 결과·경품</h2></div>
           <div id="outcome-summary"></div>

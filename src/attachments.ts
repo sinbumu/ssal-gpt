@@ -12,6 +12,7 @@ export const AttachmentSchema = z.object({
   name: z.string().min(1).max(180),
   base64: z.string().max(7000000),
   allowUpload: z.literal(true),
+  allowPicker: z.boolean().default(false),
 });
 type Asset = {
   id: string;
@@ -24,6 +25,7 @@ type Asset = {
   sha256: string;
   origin: string;
   attemptedAt?: number;
+  allowPicker?: boolean;
 };
 export async function addAttachment(
   store: Store,
@@ -35,6 +37,7 @@ export async function addAttachment(
   const q = box?.items.find((q) => q.id === input.questionId && q.kind === 'file');
   if (!job || job.status !== 'needs_user' || job.uncertain || !q)
     throw new ServiceError('attachment_question_unavailable');
+  if (q.picker && !input.allowPicker) throw new ServiceError('picker_recipient_not_authorized');
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(input.base64)) throw new ServiceError('invalid_attachment');
   const buffer = Buffer.from(input.base64, 'base64');
   if (!buffer.length || buffer.length > 5 * 1024 * 1024)
@@ -62,6 +65,7 @@ export async function addAttachment(
     size: buffer.length,
     sha256: createHash('sha256').update(buffer).digest('hex'),
     origin: job.autonomy!.origin,
+    allowPicker: q.picker && input.allowPicker,
   };
   await writeFile(join(privateDirectory(join(dir, 'attachments')), id), buffer, {
     mode: 0o600,
@@ -81,6 +85,8 @@ export async function loadAttachment(
   questionId: string,
   reference: string,
 ) {
+  if (reference.startsWith('drive:'))
+    return loadDriveSelection(store, jobId, questionId, reference);
   const id = reference.replace(/^asset:/, '');
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new ServiceError('invalid_attachment_reference');
   const asset = store.settings<Asset | null>(`attachment:${id}`, null);
@@ -100,11 +106,67 @@ export async function loadAttachment(
     name: asset.name,
     mimeType: asset.mimeType,
     buffer,
+    allowPicker: asset.allowPicker,
+    fromDrive: false,
     beforeUpload() {
       const current = store.settings<Asset | null>(`attachment:${id}`, null);
       if (!current || current.attemptedAt)
         throw new ServiceError('attachment_upload_state_unknown');
       store.setSettings(`attachment:${id}`, { ...current, attemptedAt: Date.now() });
+    },
+  };
+}
+
+export const DriveSelectionSchema = z
+  .object({
+    jobId: z.string().uuid(),
+    questionId: z.string().max(100),
+    name: z.string().trim().min(1).max(180),
+    allowPicker: z.literal(true),
+  })
+  .strict();
+type DriveSelection = z.infer<typeof DriveSelectionSchema> & {
+  id: string;
+  origin: string;
+  attemptedAt?: number;
+};
+export function addDriveSelection(store: Store, input: z.infer<typeof DriveSelectionSchema>) {
+  const job = store.job(input.jobId);
+  const q = job?.autonomy?.inbox?.items.find(
+    (q) => q.id === input.questionId && q.kind === 'file' && q.picker,
+  );
+  if (!job || job.status !== 'needs_user' || job.uncertain || !q)
+    throw new ServiceError('attachment_question_unavailable');
+  const id = randomUUID();
+  store.setSettings(`driveSelection:${id}`, { ...input, id, origin: job.autonomy!.origin });
+  job.autonomy!.privateAnswers = [
+    ...new Set([...(job.autonomy!.privateAnswers || []), input.name]),
+  ];
+  store.saveJob(job);
+  return { id: `drive:${id}`, name: input.name };
+}
+function loadDriveSelection(store: Store, jobId: string, questionId: string, ref: string) {
+  const id = ref.slice(6),
+    file = store.settings<DriveSelection | null>(`driveSelection:${id}`, null),
+    job = store.job(jobId);
+  if (
+    !file ||
+    file.jobId !== jobId ||
+    file.questionId !== questionId ||
+    file.origin !== job?.autonomy?.origin ||
+    !file.allowPicker
+  )
+    throw new ServiceError('attachment_outside_grant');
+  return {
+    name: file.name,
+    mimeType: '',
+    buffer: Buffer.alloc(0),
+    fromDrive: true,
+    allowPicker: true,
+    beforeUpload() {
+      const latest = store.settings<DriveSelection | null>(`driveSelection:${id}`, null);
+      if (!latest || latest.attemptedAt) throw new ServiceError('attachment_upload_state_unknown');
+      store.setSettings(`driveSelection:${id}`, { ...latest, attemptedAt: Date.now() });
     },
   };
 }

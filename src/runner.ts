@@ -8,6 +8,8 @@ import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, searchUrl, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { prepareDiscoveredEntry } from './workflow.js';
+import { nextDiscoveryAfterSkip, selection } from './selection.js';
+import { runTasks } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
 import { meteredModel, operations } from './operations.js';
 import { pageProgress } from './page-progress.js';
@@ -181,7 +183,10 @@ export class Runner {
         this.activeId = undefined;
         if (mayContinue) {
           try {
-            const childId = prepareDiscoveredEntry(this.store, job);
+            const childId = prepareDiscoveredEntry(
+              this.store,
+              nextDiscoveryAfterSkip(this.store, job) || job,
+            );
             if (childId && !operations(this.store).queueEnabled) this.start(childId);
           } catch {
             this.store.note(
@@ -342,6 +347,8 @@ export class Runner {
   private async run(job: Job, signal: AbortSignal, approved?: Approval) {
     const model = meteredModel(this.store, this.model, job);
     if (job.kind === 'result') return runResultCheck(this.store, this.browser, model, job, signal);
+    if (job.tasks?.length && !(await runTasks(this.store, this.browser, model, job, signal)))
+      return;
     if (job.autonomy) return runAutonomous(this.store, this.browser, model, job, signal);
     const started = Date.now();
     let previousFingerprint = '';
@@ -410,7 +417,10 @@ export class Runner {
             timezone: 'Asia/Seoul',
             goal: job.goal,
             automaticEntryScope: job.prepareOne
-              ? 'Only a new form.naver.com/response/, moaform.com/q/ or its answer.moaform.com/answers/ destination, observed read-only, <=8 minutes, no purchase/visit/SNS engagement/file task. Other hosts cannot be auto-prepared; search another candidate.'
+              ? 'Record observed task dependencies and eligibility, startsAt, selectionMethod, entryType when stated. Never invent qualifications. Selection policy supplied separately. A supported form or scoped social chain can be prepared; unresolved platform permission stays manual. No purchases, physical visits or friend tagging.'
+              : undefined,
+            selectionPolicy: job.prepareOne
+              ? { ...selection(this.store), facts: undefined }
               : undefined,
             userContext: job.userContext || '',
             mode: job.kind,
@@ -689,6 +699,7 @@ export class Runner {
       job.note = safeMessage(error);
       this.store.note(job.id, job.note);
     } finally {
+      job.activeMs = (job.activeMs || 0) + Date.now() - started;
       this.store.saveJob(job);
     }
   }

@@ -269,3 +269,11 @@ CI는 비밀정보 없는 임시 합성 데이터만 사용한다. 사용자의 
 - [Playwright 지속 브라우저](https://playwright.dev/docs/api/class-browsertype)
 
 ChatGPT 경로는 `store:false`, `stream:true`, 직접 Responses 호출과 `ssal_browser` 네임스페이스의 로컬 도구를 사용한다. 네이티브 Computer Use API에 의존하지 않는다. `browser`는 실제 호출에서 예약된 네임스페이스로 거부됨을 확인해 사용하지 않는다. API와 플랜 사용량 사이 자동 전환은 없다.
+
+## 고정 잔여 목표 구현 중 (2026-11-09)
+
+기준은 [고정 체크리스트](goal-checklist.md)의 G1–G4다. 첫 통합 변경에서 과제 의존 관계·SNS 상태/댓글 확인, 사용자 확인 자격·선호/실행 한도와 안전한 후보 전환, 렌더링된 드래그 순위와 Google Picker 파일 선택/업로드, 출처/유형별 성과·활동 계측·무효/누락·CSV를 추가했다. 단위 34개와 브라우저 65개 통과. 추가 통합 검증과 실제 AI 검증은 진행 중이며 실서비스 성공 선언이 아니다.
+
+SNS 자동 쓰기는 정확한 대상의 서비스 허용 근거와 별도의 내용/동작 승인을 요구한다. Instagram·YouTube 소비자 계정 쓰기는 검증된 허용 경로가 없어 수동 수행으로 남고, 완료 보고는 앱이 관측한 증거와 구분한다. 순위는 표시된 라벨과 드래그 가능한 목록, 파일 선택기는 표시된 Google Picker 컨트롤을 지원한다. 모든 커스텀 위젯 지원으로 표현하지 않는다.
+
+확인한 공식 자료: [Playwright 입력·드래그·파일 선택](https://playwright.dev/docs/input), [Google Picker 개요](https://developers.google.com/workspace/drive/picker/guides/overview). Google Picker가 Drive 파일 선택과 업로드를 제공하며 로그인이 필요하다는 근거이고, Google Forms의 실사이트 응답 완료를 검증했다는 뜻은 아니다. Instagram 약관 공식 주소는 이 확인에서 HTTP 429로 읽지 못했으므로 새로운 자동 쓰기 허용을 확인했다고 기록하지 않는다.

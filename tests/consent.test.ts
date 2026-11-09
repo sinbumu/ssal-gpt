@@ -123,7 +123,18 @@ test('adaptive consent adds bounded non-profile items only with full-notice low-
   assert.equal(decideConsent(q, s).decision, 'ask');
   assert.equal(decideConsent(q, s, assessment).decision, 'accept');
   assert.equal(decideConsent(q, s, { ...assessment, noticeQuote: '닉네임' }).decision, 'ask');
-  assert.equal(decideConsent(q, s, { ...assessment, risk: 'uncertain' }).decision, 'ask');
+  const uncertain = decideConsent(q, s, {
+    ...assessment,
+    risk: 'uncertain',
+    reason: '안내문의 보관 조건 해석이 불확실함',
+  });
+  assert.equal(uncertain.decision, 'ask');
+  assert.match(uncertain.reason, /보관 조건 해석이 불확실함/);
+  assert.doesNotMatch(
+    decideConsent(q, s, { ...assessment, noticeQuote: '부분 인용', reason: '낮은 위험' }).reason,
+    /낮은 위험/,
+    'an unmatched notice must not present the assessment as grounded',
+  );
   assert.equal(
     decideConsent(consentQ(notice('주민등록번호')), s, {
       ...assessment,

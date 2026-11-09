@@ -195,13 +195,15 @@ export function decideConsent(
     (durations[0]![2] === '일' ? 1 : durations[0]![2] === '년' ? 366 : 31);
   if (retentionDays > policy.maxRetentionDays)
     return blocked(`보관 기간이 허용한 ${policy.maxRetentionDays}일을 초과합니다.`);
-  if (
-    policy.mode === 'adaptive' &&
-    (!assessment ||
-      assessment.risk !== 'low' ||
-      compact(assessment.noticeQuote) !== compact(q.description || q.label))
-  )
-    return ask('전체 동의 안내에 근거한 에이전트의 낮은 위험 판단이 필요합니다.');
+  if (policy.mode === 'adaptive') {
+    if (!assessment) return ask('동의 안내에 대한 에이전트의 위험 판단이 없습니다.');
+    if (compact(assessment.noticeQuote) !== compact(q.description || q.label))
+      return ask('에이전트 판단이 현재 전체 동의 안내와 일치하는지 확인할 수 없습니다.');
+    if (assessment.risk !== 'low')
+      return ask(
+        `에이전트가 ${assessment.risk === 'high' ? '위험이 높다' : '불확실하다'}고 판단했습니다: ${assessment.reason}`,
+      );
+  }
   const answer = consentAnswer(q, true);
   if (!answer) return ask('동의 선택지를 정확히 연결하지 못했습니다.');
   return {

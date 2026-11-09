@@ -90,6 +90,8 @@ export function actionPolicy(
     if (
       step.action === 'navigate' &&
       (step.url === observation.url ||
+        step.url === job.startUrl ||
+        job.visitedUrls?.includes(step.url || '') ||
         observation.elements.some((e) => e.href === step.url) ||
         job.observedUrls?.includes(step.url || ''))
     )

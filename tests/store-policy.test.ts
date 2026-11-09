@@ -84,6 +84,32 @@ test('ranking does not recommend ended, undated or ineligible events', () => {
   assert.equal(scoreCandidate({ ...candidate, blockers: ['구매 필요'] }).score, 0);
   assert.equal(scoreCandidate(candidate).score, 100);
 });
+test('discovery retains visited sources when a large page displaces its observed link window', () => {
+  const job = makeJob();
+  job.kind = 'discover';
+  job.startUrl = 'https://example.com/list';
+  job.visitedUrls = ['https://example.com/previous'];
+  job.observedUrls = Array.from({ length: 100 }, (_, n) => `https://example.com/link/${n}`);
+  const o = {
+    id: 'obs',
+    url: 'https://example.com/current',
+    elements: [],
+  } as unknown as Observation;
+  const step = (url: string) => ({
+    observationId: o.id,
+    action: 'navigate' as const,
+    url,
+    reason: 'read',
+  });
+  assert.equal(actionPolicy(job, step(job.startUrl), o), 'allow');
+  assert.equal(actionPolicy(job, step(job.visitedUrls[0]!), o), 'allow');
+  assert.equal(actionPolicy(job, step('https://example.com/unseen'), o), 'block');
+  job.kind = 'apply';
+  assert.equal(actionPolicy(job, step(job.visitedUrls[0]!), o), 'block');
+  job.kind = 'discover';
+  job.uncertain = true;
+  assert.equal(actionPolicy(job, step(job.startUrl), o), 'block');
+});
 test('untrusted model cannot promote discovery into entry or bypass unknown submission state', () => {
   const job = makeJob();
   job.kind = 'discover';

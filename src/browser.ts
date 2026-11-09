@@ -617,7 +617,9 @@ export class Browser {
     const revision = await page.evaluate(() => Number((window as any).__ssalRevision || 0));
     const screenshot = `${id}.png`;
     await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
-    const viewport = page.viewportSize() || { width: 1280, height: 840 };
+    const viewport =
+      page.viewportSize() ||
+      (await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })));
     const hasResponseFields = await page
       .locator('input,textarea,select,[role=checkbox],[role=radio],[contenteditable=true]')
       .evaluateAll((fields) =>

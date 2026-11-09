@@ -642,7 +642,7 @@ export async function createApp(options: {
             }));
             if (validated.some((v) => !v.answer)) throw new ServiceError('invalid_inbox_answer');
             for (const { q, answer } of validated) {
-              state.overrides[q.signature] = answer!;
+              state.overrides[q.kind === 'file' ? q.id : q.signature] = answer!;
               if (q.kind === 'text')
                 state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
               if (data.remember === true && !state.synthetic && q.kind !== 'file')

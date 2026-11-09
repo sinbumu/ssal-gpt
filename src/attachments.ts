@@ -17,6 +17,7 @@ type Asset = {
   id: string;
   jobId: string;
   signature: string;
+  questionId: string;
   name: string;
   mimeType: string;
   size: number;
@@ -55,6 +56,7 @@ export async function addAttachment(
     id,
     jobId: job.id,
     signature: q.signature,
+    questionId: q.id,
     name: input.name,
     mimeType,
     size: buffer.length,
@@ -76,7 +78,7 @@ export async function loadAttachment(
   store: Store,
   dir: string,
   jobId: string,
-  signature: string,
+  questionId: string,
   reference: string,
 ) {
   const id = reference.replace(/^asset:/, '');
@@ -87,7 +89,7 @@ export async function loadAttachment(
     !asset ||
     !job?.autonomy ||
     asset.jobId !== jobId ||
-    asset.signature !== signature ||
+    asset.questionId !== questionId ||
     asset.origin !== job.autonomy.origin
   )
     throw new ServiceError('attachment_outside_grant');

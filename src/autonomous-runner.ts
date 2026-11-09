@@ -379,7 +379,7 @@ export async function runAutonomous(
             state.metrics.fields++;
           },
           signal,
-          (ref, question) => loadAttachment(store, store.dir, job.id, question.signature, ref),
+          (ref, question) => loadAttachment(store, store.dir, job.id, question.id, ref),
         );
         for (const audit of state.consents || [])
           if (view.questions.some((q) => q.signature === audit.signature && answers.has(q.id)))

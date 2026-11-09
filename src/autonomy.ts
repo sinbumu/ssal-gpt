@@ -231,7 +231,7 @@ export function resolveAnswer(
   const isConsent = consentQuestion(q) || plan?.category === 'consent';
   const override = state.overrides[q.signature];
   if (q.kind === 'file') {
-    const answer = state.overrides[q.signature];
+    const answer = state.overrides[q.id];
     return {
       answer: answer ? validateAnswer(q, answer) : !q.required ? [] : undefined,
       source: answer ? 'user_file' : 'file_required',

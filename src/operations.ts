@@ -290,7 +290,10 @@ export class Scheduler {
       const job = this.store
         .jobs()
         .reverse()
-        .find((j) => j.status === 'queued' && !j.archivedAt);
+        .find(
+          (j) =>
+            j.status === 'queued' && !j.archivedAt && !budgetReason(this.store, j.provider, now),
+        );
       if (!job || budgetReason(this.store, job.provider, now)) return;
       try {
         this.runner.start(job.id);

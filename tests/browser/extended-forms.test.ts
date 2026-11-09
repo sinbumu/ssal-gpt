@@ -93,16 +93,13 @@ test('attachment approval binds bytes to one job and question; repeated batch do
       base64: png.toString('base64'),
       allowUpload: true,
     });
-    await assert.rejects(
-      loadAttachment(store, dir, randomUUID(), q.signature, asset.id),
-      /outside_grant/,
-    );
+    await assert.rejects(loadAttachment(store, dir, randomUUID(), q.id, asset.id), /outside_grant/);
     await assert.rejects(
       loadAttachment(store, dir, job.id, 'different question', asset.id),
       /outside_grant/,
     );
     const answer = new Map([[q.id, [asset.id]]]);
-    const load = (ref: string) => loadAttachment(store, dir, job.id, q.signature, ref);
+    const load = (ref: string) => loadAttachment(store, dir, job.id, q.id, ref);
     await applyAnswers(page, view, answer, () => {}, new AbortController().signal, load);
     await applyAnswers(page, view, answer, () => {}, new AbortController().signal, load);
     assert.equal(await page.evaluate(() => (window as any).changes), 1);

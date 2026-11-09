@@ -103,3 +103,39 @@ test('missed schedule coalesces, queue survives restart and policy changes revok
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a provider missing its cost rate does not starve other eligible queued work', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-budget-queue-')),
+    store = new Store(dir);
+  try {
+    store.setSettings(
+      'operations',
+      OperationsSchema.parse({
+        queueEnabled: true,
+        dailyEstimatedUsd: 1,
+        rates: [{ model: 'priced', inputPerMillion: 1, outputPerMillion: 1 }],
+      }),
+    );
+    store.saveJob({
+      id: 'blocked',
+      status: 'queued',
+      provider: { kind: 'api', model: 'missing-rate' },
+    } as Job);
+    store.saveJob({
+      id: 'ready',
+      status: 'queued',
+      provider: { kind: 'api', model: 'priced' },
+    } as Job);
+    const started: string[] = [];
+    const runner = {
+      isBusy: () => false,
+      start: (id: string) => started.push(id),
+    } as unknown as Runner;
+    await new Scheduler(store, runner).tick();
+    assert.deepEqual(started, ['ready']);
+    assert.equal(store.job('blocked')!.status, 'queued');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

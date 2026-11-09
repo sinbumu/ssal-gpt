@@ -17,12 +17,18 @@ test('explicit local browser connection controls only the selected tab and disco
     const first = external.pages()[0]!;
     await first.setContent('<title>unrelated</title><input value="private untouched">');
     const second = await external.newPage();
-    await second.setContent('<title>selected</title><input value="work">');
+    await second.route('http://127.0.0.1:54321/demo/selected', (r) =>
+      r.fulfill({ contentType: 'text/html', body: '<title>selected</title><input value="work">' }),
+    );
+    await second.goto('http://127.0.0.1:54321/demo/selected');
     await assert.rejects(browser.listConnection('https://example.com:9222/'), /local_debugging/);
     const port = readFileSync(join(dir, 'external', 'DevToolsActivePort'), 'utf8').split('\n')[0];
     const tabs = await browser.listConnection(`http://127.0.0.1:${port}`);
     await browser.connectTab(tabs.find((t) => t.title === 'selected')!.id);
     assert.equal(browser.engine, 'connected');
+    const observation = await browser.observe();
+    assert.equal(observation.height, await second.evaluate(() => window.innerHeight));
+    assert.equal(observation.width, await second.evaluate(() => window.innerWidth));
     await browser.page!.locator('input').fill('updated');
     assert.equal(await second.locator('input').inputValue(), 'updated');
     assert.equal(await first.locator('input').inputValue(), 'private untouched');

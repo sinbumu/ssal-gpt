@@ -1,4 +1,4 @@
-import type { Frame, Locator, Page } from 'playwright';
+import type { ElementHandle, Frame, Locator, Page } from 'playwright';
 import { ServiceError } from './auth.js';
 
 export const rankLists = '[role=listbox],[role=list],ol,ul';
@@ -40,6 +40,7 @@ export async function applyRank(page: Page, index: number, answer: string[], sig
 }
 
 export type Upload = {
+  id?: string;
   name: string;
   mimeType: string;
   buffer: Buffer;
@@ -47,6 +48,7 @@ export type Upload = {
   allowPicker?: boolean;
   beforeUpload?: () => void;
 };
+const confirmedSelections = new WeakMap<Page, Map<string, ElementHandle>>();
 const fileButton = /^(파일 추가|파일 업로드|add file|upload file)$/i;
 export async function pickerContainer(page: Page, buttonIndex: number) {
   const button = page.locator('button,[role=button],input[type=button]').nth(buttonIndex);
@@ -93,7 +95,17 @@ export async function applyPicker(
 ) {
   if (!file.allowPicker) throw new ServiceError('picker_recipient_not_authorized');
   const { button, container } = await pickerContainer(page, buttonIndex);
-  if ((await container.getByText(file.name, { exact: true }).count()) === 1) return;
+  const key = `${buttonIndex}:${file.id || ''}`;
+  const prior = confirmedSelections.get(page)?.get(key);
+  if (
+    prior &&
+    (await prior
+      .evaluate((el, name) => el.isConnected && el.textContent === name, file.name)
+      .catch(() => false))
+  )
+    return;
+  if (await container.getByText(file.name, { exact: true }).count())
+    throw new ServiceError('picker_existing_file_requires_review');
   if (!fileButton.test((await button.innerText()).trim()))
     throw new ServiceError('picker_control_changed');
   signal.throwIfAborted();
@@ -149,4 +161,8 @@ export async function applyPicker(
     .waitFor({ state: 'visible', timeout: 8000 });
   if ((await container.getByText(file.name, { exact: true }).count()) !== 1)
     throw new ServiceError('picker_file_not_verified');
+  const selected = await container.getByText(file.name, { exact: true }).elementHandle();
+  if (!selected) throw new ServiceError('picker_file_not_verified');
+  if (!confirmedSelections.has(page)) confirmedSelections.set(page, new Map());
+  confirmedSelections.get(page)!.set(key, selected);
 }

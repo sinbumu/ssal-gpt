@@ -48,6 +48,7 @@ import {
   dayKey,
 } from './operations.js';
 import { verifyReceipt } from './receipt.js';
+import { journeyTasks, journeyPage, acceptJourney } from './journey-demo.js';
 import { approveTask, buildTasks, PermissionSchema, taskPermission } from './tasks.js';
 import { SelectionSchema, selection, evaluateCandidate } from './selection.js';
 import {
@@ -70,6 +71,7 @@ const JobSchema = z.object({
   prepareOne: z.boolean().default(false),
   demoInbox: z.boolean().default(false),
   demoExtended: z.boolean().default(false),
+  demoJourney: z.boolean().default(false),
   provider: ProviderSchema,
   goal: z.string().min(1).max(2000),
   eventId: z.string().optional(),
@@ -155,6 +157,25 @@ export async function createApp(options: {
     if (request.headers.origin && request.headers.origin !== origin)
       throw new ServiceError('cross_origin_blocked', 403);
     if (isDemo) {
+      const journey = url.pathname.match(/^\/demo\/journey\/(social|form)$/);
+      if (journey) {
+        const run = z.string().uuid().parse(url.searchParams.get('run')),
+          job = store.job(run);
+        if (!job?.autonomy?.synthetic) throw new ServiceError('synthetic_job_required');
+        if (method === 'POST') {
+          if (!acceptJourney(store, job, journey[1]!, new URLSearchParams(await body(request))))
+            return send(response, 400, '합성 접수 검증 실패', 'text/plain; charset=utf-8');
+          response.writeHead(303, { Location: url.pathname + url.search });
+          response.end();
+          return;
+        }
+        return send(
+          response,
+          200,
+          journeyPage(store, run, journey[1]!),
+          'text/html; charset=utf-8',
+        );
+      }
       if (url.pathname === '/demo/autonomy') {
         const run = z.string().uuid().parse(url.searchParams.get('run'));
         if (method === 'POST') {
@@ -269,6 +290,7 @@ export async function createApp(options: {
         operations: operations(store),
         schedules: schedules(store),
         selectionPolicy: selection(store),
+        taskPermissions: store.settings('taskPermissions', []),
         usage: usage(store),
         busy: runner.isBusy(),
         browser: browser.info(),
@@ -322,6 +344,16 @@ export async function createApp(options: {
         ...existing.filter((p) => p.taskUrl !== input.taskUrl),
         input,
       ]);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/task-permission/revoke') {
+      const taskUrl = z.string().url().parse(data.taskUrl);
+      store.setSettings(
+        'taskPermissions',
+        store
+          .settings<z.infer<typeof PermissionSchema>[]>('taskPermissions', [])
+          .filter((p) => p.taskUrl !== taskUrl),
+      );
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/outcomes') {
@@ -562,6 +594,13 @@ export async function createApp(options: {
       };
       if (input.kind === 'autonomy_demo') {
         job.autonomy = createAutonomy(syntheticSettings, origin, true);
+        if (input.demoJourney) {
+          job.tasks = journeyTasks(origin, id);
+          job.startUrl = job.tasks[0]!.url;
+          job.autonomy.policy.preferenceRule = '경품은 커피, 차, 쿠폰 순서로 선호한다.';
+          job.autonomy.policy.finalSubmit = 'review';
+          job.autonomy.organizer = '쌀-GPT 합성 테스트';
+        }
         if (input.demoExtended) {
           job.autonomy.policy.consent.mode = 'adaptive';
           job.autonomy.organizer = '쌀-GPT 합성 테스트';
@@ -602,6 +641,8 @@ export async function createApp(options: {
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
       if (action === 'task') {
         if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+        if ((job.browserEngine || 'chromium') !== browser.engine)
+          throw new ServiceError('job_browser_profile_mismatch');
         const items = z
           .array(
             z.object({

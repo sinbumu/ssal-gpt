@@ -256,7 +256,18 @@ function render() {
     completedEntries: state.completedEntries,
     outcomes: state.outcomes,
   });
-  if (document.activeElement?.closest('[data-task-review]')) return;
+  const focusedTask = document.activeElement?.closest('[data-task-review]')?.dataset.taskReview;
+  if (
+    focusedTask &&
+    state.jobs.some(
+      (j) =>
+        j.id === focusedTask &&
+        j.status === 'needs_user' &&
+        !j.autonomy?.inbox &&
+        j.tasks?.some((t) => t.state === 'review'),
+    )
+  )
+    return;
   if (contentKey === rendered) return;
   rendered = contentKey;
   renderCompleted();
@@ -864,9 +875,27 @@ $('autonomy-demo-extended').onclick = guard(async () => {
   });
   toast('실제 경품이 없는 확장 합성 테스트를 시작했습니다. 모델 사용량은 발생합니다.');
 });
+$('journey-demo').onclick = guard(async () => {
+  await api('/api/jobs', {
+    kind: 'autonomy_demo',
+    provider: requireChoice(),
+    goal: '합성 SNS 과제와 순위·파일 폼을 차례로 완료하세요.',
+    demoJourney: true,
+    maxSteps: 40,
+  });
+  toast(
+    '실제 경품이 없는 혼합 과제 테스트입니다. 과제 승인·파일 선택·최종 확인은 대시보드에서 진행합니다.',
+  );
+});
 
 let selectionLoaded = false;
 function renderSelection() {
+  $('task-permission-list').innerHTML = (state.taskPermissions || [])
+    .map(
+      (p) =>
+        `<p>${safeLink(p.taskUrl, '허용 대상')} · ${p.kinds.map(esc).join(', ')} · ${esc(new Date(p.expires).toLocaleString())}<br>${esc(p.evidence)} <button type="button" data-revoke-permission="${esc(p.taskUrl)}">허용 근거 철회</button></p>`,
+    )
+    .join('');
   if (!selectionLoaded && state.selectionPolicy) {
     const f = $('selection-policy-form'),
       p = state.selectionPolicy;
@@ -1012,3 +1041,12 @@ setInterval(() => {
       Date.now() - lastActivity < 30000,
   }).catch(() => {});
 }, 5000);
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-revoke-permission]');
+  if (button)
+    void guard(async () => {
+      await api('/api/task-permission/revoke', { taskUrl: button.dataset.revokePermission });
+      toast('이 경로의 자동 실행 허용 근거를 철회했습니다.');
+    })(event);
+});

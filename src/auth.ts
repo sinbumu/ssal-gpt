@@ -49,6 +49,10 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  picker_existing_file_requires_review:
+    '같은 이름의 첨부가 있지만 이 허용으로 선택한 파일인지 확인할 수 없습니다. 브라우저에서 실제 파일을 확인하세요. 자동 교체·재업로드하지 않습니다.',
+  task_target_ambiguous:
+    '같은 행동 버튼이 여러 개여서 대상 게시물을 확정하지 못했습니다. 직접 확인하거나 과제를 수행한 뒤 결과를 기록하세요.',
   event_qualification_review_required:
     '저장한 자격·선택 기준을 충족하지 않거나 원문 조건이 불명확합니다. 기회 선택 기준과 원문을 확인하세요.',
   task_route_not_permitted:

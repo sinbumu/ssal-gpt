@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ServiceError } from './auth.js';
 import { deadlineState, scoreCandidate, type EventRecord, type Job, type Store } from './store.js';
 import { observedQuote } from './evidence.js';
+import { settings, type Profile } from './autonomy.js';
 
 export const SelectionSchema = z
   .object({
@@ -55,7 +56,16 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       reject(`자격 원문 확인 필요: ${condition.key}`, true);
       continue;
     }
-    const fact = p.facts.find((f) => f.key === condition.key);
+    const profileKey = (
+      { 거주지역: 'region', 지역: 'region', 연령대: 'ageRange', 직업: 'occupation' } as Record<
+        string,
+        keyof Profile
+      >
+    )[condition.key];
+    const savedValue = profileKey ? settings(store).profile[profileKey] : undefined;
+    const fact =
+      p.facts.find((f) => f.key === condition.key) ||
+      (savedValue ? { key: condition.key, value: savedValue } : undefined);
     if (!fact) reject(`저장하지 않은 자격: ${condition.key}`, true);
     else if (!condition.acceptedValues.includes(fact.value))
       reject(`자격 불일치: ${condition.key}`);

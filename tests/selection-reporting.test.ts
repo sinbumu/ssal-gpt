@@ -9,6 +9,7 @@ import { evaluateCandidate, assessBurden, nextDiscoveryAfterSkip } from '../src/
 import { recordActivity, recordQuality, report, reportCsv } from '../src/reporting.js';
 import { syntheticSettings } from '../src/autonomy.js';
 import { prepareDiscoveredEntry } from '../src/workflow.js';
+import { taskPermission, approveTask } from '../src/tasks.js';
 
 test('eligibility evidence, preferences, runtime burden and bounded alternative selection', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-value-')),
@@ -84,6 +85,57 @@ test('eligibility evidence, preferences, runtime burden and bounded alternative 
     child.transmitted = false;
     child.uncertain = true;
     assert.equal(nextDiscoveryAfterSkip(store, child), undefined);
+  } finally {
+    store.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('platform permission, exact action scope and user approval remain independent', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-permission-')),
+    store = new Store(dir);
+  try {
+    const task = {
+      id: 't',
+      kind: 'comment' as const,
+      url: 'https://example.org/post/1',
+      instruction: '댓글',
+      quote: '댓글',
+      dependsOn: [],
+      state: 'review' as const,
+    };
+    const job = { id: randomUUID(), kind: 'apply', status: 'needs_user', tasks: [task] } as Job;
+    store.saveJob(job);
+    assert.equal(taskPermission(store, task), false);
+    assert.throws(
+      () => approveTask(store, job, { taskId: 't', mode: 'approve', text: 'approved text' }),
+      /not_permitted/,
+    );
+    store.setSettings('taskPermissions', [
+      {
+        taskUrl: task.url,
+        kinds: ['comment'],
+        sourceUrl: 'https://example.org/permissions',
+        evidence: '서비스 운영자가 이 테스트 게시물에 자동 댓글 작성을 허용함',
+        basis: 'operator_authorization',
+        expires: Date.now() + 10000,
+      },
+    ]);
+    assert.equal(taskPermission(store, task), true);
+    assert.equal(taskPermission(store, { ...task, url: 'https://example.org/post/2' }), false);
+    assert.equal(taskPermission(store, { ...task, kind: 'follow' }), false);
+    assert.equal(
+      taskPermission(store, { ...task, url: 'https://www.instagram.com/p/example/' }),
+      false,
+    );
+    assert.equal(
+      taskPermission(store, { ...task, url: 'https://example.org/demo/test' }, true),
+      false,
+    );
+    approveTask(store, job, { taskId: 't', mode: 'approve', text: 'approved text' });
+    assert.equal(store.job(job.id)!.tasks![0]!.approval!.text, 'approved text');
+    store.setSettings('taskPermissions', []);
+    assert.equal(taskPermission(store, task), false);
   } finally {
     store.db.close();
     rmSync(dir, { recursive: true, force: true });

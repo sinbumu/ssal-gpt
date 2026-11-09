@@ -47,7 +47,7 @@ export function recordActivity(
     prior && prior.active && input.active && prior.jobId === job.id && now - prior.at <= 15_000
       ? Math.max(0, now - Math.max(prior.at, highWater))
       : 0;
-  store.setSettings('activityHighWater', Math.max(highWater, now));
+  if (elapsed > 0) store.setSettings('activityHighWater', Math.max(highWater, now));
   const ledger = store.settings<{ ms: number; samples: number }>(`humanTime:${job.id}`, {
     ms: 0,
     samples: 0,
@@ -92,8 +92,10 @@ export function report(
   ]
     .filter(
       (r) =>
-        (!filters.from || r.at.slice(0, 10) >= filters.from) &&
-        (!filters.to || r.at.slice(0, 10) <= filters.to) &&
+        (!filters.from ||
+          new Date(r.at).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) >= filters.from) &&
+        (!filters.to ||
+          new Date(r.at).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) <= filters.to) &&
         (!filters.source || r.source === filters.source) &&
         (!filters.type || r.type === filters.type),
     )
@@ -124,8 +126,29 @@ export function report(
         activeMs: r.jobs.reduce((s, j) => s + (j.activeMs || 0), 0),
         waitingMs: r.jobs.reduce((s, j) => s + (j.autonomy?.metrics.waitingMs || 0), 0),
         calls: calls.length,
-        inputTokens: calls.reduce((s, c) => s + c.input_tokens, 0),
-        outputTokens: calls.reduce((s, c) => s + c.output_tokens, 0),
+        inputTokens: r.jobs.reduce(
+          (s, j) =>
+            s +
+            Math.max(
+              j.inputTokens || 0,
+              calls.filter((c) => c.job_id === j.id).reduce((s, c) => s + c.input_tokens, 0),
+            ),
+          0,
+        ),
+        outputTokens: r.jobs.reduce(
+          (s, j) =>
+            s +
+            Math.max(
+              j.outputTokens || 0,
+              calls.filter((c) => c.job_id === j.id).reduce((s, c) => s + c.output_tokens, 0),
+            ),
+          0,
+        ),
+        unmeteredJobs: r.jobs.filter(
+          (j) =>
+            (j.inputTokens || 0) >
+            calls.filter((c) => c.job_id === j.id).reduce((s, c) => s + c.input_tokens, 0),
+        ).length,
         estimatedUsd: calls.some((c) => c.estimated_usd !== null)
           ? calls.reduce((s, c) => s + (c.estimated_usd || 0), 0)
           : null,
@@ -150,6 +173,7 @@ export function report(
     'inputTokens',
     'outputTokens',
     'unpricedCalls',
+    'unmeteredJobs',
     'received',
     'faceValueKrw',
     'realizedKrw',
@@ -177,7 +201,7 @@ export function report(
     rows,
     groups: [...groups.values()],
     notes:
-      '대시보드가 보이고 최근 조작이 있는 검토 구간만 사람 시간에 포함합니다. 별도 브라우저·전화·개발 시간은 미계측입니다. 탐색 비용은 공통 행이며 응모 비용에 중복 배분하지 않습니다. USD 추정 비용과 KRW 실현 가치는 환산/상계하지 않습니다.',
+      '대시보드가 보이고 최근 조작이 있는 검토 구간을 5초 간격으로 계측합니다. 별도 브라우저·전화·개발 시간은 미계측입니다. 호출 수는 원장 계측분이며 원장 도입 전 작업은 저장된 토큰 합계만 반영합니다. 탐색 비용은 공통 행으로 중복 배분하지 않습니다. USD 추정 비용과 KRW 실현 가치는 환산/상계하지 않습니다.',
   };
 }
 export function reportCsv(value: ReturnType<typeof report>) {

@@ -263,6 +263,8 @@ export async function runAutonomous(
           job.status = 'completed';
           job.uncertain = false;
           state.metrics.finishedAt = Date.now();
+          if (job.taskFormStarted && job.tasks?.at(-1)?.kind === 'form')
+            job.tasks.at(-1)!.state = 'verified';
           delete state.plan;
           delete state.finalApproval;
           record('완료 문구와 접수 결과를 확인했습니다.');

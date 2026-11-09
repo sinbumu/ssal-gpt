@@ -19,6 +19,11 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
   const event = store
     .events()
     .filter((e) => {
+      try {
+        buildTasks(e);
+      } catch {
+        return false;
+      }
       const url = new URL(e.entryUrl);
       return (
         e.jobId === parent.id &&

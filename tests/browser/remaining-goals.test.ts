@@ -11,6 +11,8 @@ import { createAutonomy, syntheticSettings, validateAnswer } from '../../src/aut
 import { addAttachment, addDriveSelection, loadAttachment } from '../../src/attachments.js';
 import { createApp } from '../../src/server.js';
 import { approveTask, type EntryTask } from '../../src/tasks.js';
+import { journeyState } from '../../src/journey-demo.js';
+import { prepareDiscoveredEntry } from '../../src/workflow.js';
 
 const rankHtml = `<form><fieldset><legend>경품 우선순위</legend><ol aria-label="경품 우선순위"><li draggable="true" aria-label="커피">커피</li><li draggable="true" aria-label="차">차</li><li draggable="true" aria-label="쿠폰">쿠폰</li></ol></fieldset><button>제출</button></form><script>let dragged; document.querySelectorAll('li').forEach(el=>{el.ondragstart=e=>{dragged=el;e.dataTransfer.setData('text/plain',el.textContent)};el.ondragover=e=>e.preventDefault();el.ondrop=e=>{e.preventDefault();el.parentElement.insertBefore(dragged,el)}})</script>`;
 test('rank drag uses rendered order, preserves question identity, invalidates review and rejects partial order', async () => {
@@ -168,7 +170,7 @@ test('Google picker upload and exact Drive selection bind recipient/file, verify
   }
 });
 
-test('social chain verifies existing state, executes only reviewed follow/comment and hands off to form without developer mutation', async () => {
+test('social chain verifies existing state and executes only reviewed follow/comment without duplication', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-tasks-')),
     app = await createApp({ dir, port: 0, headless: true });
   app.scheduler.stop();
@@ -247,6 +249,321 @@ test('social chain verifies existing state, executes only reviewed follow/commen
     assert.equal(await app.browser.page!.evaluate(() => (window as any).likeClicks || 0), 0);
     assert.equal(await app.browser.page!.evaluate(() => (window as any).posts), 1);
     assert.equal(await app.browser.page!.evaluate(() => (window as any).follows), 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard batches social approvals, selects real fixture file, reviews rank and submits full mixed journey once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-journey-')),
+    app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  app.auth.bearer = async () => 'fixture';
+  const uiBrowser = await chromium.launch(),
+    page = await uiBrowser.newPage();
+  page.setDefaultTimeout(10000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  try {
+    let typed = false;
+    app.runner.model.decide = async (_provider, _instructions, c: any) => {
+      const o = c.observation;
+      if (c.task) {
+        const label =
+          c.task.kind === 'like'
+            ? '좋아요'
+            : c.task.kind === 'follow'
+              ? '팔로우'
+              : typed
+                ? '게시'
+                : '댓글';
+        const el = o.elements.find((e: any) => e.label === label),
+          action = c.task.kind === 'comment' && !typed ? 'type' : 'click';
+        if (action === 'type') typed = true;
+        return {
+          step: {
+            action,
+            observationId: o.id,
+            ref: el.ref,
+            text: action === 'type' ? c.approvedText : undefined,
+            reason: '합성 과제',
+          },
+          inputTokens: 1,
+          outputTokens: 1,
+        };
+      }
+      if (o.text.includes('답변이 제출되었습니다.'))
+        return {
+          step: {
+            action: 'done',
+            observationId: o.id,
+            evidenceQuote: '답변이 제출되었습니다.',
+            reason: '합성 접수 확인',
+          },
+          inputTokens: 1,
+          outputTokens: 1,
+        };
+      return {
+        step: {
+          action: 'form_plan',
+          observationId: o.id,
+          buttonId: c.form.buttons[0].id,
+          answers: c.form.questions.map((q: any) => ({
+            questionId: q.id,
+            category: q.kind === 'rank' ? 'preference' : 'fact',
+            source: q.kind === 'rank' ? 'recommendation' : 'unknown',
+            answer: q.kind === 'rank' ? ['커피', '차', '쿠폰'] : undefined,
+            reason: '가상 사용자 설정 적용',
+          })),
+          reason: '묶음 작성',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    app.store.setSettings('selection', { kind: 'api', model: 'fixture' });
+    await page.goto(app.origin);
+    await page.locator('#journey-demo').click();
+    const taskForm = page.locator('[data-task-review]');
+    await taskForm.waitFor();
+    assert.equal(await taskForm.locator('fieldset').count(), 3);
+    await taskForm.locator('textarea').fill('합성 이벤트 참여 테스트입니다.');
+    await Promise.all([
+      page.waitForResponse((r) => /\/task$/.test(r.url()) && r.request().method() === 'POST'),
+      taskForm.getByRole('button').click(),
+    ]);
+    await app.runner.finished();
+    const job = app.store.jobs().find((j) => j.kind === 'autonomy_demo')!;
+    assert.ok(
+      job.autonomy!.inbox?.items.some((q) => q.kind === 'file'),
+      job.note,
+    );
+    await page.locator('[data-inbox] input[type=file]').waitFor();
+    const png = await page.screenshot();
+    await page
+      .locator('[data-inbox] input[type=file]')
+      .setInputFiles({ name: 'synthetic-proof.png', mimeType: 'image/png', buffer: png });
+    await page.locator('[data-inbox] input[name^=upload-]').check();
+    await Promise.all([
+      page.waitForResponse((r) => /\/inbox$/.test(r.url()) && r.request().method() === 'POST'),
+      page.locator('[data-inbox] button[type=submit]').click(),
+    ]);
+    await app.runner.finished();
+    assert.equal(app.store.job(job.id)!.autonomy!.inbox?.final, true, app.store.job(job.id)!.note);
+    await page.getByRole('button', { name: '최종 제출하고 결과 확인', exact: true }).waitFor();
+    assert.match(await page.locator('[data-inbox]').innerText(), /커피 → 차 → 쿠폰/);
+    await Promise.all([
+      page.waitForResponse((r) => /\/inbox$/.test(r.url()) && r.request().method() === 'POST'),
+      page.getByRole('button', { name: '최종 제출하고 결과 확인', exact: true }).click(),
+    ]);
+    await app.runner.finished();
+    assert.equal(app.store.job(job.id)!.status, 'completed', app.store.job(job.id)!.note);
+    assert.deepEqual(journeyState(app.store, job.id), {
+      likes: 1,
+      follows: 1,
+      comments: ['합성 이벤트 참여 테스트입니다.'],
+      submissions: 1,
+    });
+    assert.deepEqual(errors, []);
+  } finally {
+    await uiBrowser.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runtime discovers excess questions and switches to another candidate without transmitting the abandoned form', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-switch-')),
+    app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  try {
+    app.store.setSettings('autonomy', syntheticSettings);
+    app.store.setSettings('selectionPolicy', { maxQuestions: 1 });
+    await app.browser.open();
+    let posts = 0,
+      calls = 0;
+    await app.browser.context!.route('https://form.naver.com/**', (route) => {
+      if (route.request().method() === 'POST') {
+        posts++;
+        return route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: '답변이 제출되었습니다.',
+        });
+      }
+      return route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: route.request().url().endsWith('long')
+          ? '<form><label>첫 질문<input></label><label>둘째 질문<input></label><button>제출</button></form>'
+          : '<form method="post"><label>이름<input name="name" required></label><button>제출</button></form>',
+      });
+    });
+    app.runner.model.decide = async (_p, _i, c: any) => {
+      calls++;
+      return {
+        step: c.observation.text.includes('답변이 제출되었습니다.')
+          ? {
+              action: 'done',
+              observationId: c.observation.id,
+              evidenceQuote: '답변이 제출되었습니다.',
+              reason: '접수',
+            }
+          : {
+              action: 'form_plan',
+              observationId: c.observation.id,
+              buttonId: c.form.buttons[0].id,
+              answers: c.form.questions.map((q: any) => ({
+                questionId: q.id,
+                category: 'fact',
+                source: 'unknown',
+                reason: '저장 프로필',
+              })),
+              reason: '입력',
+            },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    const parent = {
+      id: randomUUID(),
+      kind: 'discover',
+      status: 'completed',
+      prepareOne: { revision: syntheticSettings.revision, expires: Date.now() + 60000 },
+      provider: { kind: 'api', model: 'fixture' },
+    } as Job;
+    app.store.saveJob(parent);
+    for (const [i, name] of ['long', 'short'].entries()) {
+      const url = 'https://form.naver.com/response/' + name;
+      app.store.record(
+        {
+          title: name,
+          organizer: 'fixture',
+          entryUrl: url,
+          deadline: '2099-01-01T00:00:00Z',
+          prize: '커피',
+          winners: 1,
+          requirements: ['설문'],
+          blockers: [],
+          evidenceQuote: '설문',
+          evidenceKind: 'text',
+          effortMinutes: i + 1,
+        },
+        url,
+        parent.id,
+        'fixture.png',
+        {
+          sourceEvidence: [
+            {
+              id: name,
+              url,
+              title: name,
+              text: '설문',
+              screenshot: 'fixture.png',
+              observedAt: Date.now(),
+            },
+          ],
+        },
+      );
+    }
+    const first = prepareDiscoveredEntry(app.store, parent)!;
+    app.runner.start(first);
+    await app.runner.finished();
+    const jobs = app.store.jobs().filter((j) => j.kind === 'apply');
+    assert.equal(jobs.length, 2);
+    assert.equal(app.store.job(first)!.status, 'stopped');
+    assert.ok(
+      jobs.some((j) => j.status === 'completed'),
+      jobs.map((j) => j.note).join(' / '),
+    );
+    assert.equal(posts, 1);
+    assert.equal(calls, 2);
+    assert.equal(app.store.job(parent.id)!.prepareOne!.switches, 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unknown social post survives resume without a second post; user report remains distinct', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-unknown-task-')),
+    app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  try {
+    await app.browser.open();
+    const url = app.origin + '/demo/social-unknown';
+    await app.browser.context!.route('**/demo/social-unknown', (route) =>
+      route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<label>댓글<textarea></textarea></label><button onclick="window.posts=(window.posts||0)+1">게시</button>',
+      }),
+    );
+    let calls = 0;
+    app.runner.model.decide = async (_p, _i, c: any) => {
+      const action = calls++ ? 'click' : 'type',
+        el = c.observation.elements.find(
+          (e: any) => e.label === (action === 'type' ? '댓글' : '게시'),
+        );
+      return {
+        step: {
+          action,
+          observationId: c.observation.id,
+          ref: el.ref,
+          text: action === 'type' ? c.approvedText : undefined,
+          reason: '합성 전송',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    const job = {
+      id: randomUUID(),
+      kind: 'apply',
+      provider: { kind: 'api', model: 'fixture' },
+      startUrl: url,
+      status: 'needs_user',
+      tasks: [
+        {
+          id: 't',
+          kind: 'comment',
+          url,
+          instruction: '합성',
+          quote: '합성',
+          dependsOn: [],
+          state: 'review',
+        },
+      ],
+      autonomy: createAutonomy(syntheticSettings, app.origin, true),
+      maxSteps: 10,
+      steps: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      uncertain: false,
+      allowedOrigins: [app.origin],
+      approvedTexts: [],
+      history: [],
+      createdAt: new Date().toISOString(),
+    } as Job;
+    app.store.saveJob(job);
+    approveTask(app.store, job, { taskId: 't', mode: 'approve', text: '합성 댓글' });
+    app.runner.start(job.id);
+    await app.runner.finished();
+    assert.equal(app.store.job(job.id)!.status, 'submission_unknown');
+    app.runner.start(job.id);
+    await app.runner.finished();
+    assert.equal(calls, 2);
+    assert.equal(await app.browser.page!.evaluate(() => (window as any).posts), 1);
+    const unknown = app.store.job(job.id)!;
+    approveTask(app.store, unknown, {
+      taskId: 't',
+      mode: 'manual',
+      evidence: '합성 사용자 직접 게시 확인',
+    });
+    app.runner.start(job.id);
+    await app.runner.finished();
+    const done = app.store.job(job.id)!;
+    assert.equal(done.status, 'completed');
+    assert.equal(done.tasks![0]!.proof!.actor, 'user');
+    assert.match(done.note, /사용자/);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

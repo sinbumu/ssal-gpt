@@ -103,6 +103,7 @@ export async function loadAttachment(
   if (createHash('sha256').update(buffer).digest('hex') !== asset.sha256)
     throw new ServiceError('attachment_changed');
   return {
+    id: reference,
     name: asset.name,
     mimeType: asset.mimeType,
     buffer,
@@ -158,6 +159,7 @@ function loadDriveSelection(store: Store, jobId: string, questionId: string, ref
   )
     throw new ServiceError('attachment_outside_grant');
   return {
+    id: ref,
     name: file.name,
     mimeType: '',
     buffer: Buffer.alloc(0),

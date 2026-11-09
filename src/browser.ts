@@ -496,9 +496,9 @@ export class Browser {
           const input = el as HTMLInputElement;
           const label =
             el.getAttribute('aria-label') ||
-            el.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
             (input.labels ? [...input.labels].map((l) => l.innerText).join(' ') : '') ||
             el.innerText ||
+            el.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
             el.getAttribute('placeholder') ||
             el.getAttribute('name') ||
             '';

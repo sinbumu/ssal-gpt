@@ -309,7 +309,12 @@ export async function runTasks(
       )
         throw new ServiceError('task_route_not_permitted');
       await browser.open();
-      if (!task.attempt && canonicalUrl(browser.page!.url()) !== canonicalUrl(task.url))
+      // Instagram targets are public GET pages. Reopening one reconciles a prior attempt;
+      // the attempt guard below still prohibits repeating an unconfirmed write.
+      if (
+        (!task.attempt || isInstagram) &&
+        canonicalUrl(browser.page!.url()) !== canonicalUrl(task.url)
+      )
         await browser.navigate(task.url);
       while (job.steps < job.maxSteps) {
         const assertGrant = () => {

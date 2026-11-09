@@ -78,8 +78,8 @@ export async function inspectInstagram(page: Page, target: InstagramTarget, sele
         label(el: Element) {
           return helpers.norm(
             el.getAttribute('aria-label') ||
-              el.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
               (el as HTMLElement).innerText ||
+              el.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
               el.getAttribute('placeholder') ||
               '',
           );

@@ -51,7 +51,7 @@ async function fixture() {
           .join('');
     return route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:230px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' : '팔로우'}</button></header><div><p>합성 이벤트</p><div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${comments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>`,
+      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:230px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p><div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${comments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>`,
     });
   });
   app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -359,6 +359,36 @@ test('Instagram waits for delayed rendered account and controls before review an
     const done = f.app.store.job(j.id)!;
     assert.equal(done.status, 'completed', done.note);
     assert.equal(f.data.likes, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram reconciles an attempted follow with a decorative icon without clicking again', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['follow']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const interrupted = f.app.store.job(j.id)!;
+    interrupted.tasks![0]!.state = 'attempted';
+    interrupted.tasks![0]!.attempt = { at: Date.now(), beforeText: '팔로우' };
+    interrupted.uncertain = true;
+    interrupted.status = 'submission_unknown';
+    f.app.store.saveJob(interrupted);
+    f.data.follows = 1;
+    await f.app.browser.navigate(url);
+    const o = await f.app.browser.observe(false, [], { url, kind: 'follow' });
+    assert.equal(o.instagram?.following, true);
+    assert.equal(o.elements.find((e) => e.ref === o.instagram?.controls.follow)?.label, '팔로잉');
+    await f.app.browser.page!.goto('about:blank');
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.equal(f.data.follows, 1);
+    assert.equal(done.steps, 0);
   } finally {
     await f.close();
   }

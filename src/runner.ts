@@ -14,6 +14,7 @@ export { pageProgress } from './page-progress.js';
 const INSTRUCTIONS = `You are ssal-gpt, a Korean giveaway discovery and browser-entry assistant.
 Search defaults to Naver; use searchEngine=google only when needed. Do not choose already started/submitted knownEvents. Record announcementDate and announcementNote only when explicitly stated in the original source; otherwise leave unknown. For a form event, inspect its introduction/required tasks read-only before recording and use the observed actual form link as entryUrl. Scroll to read questions below the fold; hasResponseFields means there are rendered fields even when not currently in the viewport. Do not require seeing later pages behind unanswered fields: the preparation stage handles those. If the current source establishes eligibility, prize, deadline and required participation tasks, record it. Missing quiz answers or user consent are preparation work, not eligibility blockers. Once those conditions are established, record the candidate immediately; the following preparation job researches unanswered quizzes. Do not delay recording for optional answer research. Prefer a short native form or Moaform single-choice/text form with no SNS engagement requirement when the goal asks for autonomous entry.
 If the screenshot contains an embedded article but text/links are missing, first navigate to the observed iframe href (type=frame) to read that document. Never guess a link from a previous screenshot. A rejected discovery action is a reason to read a supported link or search another source, not to request user permission for a write.
+stale_observation history means the proposed action was NOT executed because the page changed. Do not repeat an ineffective popup click/key. In discovery, navigate an observed HTTP link directly or search another source. skipped_unstable_source means repeated stale actions caused a read-only return to another source; do not return to that skipped URL.
 If a complete URL is visibly printed inside the CURRENT poster, you may propose navigate with that exact URL; the app separately verifies it against the screenshot before read-only navigation. Do not invent a URL or decode a QR code by guessing.
 skippedUrls are sources that this run could not read. Do not retry them, their alternate ports, or change security settings; search a different organizer/source instead.
 When searchEngineOverride is naver, Google is unavailable for this run: change the query or follow observed official navigation; do not repeat Google requests. During discovery only, an observed navigationOnly=true menu may be clicked with network writes blocked. Never use this for login, consent or response fields. A form introduction with hasResponseFields=false may advance via the exact observed Next button. No answers or consent may be selected. Network writes are blocked; if advancing needs a POST, skip this source. Do not call the final submit/participate button or advance a page containing any response field.
@@ -336,6 +337,8 @@ export class Runner {
     let unchangedObservations = 0;
     let rejectedReads = 0;
     let candidateRepairs = 0;
+    let stalePage = '';
+    let staleFailures = 0;
     try {
       if (
         job.uncertain &&
@@ -443,11 +446,39 @@ export class Runner {
           );
         } catch (error) {
           if (error instanceof ServiceError && error.code === 'stale_observation') {
+            job.history.push({
+              action: 'stale_observation',
+              reason: `실행하지 않음: ${step.action}. 판단 중 화면이 변경되었습니다. 다시 관찰하고 다른 읽기 경로를 선택하세요.`,
+              url: o.url,
+            });
             this.store.note(job.id, '화면이 변경되어 다시 관찰합니다.');
+            if (job.kind === 'discover') {
+              staleFailures = stalePage === o.url ? staleFailures + 1 : 1;
+              stalePage = o.url;
+              if (staleFailures >= 3) {
+                if (rejectedReads++ >= 5) throw new ServiceError('unstable_source_recovery_limit');
+                job.skippedUrls = [...new Set([...(job.skippedUrls || []), o.url])].slice(-20);
+                const fallback = [...(job.visitedUrls || [])]
+                  .reverse()
+                  .find((url) => url !== o.url && !job.skippedUrls!.includes(url));
+                job.history.push({
+                  action: 'skipped_unstable_source',
+                  reason:
+                    '같은 화면에서 관찰이 3회 연속 만료되어 다른 공개 출처로 돌아갑니다. 해당 동작들은 실행하지 않았습니다.',
+                  url: o.url,
+                });
+                this.store.note(job.id, job.history.at(-1)!.reason);
+                await this.browser.navigate(fallback || searchUrl(job.goal, 'naver'));
+                staleFailures = 0;
+              }
+            }
+            job.history = job.history.slice(-30);
+            this.store.saveJob(job);
             continue;
           }
           throw error;
         }
+        staleFailures = 0;
         if (step.memory !== undefined) job.memory = step.memory;
         if (step.action === 'needs_user') {
           if (

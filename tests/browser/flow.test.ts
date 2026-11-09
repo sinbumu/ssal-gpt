@@ -547,6 +547,72 @@ test('animated pages permit reading by scroll but invalidate clicks and navigati
   }
 });
 
+test('discovery reports stale actions and leaves a repeatedly changing source without clicking it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-stale-recovery-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  let writes = 0;
+  let attempts = 0;
+  try {
+    const j = job(app.origin);
+    j.kind = 'discover';
+    j.startUrl = app.origin + '/demo/stale/list';
+    const unstable = app.origin + '/demo/stale/changing';
+    await app.browser.open();
+    await app.browser.context!.route('**/demo/stale/**', async (route) => {
+      if (route.request().method() !== 'GET') writes++;
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body:
+          route.request().url() === unstable
+            ? "<h1>알림 팝업</h1><button onclick=\"fetch('/demo/stale/write',{method:'POST'})\">닫기</button>"
+            : '<h1>공개 목록</h1><a href="/demo/stale/changing">후보</a>',
+      });
+    });
+    app.store.saveJob(j);
+    app.runner.model.decide = async (_choice, _instructions, context: any) => {
+      const o = context.observation as Observation;
+      let action: Partial<Step>;
+      if (context.skippedUrls.includes(unstable)) {
+        assert.equal(o.url, j.startUrl);
+        assert.equal(
+          context.history.filter((h: any) => h.action === 'stale_observation').length,
+          3,
+        );
+        action = { action: 'done', reason: '합성 탐색 복구 확인' };
+      } else if (o.url === unstable) {
+        assert.equal(
+          context.history.filter((h: any) => h.action === 'stale_observation').length,
+          attempts,
+        );
+        attempts++;
+        await app.browser.page!.locator('h1').evaluate((el, n) => {
+          el.textContent = '바뀐 알림 ' + n;
+        }, attempts);
+        action = { action: 'click', ref: o.elements.find((e) => e.label === '닫기')!.ref };
+      } else {
+        action = { action: 'navigate', url: unstable };
+      }
+      return {
+        step: { observationId: o.id, reason: '합성 드라이버', ...action } as Step,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+    };
+    app.runner.start(j.id);
+    await app.runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed');
+    assert.equal(attempts, 3);
+    assert.equal(writes, 0);
+    assert.ok(result.skippedUrls?.includes(unstable));
+    assert.ok(result.history.some((h) => h.action === 'skipped_unstable_source'));
+    assert.ok(!result.history.some((h) => h.action === 'click'));
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('explicit manual handoff resumes a live form without GET reloading it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-live-form-'));
   const app = await createApp({ dir, port: 0, headless: true });

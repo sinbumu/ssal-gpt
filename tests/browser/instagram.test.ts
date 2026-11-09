@@ -24,6 +24,7 @@ async function fixture() {
     hideOwn: false,
     renderDelay: 0,
     otherLikes: 0,
+    receiptPages: 0,
   };
   app.store.setSettings('autonomy', syntheticSettings);
   app.store.setSettings('instagramBrowser', { enabled: true, revision: 'fixture-route' });
@@ -49,9 +50,15 @@ async function fixture() {
               `<div class="row"><a href="/fixture_user/">fixture_user</a><span>${text}</span><button>${icon('좋아요')}</button></div>`,
           )
           .join('');
+    const receiptScript = data.receiptPages
+      ? `<script>let receiptPage=0;const pane=document.querySelector('#receipt-pane');pane.onscroll=()=>{if(receiptPage>=${data.receiptPages} || pane.scrollTop+pane.clientHeight<pane.scrollHeight-2)return;setTimeout(()=>{receiptPage++;pane.insertAdjacentHTML('beforeend',receiptPage>=${data.receiptPages} ? ${JSON.stringify(comments)} : '<p style="height:400px">다음 댓글 묶음</p>');},100)};</script>`
+      : '';
+    const renderedComments = data.receiptPages
+      ? `<div id="receipt-pane" style="height:220px;overflow-y:auto"><a href="/other_user/">other_user</a><p style="height:400px">처음 로드된 댓글</p></div>`
+      : comments;
     return route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:230px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p><div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${comments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>`,
+      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:230px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p><div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
     });
   });
   app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -654,6 +661,63 @@ test('Instagram rechecks account after a rejected decision instead of recovering
     assert.match(stopped.note, /계정.*바뀌/);
     assert.equal(stopped.steps, 1);
     assert.equal(f.data.likes + f.data.posts + f.data.otherLikes, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram reads paginated comment receipt and reveals its own row without reposting or more model calls', async () => {
+  const f = await fixture();
+  try {
+    f.data.receiptPages = 3;
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const grant = f.app.store.job(j.id)!.tasks![0]!.approval;
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.equal(f.data.posts, 1);
+    assert.equal(done.steps, 2); // Type and post only; receipt loading uses no AI calls.
+    assert.equal(done.tasks![0]!.receiptReads, 3);
+    assert.deepEqual(done.tasks![0]!.approval, grant);
+    const row = await f.app.browser.page!.locator('#receipt-pane .row').boundingBox();
+    const pane = await f.app.browser.page!.locator('#receipt-pane').boundingBox();
+    assert.ok(row && pane && row.y >= pane.y && row.y + row.height <= pane.y + pane.height);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram bounds persisted receipt scans and never sends an uncertain comment again', async () => {
+  const f = await fixture();
+  try {
+    f.data.receiptPages = 100;
+    f.data.hideOwn = true;
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const pending = f.app.store.job(j.id)!;
+    pending.tasks![0]!.attempt = { at: Date.now(), beforeText: 'previous view' };
+    pending.tasks![0]!.state = 'attempted';
+    pending.tasks![0]!.receiptReads = 19;
+    pending.tasks![0]!.receiptScanStartedAt = Date.now();
+    pending.uncertain = true;
+    pending.status = 'submission_unknown';
+    f.data.posts = 1;
+    f.app.store.saveJob(pending);
+    for (let i = 0; i < 2; i++) {
+      f.app.runner.start(j.id);
+      await f.app.runner.finished();
+      const stopped = f.app.store.job(j.id)!;
+      assert.equal(stopped.status, 'submission_unknown');
+      assert.equal(stopped.tasks![0]!.receiptReads, 20);
+      assert.equal(stopped.steps, 0);
+      assert.equal(f.data.posts, 1);
+    }
   } finally {
     await f.close();
   }

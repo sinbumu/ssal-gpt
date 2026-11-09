@@ -8,7 +8,12 @@ import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
 import { assessBurden } from './selection.js';
-import { instagramTarget, type InstagramTarget, type InstagramView } from './instagram.js';
+import {
+  instagramTarget,
+  moveInstagramReceiptView,
+  type InstagramTarget,
+  type InstagramView,
+} from './instagram.js';
 
 export const TaskSpecSchema = z
   .object({
@@ -59,6 +64,8 @@ export type EntryTask = TaskSpec & {
   };
   preview?: { actor: string; subject: string; observedAt: number; screenshot: string };
   rejections?: TaskRejection[];
+  receiptReads?: number;
+  receiptScanStartedAt?: number;
   attempt?: { at: number; beforeText: string };
   proof?: {
     quote: string;
@@ -410,8 +417,30 @@ export async function runTasks(
         const allowedRefs = scopedControls ? Object.values(scopedControls) : undefined;
         if (!isInstagram && o.elements.filter((e) => targets.test(e.label.trim())).length > 1)
           throw new ServiceError('task_target_ambiguous');
-        const proof = desiredState(task, o);
+        let proof = desiredState(task, o);
         if (proof) {
+          if (isInstagram && task.kind === 'comment') {
+            await moveInstagramReceiptView(
+              browser.page!,
+              { url: task.url, kind: 'comment', text: task.approval.text },
+              task.approval.actor!,
+              'reveal',
+            );
+            const fresh = await browser.observe(false, [], {
+              url: task.url,
+              kind: 'comment',
+              text: task.approval.text,
+            });
+            if (
+              !fresh.instagram?.ready ||
+              fresh.instagram.actor !== task.approval.actor ||
+              fresh.instagram.subject !== task.approval.subject ||
+              !(proof = desiredState(task, fresh))
+            )
+              throw new ServiceError('instagram_receipt_changed');
+            o = fresh;
+            job.screenshot = o.screenshot;
+          }
           task.state = 'verified';
           task.proof = {
             quote: proof,
@@ -426,6 +455,38 @@ export async function runTasks(
           break;
         }
         if (task.attempt) {
+          // A fresh page may initially load only the first batch of comments.
+          // Reconcile by reading the same post; the persisted attempt still forbids
+          // all model decisions and writes until its result is proven.
+          if (
+            isInstagram &&
+            (task.receiptReads || 0) < 20 &&
+            (!task.receiptScanStartedAt || Date.now() - task.receiptScanStartedAt < 30_000)
+          ) {
+            const moved =
+              task.kind === 'comment' &&
+              (await moveInstagramReceiptView(
+                browser.page!,
+                { url: task.url, kind: 'comment', text: task.approval.text },
+                task.approval.actor!,
+                'advance',
+              ));
+            if (moved || !task.receiptReads) {
+              task.receiptScanStartedAt ||= Date.now();
+              task.receiptReads = (task.receiptReads || 0) + 1;
+              if (task.receiptReads === 1)
+                job.history.push({
+                  action: 'task_receipt_read',
+                  reason:
+                    '이미 시도한 동작의 결과를 같은 게시물에서 읽기 확인합니다. 재실행하지 않습니다.',
+                  url: task.url,
+                });
+              job.note = `게시 결과를 읽기 확인하고 있습니다 (${task.receiptReads}/20). 재게시하지 않습니다.`;
+              store.saveJob(job);
+              await browser.page!.waitForTimeout(1000);
+              continue;
+            }
+          }
           job.status = 'submission_unknown';
           job.note = 'SNS 동작 결과가 불명확합니다. 재실행하지 않고 현재 상태 확인을 기다립니다.';
           return false;

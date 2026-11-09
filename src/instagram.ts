@@ -267,3 +267,96 @@ export async function inspectInstagram(
     { target, selector, observedElements },
   );
 }
+
+// Read-only view movement for receipt verification. Never clicks a social button,
+// fetches a hidden API, or scrolls unrelated feeds outside this post's comment root.
+export async function moveInstagramReceiptView(
+  page: Page,
+  target: InstagramTarget,
+  actor: string,
+  mode: 'advance' | 'reveal',
+) {
+  return page.evaluate(
+    ({ target, actor, mode }) => {
+      const helpers = {
+        norm(s: string) {
+          return s.replace(/\s+/g, ' ').trim();
+        },
+        path(s: string) {
+          return new URL(s, location.href).pathname
+            .replace(/^\/[\w.]+\/(p|reel)\//, '/$1/')
+            .replace(/\/$/, '');
+        },
+        visible(el: Element) {
+          const r = el.getBoundingClientRect(),
+            s = getComputedStyle(el);
+          return (
+            r.width > 0 &&
+            r.height > 0 &&
+            s.display !== 'none' &&
+            s.visibility !== 'hidden' &&
+            !el.closest('[hidden],[aria-hidden=true]')
+          );
+        },
+      };
+      const { norm, path, visible } = helpers;
+      if (target.kind !== 'comment' || path(location.href) !== path(target.url)) return false;
+      const editors = [
+        ...document.querySelectorAll<HTMLElement>('textarea,[contenteditable=true]'),
+      ].filter(
+        (e) =>
+          visible(e) &&
+          /댓글|comment/i.test(e.getAttribute('aria-label') || e.getAttribute('placeholder') || ''),
+      );
+      if (editors.length !== 1) return false;
+      let root: HTMLElement | null = editors[0]!.parentElement;
+      while (
+        root &&
+        root !== document.body &&
+        ![...root.querySelectorAll('section svg[aria-label]')].some((e) =>
+          /^(댓글 달기|comment)$/i.test(e.getAttribute('aria-label') || ''),
+        )
+      )
+        root = root.parentElement;
+      if (!root || root === document.body) return false;
+      if (mode === 'reveal') {
+        const matches = [...root.querySelectorAll<HTMLElement>('span,div,p')].filter((e) => {
+          if (
+            !target.text ||
+            !visible(e) ||
+            e.closest('form') ||
+            norm(e.innerText || '') !== norm(target.text)
+          )
+            return false;
+          for (
+            let row = e.parentElement, depth = 0;
+            row && row !== root && depth < 5;
+            row = row.parentElement, depth++
+          ) {
+            const authors = [...row.querySelectorAll<HTMLAnchorElement>('a[href]')]
+              .map((a) => path(a.href))
+              .filter((p) => /^\/[\w.]+$/.test(p));
+            if (authors.length) return authors.every((p) => p.slice(1).toLowerCase() === actor);
+          }
+          return false;
+        });
+        if (!matches.length) return false;
+        matches[0]!.scrollIntoView({ block: 'center', inline: 'nearest' });
+        return true;
+      }
+      const panes = [...root.querySelectorAll<HTMLElement>('div,ul')].filter(
+        (e) =>
+          visible(e) &&
+          e.clientHeight > 100 &&
+          e.scrollHeight > e.clientHeight + 100 &&
+          /auto|scroll/.test(getComputedStyle(e).overflowY) &&
+          !!e.querySelector('a[href]') &&
+          !e.contains(editors[0]!),
+      );
+      if (panes.length !== 1) return false;
+      panes[0]!.scrollTop = panes[0]!.scrollHeight;
+      return true;
+    },
+    { target, actor, mode },
+  );
+}

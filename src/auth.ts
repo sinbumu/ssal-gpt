@@ -57,6 +57,8 @@ const userMessages: Record<string, string> = {
     '현재 인스타 로그인 계정을 화면에서 확정하지 못했습니다. 전용 브라우저에서 로그인 상태를 확인하세요.',
   instagram_target_not_identified:
     '현재 인스타 화면에서 대상 게시물과 필요한 동작을 구분하지 못했습니다. 새 화면에서 재개해 다시 확인할 수 있습니다.',
+  instagram_receipt_changed:
+    '댓글 증거를 화면에 표시하는 동안 계정·대상 또는 댓글이 달라졌습니다. 재게시하지 않고 확인을 기다립니다.',
   instagram_account_or_target_changed:
     '승인 이후 인스타 계정 또는 대상이 바뀌었습니다. 동작하지 않았으며 새 화면에서 재개해 다시 승인해야 합니다.',
   instagram_account_restricted:

@@ -393,3 +393,106 @@ test('Instagram reconciles an attempted follow with a decorative icon without cl
     await f.close();
   }
 });
+
+test('Instagram rebinds approved actions after unrelated live changes without another model call', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like', 'follow', 'comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const decide = f.app.runner.model.decide.bind(f.app.runner.model);
+    let calls = 0;
+    f.app.runner.model.decide = async (...args) => {
+      const result = await decide(...args);
+      calls++;
+      await f.app.browser.page!.evaluate(() => {
+        const b = document.createElement('button');
+        b.textContent = '새로운 알림';
+        document.body.prepend(b);
+      });
+      return result;
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts, f.data.otherLikes], [1, 1, 1, 0]);
+    assert.equal(calls, 4);
+    assert.equal(done.autonomy!.metrics.recoveries, 0);
+    assert.ok(done.history.some((h) => h.action === 'task_scope_refreshed'));
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram fresh action binding rejects account changes during model reasoning', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const decide = f.app.runner.model.decide.bind(f.app.runner.model);
+    f.app.runner.model.decide = async (...args) => {
+      const result = await decide(...args);
+      await f.app.browser
+        .page!.locator('nav a')
+        .evaluate((el) => el.setAttribute('href', '/changed_user/'));
+      return result;
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.status, 'needs_user');
+    assert.equal(f.data.likes, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram preserves an intervening comment draft instead of overwriting it', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const decide = f.app.runner.model.decide.bind(f.app.runner.model);
+    f.app.runner.model.decide = async (...args) => {
+      const result = await decide(...args);
+      await f.app.browser.page!.locator('textarea').fill('사용자가 직접 작성 중인 문구');
+      return result;
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.status, 'needs_user');
+    assert.equal(f.data.posts, 0);
+    assert.equal(
+      await f.app.browser.page!.locator('textarea').inputValue(),
+      '사용자가 직접 작성 중인 문구',
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram resumes a still-valid task grant after rechecking the same account and target', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const retry = f.app.store.job(j.id)!;
+    retry.tasks![0]!.state = 'review';
+    delete retry.tasks![0]!.preview;
+    f.app.store.saveJob(retry);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.equal(f.data.posts, 1);
+  } finally {
+    await f.close();
+  }
+});

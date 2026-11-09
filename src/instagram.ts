@@ -11,6 +11,7 @@ export type InstagramView = {
   requested: boolean;
   ownComment: boolean;
   editorMatches: boolean;
+  editorEmpty: boolean;
   controls: Partial<Record<'like' | 'follow' | 'comment' | 'post', string>>;
 };
 export function instagramTarget(raw: string, kind: string) {
@@ -249,6 +250,7 @@ export async function inspectInstagram(page: Page, target: InstagramTarget, sele
         following: follow.length === 1 && /^(팔로잉|following)$/i.test(label(follow[0]!)),
         requested: follow.length === 1 && /^(요청됨|requested)$/i.test(label(follow[0]!)),
         ownComment,
+        editorEmpty: !!editor && !((editor as HTMLTextAreaElement).value ?? editor.innerText),
         editorMatches:
           !!editor && ((editor as HTMLTextAreaElement).value ?? editor.innerText) === target.text,
       };

@@ -247,6 +247,18 @@ export async function runTasks(
         observedAt: Date.now(),
         screenshot: o.screenshot,
       };
+      const grant = task.approval,
+        config = settings(store);
+      if (
+        grant &&
+        grant.expires > Date.now() &&
+        config.policy.enabled &&
+        grant.revision === config.revision &&
+        grant.routeRevision === instagramBrowser(store).revision &&
+        grant.actor === task.preview.actor &&
+        grant.subject === task.preview.subject
+      )
+        task.state = 'approved';
       job.screenshot = o.screenshot;
       store.saveJob(job);
     }
@@ -332,7 +344,7 @@ export async function runTasks(
         assertGrant();
         signal.throwIfAborted();
         assessBurden(store, job, started);
-        const o = await browser.observe(
+        let o = await browser.observe(
           false,
           [],
           isInstagram
@@ -425,8 +437,7 @@ export async function runTasks(
         job.steps++;
         job.inputTokens += result.inputTokens;
         job.outputTokens += result.outputTokens;
-        const step = result.step,
-          element = o.elements.find((e) => e.ref === step.ref);
+        const step = { ...result.step };
         signal.throwIfAborted();
         assertGrant();
         if (step.observationId !== o.id) throw new ServiceError('stale_observation');
@@ -435,6 +446,60 @@ export async function runTasks(
           job.note = step.reason;
           return false;
         }
+        if (isInstagram && ['type', 'click'].includes(step.action)) {
+          const key =
+            step.action === 'type'
+              ? 'comment'
+              : task.kind === 'comment'
+                ? 'post'
+                : (task.kind as 'like' | 'follow');
+          if (
+            !step.ref ||
+            step.ref !== o.instagram!.controls[key] ||
+            (step.action === 'type' && task.kind !== 'comment')
+          )
+            throw new ServiceError('task_action_outside_grant');
+          const fresh = await browser.observe(false, [], {
+            url: task.url,
+            kind: task.kind as InstagramTarget['kind'],
+            text: task.approval.text,
+          });
+          assertGrant();
+          if (!fresh.instagram?.ready)
+            throw new ServiceError(fresh.instagram?.reason || 'instagram_target_not_identified');
+          if (
+            canonicalUrl(fresh.url) !== canonicalUrl(task.url) ||
+            fresh.instagram.actor !== task.approval.actor ||
+            fresh.instagram.subject !== task.approval.subject
+          )
+            throw new ServiceError('instagram_account_or_target_changed');
+          // The approved action may have completed while the model was thinking.
+          // Let the normal proof path record it; never toggle or post again.
+          if (
+            desiredState(task, fresh) ||
+            (step.action === 'type' && fresh.instagram.editorMatches)
+          )
+            continue;
+          if (key === 'comment' && (!o.instagram!.editorEmpty || !fresh.instagram.editorEmpty))
+            throw new ServiceError('comment_content_changed');
+          if (key === 'post' && !fresh.instagram.editorMatches)
+            throw new ServiceError('comment_content_changed');
+          const ref = fresh.instagram.controls[key];
+          if (!ref) throw new ServiceError('instagram_target_not_identified');
+          // Bind the semantic action to a newly observed, unique control. The normal
+          // freshness checks remain in force; no stale coordinates/refs are reused.
+          step.observationId = fresh.id;
+          step.ref = ref;
+          if (o.revision !== fresh.revision)
+            job.history.push({
+              action: 'task_scope_refreshed',
+              reason: '계정·대상·입력 상태를 다시 검증하고 새 컨트롤에 동작을 연결했습니다.',
+              url: fresh.url,
+            });
+          o = fresh;
+          job.screenshot = o.screenshot;
+        }
+        const element = o.elements.find((e) => e.ref === step.ref);
         if (['type', 'click'].includes(step.action)) {
           try {
             await browser.assertFresh(o.id, step.action);

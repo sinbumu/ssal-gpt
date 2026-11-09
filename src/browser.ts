@@ -389,6 +389,9 @@ export class Browser {
       /google\.[^/]+\/sorry\//i.test(url) ||
       (await page
         .locator('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],#challenge-running')
+        // Background/hidden frames do not ask the person to solve a challenge.
+        // Re-check every observation; a displayed challenge still pauses immediately.
+        .filter({ visible: true })
         .count())
     ) {
       this.invalidate();

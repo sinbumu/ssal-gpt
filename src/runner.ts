@@ -175,6 +175,7 @@ export class Runner {
       .finally(() => {
         const mayContinue = !this.controller?.signal.aborted;
         this.browser.setManual(true);
+        if (job.status === 'completed' && !job.uncertain) this.browser.releaseCompletedJob(job.id);
         this.work = undefined;
         this.controller = undefined;
         this.activeId = undefined;

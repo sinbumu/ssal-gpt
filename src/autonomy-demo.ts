@@ -1,7 +1,13 @@
 import type { Store } from './store.js';
 import { hash } from './autonomy.js';
 
-type DemoState = { page: number; layout: string; inbox: boolean; posts: number };
+type DemoState = {
+  page: number;
+  layout: string;
+  inbox: boolean;
+  extended?: boolean;
+  posts: number;
+};
 export function demoState(store: Store, run: string): DemoState {
   return store.settings(`synthetic:${run}`, { page: 1, layout: 'normal', inbox: false, posts: 0 });
 }
@@ -31,6 +37,16 @@ export function autonomyDemo(store: Store, run: string) {
     fields = ['메뉴가 명확하다', '디자인이 적절하다', '정보 검색이 편리하다', '색상이 편안하다']
       .map((q) => choice(q, ratings))
       .join('');
+  if (state.page === 3 && state.extended) {
+    fields =
+      ['메뉴가 명확하다', '디자인이 적절하다', '정보 검색이 편리하다', '색상이 편안하다']
+        .map(
+          (q) =>
+            `<div role="radiogroup" aria-label="${q}" aria-required="true"><h3>${q}</h3><input type="hidden" name="${name(q)}">${ratings.map((label, i) => `<div tabindex="0" role="radio" aria-checked="false" data-value="${i}">${label}</div>`).join('')}</div>`,
+        )
+        .join('') +
+      `<script>document.querySelectorAll('[role=radio]').forEach(el=>el.onclick=()=>{el.parentElement.querySelectorAll('[role=radio]').forEach(n=>n.setAttribute('aria-checked','false'));el.setAttribute('aria-checked','true');el.parentElement.querySelector('input').value=el.dataset.value});</script>`;
+  }
   if (state.page === 4)
     fields =
       choice(preference, ['커피', '차', '음료']) +
@@ -42,6 +58,8 @@ export function autonomyDemo(store: Store, run: string) {
     fields =
       text('전화번호', 'tel') +
       '<fieldset><legend>선택 마케팅 동의</legend><label><input type="checkbox" name="marketing" value="yes">마케팅 메시지 수신</label></fieldset>';
+  if (state.page === 5 && state.extended)
+    fields += `<fieldset><legend>개인정보 수집 및 이용 동의</legend><p>수집 주체: 쌀-GPT 합성 테스트</p><p>수집 항목: 이름, 이메일, 전화번호<br>수집 및 이용 목적: 이벤트 참여자 확인 및 경품 발송<br>보관 기간: 당첨자 발표 후 1개월</p><label><input type="radio" name="privacy" value="yes" required>동의합니다</label><label><input type="radio" name="privacy" value="no">동의하지 않습니다</label></fieldset>`;
   return `<!doctype html><html lang="ko"><head><title>자율화 합성 설문</title><style>body{font:18px sans-serif;background:#f5f3eb;color:#15251e;max-width:900px;margin:40px auto}fieldset{margin:24px 0;padding:24px;border:1px solid #aab7ad}legend{font-weight:bold}.choice{display:inline-flex;position:relative;margin:10px;padding:16px;background:white;cursor:pointer}.choice input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.choice span{position:relative;pointer-events:none}.choice:has(:checked){background:#cdebd0}input{font-size:20px;padding:10px}button{font-size:22px;padding:16px 32px} ${state.layout === 'shift' ? 'fieldset:nth-of-type(2){margin-top:350px}.choice{display:flex}' : ''}</style></head><body><h1>자율화 합성 설문</h1><p>${state.page} / 5 페이지</p><p>실제 응모·개인정보 전송이 없는 테스트입니다.</p><form method="post" action="/demo/autonomy?run=${run}">${fields}<button type="submit">${state.page < 5 ? '다음' : '제출'}</button></form></body></html>`;
 }
 export function acceptDemo(store: Store, run: string, params: URLSearchParams) {
@@ -77,6 +95,7 @@ export function acceptDemo(store: Store, run: string, params: URLSearchParams) {
     return false;
   if (state.page === 5 && (value('전화번호') !== '010-0000-0000' || params.has('marketing')))
     return false;
+  if (state.extended && state.page === 5 && params.get('privacy') !== 'yes') return false;
   state.posts++;
   state.page++;
   store.setSettings(`synthetic:${run}`, state);

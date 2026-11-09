@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { ServiceError } from './auth.js';
+import { ServiceError, safeMessage } from './auth.js';
 import type { ModelClient } from './model.js';
 import type { Job, Store } from './store.js';
 import type { Runner } from './runner.js';
@@ -223,7 +223,9 @@ export class Scheduler {
             .jobs()
             .some((j) => j.scheduleId === s.id && ['queued', 'running'].includes(j.status))
         ) {
-          s.note = reason || '대기 작업 또는 오늘 실행 횟수 한도에 도달했습니다.';
+          s.note = reason
+            ? safeMessage(new ServiceError(reason))
+            : '대기 작업 또는 오늘 실행 횟수 한도에 도달했습니다.';
           continue;
         }
         const id = randomUUID(),
@@ -294,7 +296,7 @@ export class Scheduler {
         this.runner.start(job.id);
       } catch (e) {
         job.status = 'paused';
-        job.note = e instanceof ServiceError ? e.code : 'queue_start_failed';
+        job.note = e instanceof ServiceError ? safeMessage(e) : '대기 작업을 시작하지 못했습니다.';
         this.store.saveJob(job);
       }
     } finally {

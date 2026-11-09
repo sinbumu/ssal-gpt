@@ -37,6 +37,7 @@
             <h2>진행 중 · 확인함 <span id="pending-count">0</span></h2>
             <span class="hint">필요한 답변과 최종 확인을 한곳에서</span>
           </div>
+          <div id="result-attention"></div>
           <div id="active-jobs"></div>
         </section>
         <section class="panel discover" id="discover">
@@ -403,6 +404,7 @@
                 <div class="inline">
                   <select id="browser-engine">
                     <option value="chromium">기본 Chromium · 기존 로그인</option>
+                    <option value="connected" disabled>직접 연결한 탭</option>
                     <option value="chrome">설치된 Google Chrome · 별도 전용 프로필</option></select
                   ><button type="submit">적용</button>
                 </div>
@@ -465,10 +467,34 @@
                 <button id="demo">AI 브라우저 테스트</button
                 ><button id="demo-shift">배치 변경 테스트</button>
                 <button id="autonomy-demo">자율 설문 테스트</button
-                ><button id="autonomy-demo-inbox">확인함 포함 테스트</button>
+                ><button id="autonomy-demo-inbox">확인함 포함 테스트</button
+                ><button id="autonomy-demo-extended">ARIA 문항·3단계 동의 테스트</button>
               </div>
             </div>
           </div>
+        </section>
+        <section class="panel" id="browser-connect">
+          <h2>기존 Chromium 브라우저 직접 연결</h2>
+          <p class="hint">
+            직접 준비한 로컬 디버깅 브라우저의 탭 하나를 선택합니다. 평소 Chrome 프로필이나 쿠키를
+            복사하지 않습니다. Chrome 136 이상은 기본 프로필의 디버깅을 허용하지 않으므로 별도
+            사용자 데이터 폴더가 필요합니다. 이 연결은 선택한 탭 한 개만 사용하며 별도 조사 탭과
+            여러 작업 병행은 전용 브라우저 모드에서 지원합니다.
+          </p>
+          <form id="connect-browser-form">
+            <label
+              >로컬 디버깅 주소<input
+                name="endpoint"
+                type="url"
+                placeholder="http://127.0.0.1:9222"
+                required /></label
+            ><button>열린 탭 목록 확인</button>
+          </form>
+          <div id="connect-tabs"></div>
+          <p class="hint">
+            연결 해제는 ‘전용 브라우저 정상 종료’로 처리합니다. 사용자의 브라우저 창은 닫지 않으며,
+            재시작 후 자동으로 다시 연결하지 않습니다.
+          </p>
         </section>
         <section class="panel" id="operations">
           <div class="section-head">

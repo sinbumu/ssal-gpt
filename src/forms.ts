@@ -8,7 +8,11 @@ export type FormView = {
   questions: Question[];
   buttons: { id: string; label: string; action: string; form: number }[];
 };
-type Binding = { indices: number[]; optionValues: string[]; custom?: 'moa-radio' | 'notice' };
+type Binding = {
+  indices: number[];
+  optionValues: string[];
+  custom?: 'moa-radio' | 'notice' | 'aria-choice';
+};
 export const isMoaform = (page: Page) => new URL(page.url()).hostname === 'answer.moaform.com';
 // Bind rendered controls only; never read provider-private response state.
 export async function inspectForm(page: Page) {
@@ -41,13 +45,13 @@ export async function inspectForm(page: Page) {
     const groups: {
       label: string;
       description: string;
-      kind: 'text' | 'radio' | 'checkbox' | 'select';
+      kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file';
       required: boolean;
       multiple: boolean;
       options: { label: string; value: string }[];
       indices: number[];
       form: number;
-      custom?: 'moa-radio' | 'notice';
+      custom?: 'moa-radio' | 'notice' | 'aria-choice';
     }[] = [];
     const forms = [...document.forms];
     const seen = new Set<number>();
@@ -56,16 +60,18 @@ export async function inspectForm(page: Page) {
       if (
         seen.has(index) ||
         el.disabled ||
-        ['hidden', 'submit', 'button', 'reset', 'password', 'file'].includes(el.type)
+        ['hidden', 'submit', 'button', 'reset', 'password'].includes(el.type)
       )
         continue;
       if (!helpers.visible(el) && ![...(el.labels || [])].some(helpers.visible)) continue;
       const kind =
-        el instanceof HTMLSelectElement
-          ? 'select'
-          : ['radio', 'checkbox'].includes(el.type)
-            ? (el.type as 'radio' | 'checkbox')
-            : 'text';
+        el.type === 'file'
+          ? 'file'
+          : el instanceof HTMLSelectElement
+            ? 'select'
+            : ['radio', 'checkbox'].includes(el.type)
+              ? (el.type as 'radio' | 'checkbox')
+              : 'text';
       const group =
         (kind === 'radio' || kind === 'checkbox') && el.name
           ? all.filter(
@@ -80,7 +86,7 @@ export async function inspectForm(page: Page) {
       const indices = group.map((e) => all.indexOf(e));
       indices.forEach((i) => seen.add(i));
       const fieldset = el.closest(
-        'fieldset,[role=group],[role=radiogroup]' + (moa ? ',.js-question' : ''),
+        'fieldset,[role=group],[role=radiogroup],[role=listitem]' + (moa ? ',.js-question' : ''),
       );
       const describedBy = (el.getAttribute('aria-describedby') || '')
         .split(/\s+/)
@@ -109,6 +115,9 @@ export async function inspectForm(page: Page) {
         label: questionLabel,
         description: [
           describedBy,
+          el.type === 'file'
+            ? `허용 파일: ${el.getAttribute('accept') || '형식 안내 없음'}; ${(el as HTMLInputElement).multiple ? '복수 파일 입력' : '단일 파일 입력'}`
+            : '',
           moa && fieldset?.matches('.js-question')
             ? [
                 heading,
@@ -125,7 +134,7 @@ export async function inspectForm(page: Page) {
           .slice(0, 3000),
         kind,
         required:
-          group.some((e) => e.required) ||
+          group.some((e) => e.required || e.getAttribute('aria-required') === 'true') ||
           fieldset?.getAttribute('aria-required') === 'true' ||
           (moa && !!fieldset?.querySelector('.wf-icon-required')) ||
           /답변\s*필수/.test(questionLabel),
@@ -133,6 +142,57 @@ export async function inspectForm(page: Page) {
         options,
         indices,
         form: forms.indexOf(el.form!),
+      });
+    }
+    // ARIA choice groups, including grids, bind by visible labels and checked state.
+    // No private framework state or hidden response payload is inspected.
+    const aria = [...document.querySelectorAll<HTMLElement>('[role=radio],[role=checkbox]')];
+    const visited = new Set<Element>();
+    for (const control of aria) {
+      if (!helpers.visible(control) || control.matches('input') || visited.has(control)) continue;
+      const block = control.closest('[role=radiogroup],fieldset,[role=group],[role=listitem]');
+      if (!block) throw new Error('unlabelled_custom_choice');
+      const ariaHelpers = {
+        labelBy(el: Element) {
+          return (el.getAttribute('aria-labelledby') || '')
+            .split(/\s+/)
+            .map((id) => document.getElementById(id)?.textContent || '')
+            .join(' ')
+            .trim();
+        },
+      };
+      const label =
+        block.getAttribute('aria-label') ||
+        ariaHelpers.labelBy(block) ||
+        block.querySelector('legend,[role=heading],h1,h2,h3,h4')?.textContent?.trim();
+      if (!label) throw new Error('unlabelled_custom_choice');
+      const kind = control.getAttribute('role') === 'radio' ? 'radio' : 'checkbox';
+      const options = aria.filter(
+        (c) =>
+          c.getAttribute('role') === kind &&
+          c.closest('[role=radiogroup],fieldset,[role=group],[role=listitem]') === block &&
+          helpers.visible(c) &&
+          c.getAttribute('aria-disabled') !== 'true',
+      );
+      if (options.some((o) => !['true', 'false'].includes(o.getAttribute('aria-checked') || '')))
+        throw new Error('unsupported_choice_state');
+      options.forEach((o) => visited.add(o));
+      groups.push({
+        label,
+        description: (block as HTMLElement).innerText.slice(0, 3000),
+        kind,
+        required:
+          block.getAttribute('aria-required') === 'true' ||
+          options.some((o) => o.getAttribute('aria-required') === 'true') ||
+          /\*/.test(label),
+        multiple: kind === 'checkbox',
+        indices: options.map((o) => aria.indexOf(o)),
+        form: forms.indexOf(block.closest('form')!),
+        custom: 'aria-choice',
+        options: options.map((o) => ({
+          label: o.getAttribute('aria-label') || ariaHelpers.labelBy(o) || o.innerText.trim(),
+          value: String(aria.indexOf(o)),
+        })),
       });
     }
     if (moa) {
@@ -210,7 +270,7 @@ export async function inspectForm(page: Page) {
     }
     const buttons = [
       ...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
-        'button,input[type=submit]',
+        'button,input[type=submit],[role=button]',
       ),
     ]
       .map((b, index) => ({
@@ -256,7 +316,8 @@ export async function inspectForm(page: Page) {
       required: g.required,
       multiple: g.multiple,
       maxChoices: g.multiple
-        ? Number(g.label.match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) || undefined
+        ? Number((g.label + ' ' + g.description).match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) ||
+          undefined
         : 1,
       options,
     };
@@ -289,6 +350,10 @@ export async function applyAnswers(
   answers: Map<string, string[]>,
   onField: () => void,
   signal: AbortSignal,
+  attachment?: (
+    ref: string,
+    question: Question,
+  ) => Promise<{ name: string; mimeType: string; buffer: Buffer; beforeUpload?: () => void }>,
 ) {
   const initial = await inspectForm(page);
   if (initial.view.fingerprint !== expected.fingerprint)
@@ -308,6 +373,35 @@ export async function applyAnswers(
       throw new ServiceError('form_structure_changed');
     const binding = fresh.bindings.get(question.id)!;
     if (binding.custom === 'notice') continue;
+    if (binding.custom === 'aria-choice') {
+      const controls = page.locator('[role=radio],[role=checkbox]');
+      // Select radio target first; clicking the old radio would reselect it.
+      const order = binding.indices
+        .map((_, i) => i)
+        .sort(
+          (a, b) =>
+            Number(answer.includes(question.options[b]!.id)) -
+            Number(answer.includes(question.options[a]!.id)),
+        );
+      for (const i of order) {
+        signal.throwIfAborted();
+        if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
+          throw new ServiceError('form_structure_changed');
+        const control = controls.nth(binding.indices[i]!);
+        const desired = answer.includes(question.options[i]!.id);
+        const checked = (await control.getAttribute('aria-checked')) === 'true';
+        if (desired !== checked && (question.multiple || desired)) await control.click();
+      }
+      for (let i = 0; i < binding.indices.length; i++) {
+        if (
+          ((await controls.nth(binding.indices[i]!).getAttribute('aria-checked')) === 'true') !==
+          answer.includes(question.options[i]!.id)
+        )
+          throw new ServiceError('field_verification_failed');
+      }
+      onField();
+      continue;
+    }
     if (binding.custom === 'moa-radio') {
       signal.throwIfAborted();
       const selected = question.options.findIndex((o) => o.id === answer[0]);
@@ -338,7 +432,56 @@ export async function applyAnswers(
       if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
         throw new ServiceError('form_structure_changed');
       const control = controls.nth(binding.indices[i]!);
-      if (question.kind === 'text') {
+      if (question.kind === 'file') {
+        if (!answer.length) continue;
+        if (!attachment) throw new ServiceError('attachment_resolver_required');
+        const file = await attachment(answer[0]!, question);
+        const accepted = ((await control.getAttribute('accept')) || '')
+          .split(',')
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean);
+        if (
+          accepted.length &&
+          !accepted.some((a) =>
+            a.startsWith('.')
+              ? file.name.toLowerCase().endsWith(a)
+              : a.endsWith('/*')
+                ? file.mimeType.startsWith(a.slice(0, -1))
+                : a === file.mimeType,
+          )
+        )
+          throw new ServiceError('attachment_type_not_accepted');
+        const present = await control.evaluate(async (el) => {
+          const files = (el as HTMLInputElement).files;
+          return files?.length
+            ? {
+                name: files[0]!.name,
+                bytes: Array.from(new Uint8Array(await files[0]!.arrayBuffer())),
+              }
+            : null;
+        });
+        if (
+          !present ||
+          present.name !== file.name ||
+          !file.buffer.equals(Buffer.from(present.bytes))
+        ) {
+          file.beforeUpload?.();
+          await control.setInputFiles({
+            name: file.name,
+            mimeType: file.mimeType,
+            buffer: file.buffer,
+          });
+        }
+        const uploaded = await control.evaluate((el) =>
+          [...((el as HTMLInputElement).files || [])].map((f) => ({ name: f.name, size: f.size })),
+        );
+        if (
+          uploaded.length !== 1 ||
+          uploaded[0]!.name !== file.name ||
+          uploaded[0]!.size !== file.buffer.length
+        )
+          throw new ServiceError('field_verification_failed');
+      } else if (question.kind === 'text') {
         if ((await control.inputValue()) !== answer[0]) await control.fill(answer[0] || '');
         if ((await control.inputValue()) !== answer[0])
           throw new ServiceError('field_verification_failed');
@@ -354,6 +497,7 @@ export async function applyAnswers(
           throw new ServiceError('field_verification_failed');
       } else {
         const checked = answer.includes(question.options[i]!.id);
+        if (question.kind === 'radio' && !checked) continue;
         if ((await control.isChecked()) !== checked) {
           try {
             await control.setChecked(checked, { timeout: 1200 });
@@ -379,19 +523,35 @@ export async function applyAnswers(
           throw new ServiceError('field_verification_failed');
       }
     }
+    if (question.kind === 'radio' && !binding.custom) {
+      for (let i = 0; i < binding.indices.length; i++)
+        if (
+          (await controls.nth(binding.indices[i]!).isChecked()) !==
+          answer.includes(question.options[i]!.id)
+        )
+          throw new ServiceError('field_verification_failed');
+    }
     onField();
   }
 }
 export async function formValuesHash(page: Page) {
   return hash(
     await page
-      .locator('input,textarea,select,.js-question .select-one-and-many')
+      .locator(
+        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox]',
+      )
       .evaluateAll((els) =>
         els
           .filter((el) => !['hidden', 'password'].includes((el as HTMLInputElement).type))
           .map((el) => ({
             value: (el as HTMLInputElement).value,
             checked: (el as HTMLInputElement).checked,
+            ariaChecked: el.getAttribute('aria-checked'),
+            files: Array.from((el as HTMLInputElement).files || []).map((f) => ({
+              name: f.name,
+              size: f.size,
+              lastModified: f.lastModified,
+            })),
             selected: el.matches('.select-one-and-many')
               ? el.classList.contains('clicked')
               : undefined,
@@ -405,26 +565,54 @@ export async function moaformSnapshot(page: Page) {
   for (const q of view.questions) {
     const b = bindings.get(q.id)!;
     if (b.custom === 'notice') continue;
-    if (b.custom === 'moa-radio') {
+    if (b.custom === 'moa-radio' || b.custom === 'aria-choice') {
       for (let i = 0; i < b.indices.length; i++)
         fields.push({
           label: q.label,
-          type: 'radio',
+          type: q.kind,
           group: q.id,
           optionLabel: q.options[i]!.label,
           value: q.options[i]!.label,
           checked: await page
-            .locator('.js-question .select-one-and-many')
+            .locator(
+              b.custom === 'aria-choice'
+                ? '[role=radio],[role=checkbox]'
+                : '.js-question .select-one-and-many',
+            )
             .nth(b.indices[i]!)
-            .evaluate((e) => e.classList.contains('clicked')),
+            .evaluate((e) =>
+              e.hasAttribute('aria-checked')
+                ? e.getAttribute('aria-checked') === 'true'
+                : e.classList.contains('clicked'),
+            ),
         });
-    } else
-      fields.push({
-        label: q.label,
-        type: q.kind,
-        group: q.id,
-        value: await page.locator('input,textarea,select').nth(b.indices[0]!).inputValue(),
-      });
+    } else {
+      for (let i = 0; i < b.indices.length; i++) {
+        const control = page.locator('input,textarea,select').nth(b.indices[i]!);
+        const choice = ['radio', 'checkbox'].includes(q.kind);
+        fields.push({
+          label: q.label,
+          type: q.kind,
+          group: q.id,
+          optionLabel: choice ? q.options[i]?.label : undefined,
+          checked: choice ? await control.isChecked() : undefined,
+          value:
+            q.kind === 'file'
+              ? await control.evaluate((el) =>
+                  Array.from((el as HTMLInputElement).files || [])
+                    .map((f) => f.name)
+                    .join(', '),
+                )
+              : await control.inputValue(),
+          displayValue:
+            q.kind === 'select'
+              ? await control.evaluate((el) =>
+                  Array.from((el as HTMLSelectElement).selectedOptions).map((o) => o.label),
+                )
+              : undefined,
+        });
+      }
+    }
   }
   return [{ action: page.url(), fields }];
 }
@@ -439,7 +627,9 @@ export async function advanceForm(
     throw new ServiceError('form_structure_changed');
   const button = expected.buttons.find((b) => b.id === buttonId);
   if (!button) throw new ServiceError('unobserved_form_button');
-  const locator = page.locator('button,input[type=submit]').nth(Number(buttonId.slice(1)));
+  const locator = page
+    .locator('button,input[type=submit],[role=button]')
+    .nth(Number(buttonId.slice(1)));
   const valid = await locator.evaluate(
     (el) => !(el as HTMLButtonElement).form || (el as HTMLButtonElement).form!.checkValidity(),
   );

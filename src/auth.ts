@@ -48,7 +48,35 @@ export class ServiceError extends Error {
     super(code);
   }
 }
+const userMessages: Record<string, string> = {
+  daily_call_limit:
+    '오늘 설정한 AI 호출 한도에 도달했습니다. 다음 날 재개하거나 운영 설정을 조정하세요.',
+  daily_token_limit: '오늘 보고된 토큰 사용량이 설정 한도에 도달했습니다.',
+  daily_estimated_cost_limit: '오늘의 API 추정 비용 한도에 도달했습니다.',
+  cost_rate_required_for_selected_provider:
+    '비용 제한을 사용하려면 선택한 API 모델의 단가를 입력하세요. ChatGPT 플랜은 금액으로 환산하지 않습니다.',
+  unreported_usage_requires_review:
+    '사용량을 확인하지 못한 호출이 있어 비용 제한에 따라 멈췄습니다. 공급자 사용 내역을 확인하세요.',
+  attachment_upload_state_unknown:
+    '파일 첨부를 시도했지만 현재 상태를 확인할 수 없습니다. 브라우저에서 확인 후 재개해 파일을 다시 선택하세요.',
+  attachment_type_not_accepted: '이 문항에서 허용하지 않는 파일 형식입니다.',
+  attachment_type_not_supported: 'PNG·JPEG·PDF 파일만 지원합니다.',
+  attachment_size_limit: '첨부 파일은 5MB 이하여야 합니다.',
+  attachment_outside_grant: '이 작업과 문항에 허용된 첨부 파일이 아닙니다.',
+  browser_reconnect_required: '기존 브라우저 연결에서 사용할 탭을 다시 선택하세요.',
+  connected_tab_closed:
+    '선택한 탭이 닫혔습니다. 다른 탭을 자동으로 제어하지 않습니다. 직접 다시 연결하세요.',
+  connected_tab_owned_by_another_job:
+    '연결한 탭에서 다른 작업이 대기 중입니다. 전용 브라우저 모드에서 독립 작업을 진행할 수 있습니다.',
+  connected_browser_extra_tab_not_granted:
+    '선택한 탭 외 별도 조사 탭은 허용되지 않았습니다. 전용 브라우저 모드를 이용하세요.',
+  local_debugging_endpoint_required:
+    '직접 준비한 http://127.0.0.1:포트 형식의 로컬 디버깅 주소를 입력하세요.',
+  result_requires_user_check:
+    '공식 발표를 자동 확인하지 못했습니다. 당첨·낙첨은 확정하지 않았습니다.',
+};
 export function safeMessage(error: unknown): string {
+  if (error instanceof ServiceError && userMessages[error.code]) return userMessages[error.code]!;
   if (error instanceof ServiceError)
     return typeof error.code === 'string' && error.code ? error.code : 'service_error';
   if (error instanceof Error && error.name === 'AbortError') return '작업이 중단되었습니다.';

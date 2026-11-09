@@ -14,9 +14,9 @@
 | --- | --- | --- |
 | 전용 Chromium + 지속 프로필 | 첫 MVP | 보이는 창에서 사용자가 최초 로그인. 앱이 소유한 탭·프로필에서 실행하며 재시작 후 세션 재사용 |
 | 설치된 Chrome + 별도 앱 전용 지속 프로필 | 구현 (2026-11-08) | 공식 Chrome 채널 선택. 기존 Chromium 및 일상 Chrome의 프로필과 분리하며 서비스의 로그인 수락은 별도 확인 |
-| 사용자가 명시적으로 연결한 기존 Chrome/Chromium | 후속 연결 방식 | 선택한 탭·프로필만 제어. 연결 방식과 권한을 명시하고 작업 외 탭은 읽지 않음 |
+| 사용자가 명시적으로 연결한 기존 Chrome/Chromium | 구현·합성 검증 (2026-11-09) | 선택한 탭·프로필만 제어. 연결 방식과 권한을 명시하고 작업 외 탭은 읽지 않음 |
 
-기존 Chrome 연결은 확장 또는 사용자가 준비한 로컬 디버깅 연결 등의 지원 여부를 조사한 뒤 선택한다. 기본 프로필을 복사하거나 실행 중인 같은 프로필을 다른 브라우저 프로세스가 동시에 열지 않는다. 제어 포트를 공개 네트워크에 노출하지 않는다.
+기존 Chrome 연결은 사용자가 준비한 `http://127.0.0.1:포트` CDP 연결을 사용한다. 목록에서 고른 탭에만 관측·입력·네트워크 검사를 설치한다. 연결 목록에는 제목과 주소만 표시하며 본문·쿠키·다른 탭 입력은 읽지 않는다. 연결 해제는 창을 닫지 않고 제어 연결만 끊는다. 이 모드는 탭 하나에 한정되며 독립 작업 탭과 별도 정답 조사 탭은 전용 브라우저 모드에서 지원한다. 앱 재시작 후에는 직접 재연결한다. 기본 프로필을 복사하거나 실행 중인 같은 프로필을 다른 브라우저 프로세스가 동시에 열지 않는다. 제어 포트를 공개 네트워크에 노출하지 않는다.
 
 일반 브라우저로 URL을 여는 수동 대안은 기존 Chrome 연결 기능과 다르다. 앱이 해당 창을 관찰·조작하거나 인증 상태를 공유하지 않는다. Google이 자동화 브라우저의 로그인을 거부하는 경우 이 수동 경로로 안내하며, 자동화 식별을 숨기는 플래그나 쿠키 이전으로 해결하지 않는다.
 
@@ -108,3 +108,5 @@ ChatGPT 로그인 경로의 이미지 입력과 사용자 정의 도구를 이�
 - [OpenAI ChatGPT 연동 제한](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations): 지원 모델의 이미지 입력과 사용자 정의 도구를 활용할 수 있고 네이티브 Computer Use는 제공하지 않는 경로다. 위 브라우저 실행 구조는 이 기능들을 조합한 설계 제안이며 동작 검증 전이다.
 - [Playwright Page](https://playwright.dev/docs/api/class-page): 페이지 관찰과 스크린샷·키보드·마우스 실행 기능.
 - [Playwright BrowserType](https://playwright.dev/docs/api/class-browsertype): 브라우저 실행, 지속 프로필과 기존 인스턴스 연결 기능.
+
+2026-11-09 추가 확인: [Playwright CDP 연결](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp), [연결 해제 동작](https://playwright.dev/docs/api/class-browser#browser-close), [파일 입력](https://playwright.dev/docs/input#upload-files), [Chrome 136 기본 프로필의 원격 디버깅 제한](https://developer.chrome.com/blog/remote-debugging-port). 기본 Chrome 프로필을 복사하거나 디버깅 제한을 우회하지 않는다.

@@ -44,7 +44,7 @@ export type Question = {
   signature: string;
   label: string;
   description?: string;
-  kind: 'text' | 'radio' | 'checkbox' | 'select';
+  kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file';
   required: boolean;
   options: { id: string; label: string }[];
   multiple: boolean;
@@ -206,6 +206,11 @@ export function consentQuestion(q: Question) {
   return /동의|약관|마케팅|consent|agree|marketing/i.test(q.label);
 }
 export function validateAnswer(q: Question, answer: string[]): string[] | undefined {
+  if (q.kind === 'file')
+    return (!q.required && answer.length === 0) ||
+      (answer.length === 1 && /^asset:[a-f0-9-]{36}$/.test(answer[0]!))
+      ? answer
+      : undefined;
   if (q.kind === 'text')
     return answer.length === 1 && (!q.required || !!answer[0]?.trim()) ? answer : undefined;
   if (!q.multiple && answer.length > 1) return undefined;
@@ -225,6 +230,13 @@ export function resolveAnswer(
 ): { answer?: string[]; source: string; recommendation?: string[]; consent?: ConsentDecision } {
   const isConsent = consentQuestion(q) || plan?.category === 'consent';
   const override = state.overrides[q.signature];
+  if (q.kind === 'file') {
+    const answer = state.overrides[q.signature];
+    return {
+      answer: answer ? validateAnswer(q, answer) : !q.required ? [] : undefined,
+      source: answer ? 'user_file' : 'file_required',
+    };
+  }
   if (override) {
     const answer = validateAnswer(q, override);
     const consent = isConsent && answer ? userConsentDecision(q, answer) : undefined;

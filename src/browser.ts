@@ -1,4 +1,11 @@
-import { chromium, type BrowserContext, type Page, type ElementHandle } from 'playwright';
+import {
+  chromium,
+  type BrowserContext,
+  type Page,
+  type ElementHandle,
+  type Browser as ConnectedBrowser,
+  type Route,
+} from 'playwright';
 import { randomUUID, createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { lookup } from 'node:dns/promises';
@@ -25,7 +32,7 @@ export type VisibleElement = {
   checked?: boolean;
   value?: string;
 };
-export type BrowserEngine = 'chromium' | 'chrome';
+export type BrowserEngine = 'chromium' | 'chrome' | 'connected';
 export function browserProfileDirectory(dir: string, engine: BrowserEngine) {
   return join(dir, engine === 'chrome' ? 'browser-chrome' : 'browser');
 }
@@ -110,6 +117,11 @@ export class Browser {
   private readOnlyPages = new WeakSet<Page>();
   private readOnlyMode = false;
   private readOnlyBlocks = 0;
+  private external?: ConnectedBrowser;
+  private pendingExternal?: ConnectedBrowser;
+  private externalTabs = new Map<string, Page>();
+  private externalRoute?: (route: Route) => Promise<void>;
+  private externalPage?: Page;
   constructor(
     private dir: string,
     private demoOrigin: string,
@@ -119,6 +131,8 @@ export class Browser {
     this.evidence = privateDirectory(join(dir, 'evidence'));
   }
   async open() {
+    if (this.engine === 'connected' && !this.context)
+      throw new ServiceError('browser_reconnect_required');
     if (this.context) {
       await this.ensurePage();
       return;
@@ -133,6 +147,7 @@ export class Browser {
   }
   private async ensurePage() {
     if (this.page && !this.page.isClosed()) return;
+    if (this.engine === 'connected') throw new ServiceError('connected_tab_closed');
     this.ownerJobId = undefined;
     const page =
       this.context!.pages().find((p) => !p.isClosed()) || (await this.context!.newPage());
@@ -140,6 +155,8 @@ export class Browser {
   }
   async selectJob(id: string) {
     await this.open();
+    if (this.engine === 'connected' && this.ownerJobId && this.ownerJobId !== id)
+      throw new ServiceError('connected_tab_owned_by_another_job');
     // Keep POST-backed forms alive while an independent job uses its own tab.
     if (this.ownerJobId && this.page && !this.page.isClosed())
       this.jobPages.set(this.ownerJobId, this.page);
@@ -154,6 +171,14 @@ export class Browser {
     this.jobPages.set(id, this.page!);
     this.invalidate();
     await this.page!.bringToFront();
+  }
+  releaseCompletedJob(id: string) {
+    this.jobPages.delete(id);
+    if (this.ownerJobId === id) this.ownerJobId = undefined;
+  }
+  jobPage(id: string) {
+    const page = this.ownerJobId === id ? this.page : this.jobPages.get(id);
+    return page && !page.isClosed() ? page : undefined;
   }
   setManual(manual: boolean) {
     this.manual = manual;
@@ -170,7 +195,12 @@ export class Browser {
       engine: this.engine,
       open: !!this.context,
       manual: this.manual,
-      profile: this.engine === 'chrome' ? '쌀-GPT 전용 Chrome' : '쌀-GPT 전용 Chromium',
+      profile:
+        this.engine === 'connected'
+          ? '직접 연결한 브라우저 · 선택한 탭'
+          : this.engine === 'chrome'
+            ? '쌀-GPT 전용 Chrome'
+            : '쌀-GPT 전용 Chromium',
     };
   }
   async connectionStatus() {
@@ -258,6 +288,8 @@ export class Browser {
     }
   }
   async inReadOnlyTab<T>(read: () => Promise<T>): Promise<T> {
+    if (this.engine === 'connected')
+      throw new ServiceError('connected_browser_extra_tab_not_granted');
     await this.open();
     const original = this.page!;
     const owner = this.ownerJobId;
@@ -642,7 +674,11 @@ export class Browser {
     return o;
   }
   async formSnapshot() {
-    if (isMoaform(this.page!)) return moaformSnapshot(this.page!);
+    if (
+      isMoaform(this.page!) ||
+      (await this.page!.locator('[role=radio]:not(input),[role=checkbox]:not(input)').count())
+    )
+      return moaformSnapshot(this.page!);
     return this.page!.evaluate(() => {
       const helpers = {
         label(el: Element) {
@@ -672,10 +708,7 @@ export class Browser {
               'input,textarea,select',
             ),
           ]
-            .filter(
-              (el) =>
-                !['hidden', 'password', 'submit', 'button', 'reset', 'file'].includes(el.type),
-            )
+            .filter((el) => !['hidden', 'password', 'submit', 'button', 'reset'].includes(el.type))
             .map((el, index) => {
               const group = el.closest('fieldset,[role=group],[role=radiogroup]');
               const heading = group
@@ -685,7 +718,12 @@ export class Browser {
               return {
                 name: el.name || el.getAttribute('aria-label'),
                 type: el.type,
-                value: el.value,
+                value:
+                  el.type === 'file'
+                    ? Array.from((el as HTMLInputElement).files || [])
+                        .map((f) => f.name)
+                        .join(', ')
+                    : el.value,
                 checked: el instanceof HTMLInputElement ? el.checked : undefined,
                 label:
                   heading ||
@@ -768,11 +806,126 @@ export class Browser {
       throw new ServiceError('read_only_request_blocked');
   }
   async close() {
-    await this.context?.close();
+    if (this.external) {
+      if (this.externalPage && this.externalRoute)
+        await this.externalPage.unroute('**/*', this.externalRoute).catch(() => {});
+      await this.external.close();
+      this.external = undefined;
+      this.externalPage = undefined;
+      this.externalRoute = undefined;
+    } else await this.context?.close();
     this.context = undefined;
     this.page = undefined;
     this.ownerJobId = undefined;
     this.jobPages.clear();
     this.invalidate();
+  }
+
+  async listConnection(endpoint: string) {
+    const url = new URL(endpoint);
+    if (
+      url.protocol !== 'http:' ||
+      url.hostname !== '127.0.0.1' ||
+      !url.port ||
+      url.username ||
+      url.password ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash
+    )
+      throw new ServiceError('local_debugging_endpoint_required');
+    const response = await fetch(new URL('/json/version', url), {
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    });
+    const version = (await response.json()) as { webSocketDebuggerUrl?: string };
+    const ws = new URL(version.webSocketDebuggerUrl || 'invalid:');
+    if (
+      ws.protocol !== 'ws:' ||
+      ws.hostname !== '127.0.0.1' ||
+      ws.port !== url.port ||
+      ws.username ||
+      ws.password ||
+      !/^\/devtools\/browser\/[a-f0-9-]+$/.test(ws.pathname)
+    )
+      throw new ServiceError('local_debugging_endpoint_required');
+    await this.pendingExternal?.close();
+    this.pendingExternal = await chromium.connectOverCDP(ws.href, { timeout: 10000 });
+    this.externalTabs.clear();
+    const tabs = [];
+    for (const context of this.pendingExternal.contexts()) {
+      for (const page of context.pages()) {
+        const id = randomUUID();
+        this.externalTabs.set(id, page);
+        // Connection inventory only. No body, screenshot, cookies or unrelated tabs' inputs.
+        tabs.push({ id, url: page.url(), title: await page.title().catch(() => '') });
+      }
+    }
+    return tabs;
+  }
+  async connectTab(id: string) {
+    const selected = this.externalTabs.get(id),
+      pending = this.pendingExternal;
+    if (!selected || selected.isClosed() || !pending)
+      throw new ServiceError('connection_tab_not_available');
+    await this.close();
+    this.external = pending;
+    this.pendingExternal = undefined;
+    this.externalTabs.clear();
+    this.engine = 'connected';
+    this.context = selected.context();
+    this.externalPage = selected;
+    this.attach(selected);
+    this.externalRoute = async (route) => {
+      try {
+        if (this.readOnlyMode && !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())) {
+          this.readOnlyBlocks++;
+          await route.abort('blockedbyclient');
+          return;
+        }
+        await validateUrl(route.request().url(), this.demoOrigin);
+        await route.continue();
+      } catch {
+        await route.abort('blockedbyclient').catch(() => {});
+      }
+    };
+    await selected.route('**/*', this.externalRoute);
+    const track = () => {
+      if ((window as any).__ssalExternalTracking) return;
+      (window as any).__ssalExternalTracking = true;
+      (window as any).__ssalRevision = 0;
+      new MutationObserver(() => {
+        (window as any).__ssalRevision++;
+      }).observe(document, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+      window.addEventListener(
+        'input',
+        () => {
+          (window as any).__ssalRevision++;
+        },
+        true,
+      );
+      window.addEventListener(
+        'scroll',
+        () => {
+          (window as any).__ssalRevision++;
+        },
+        true,
+      );
+    };
+    await selected.addInitScript(track);
+    await selected.evaluate(track);
+    this.setManual(true);
+    this.setReadOnlyMode(false);
+    await selected.bringToFront();
+  }
+  async disconnectPending() {
+    await this.pendingExternal?.close();
+    this.pendingExternal = undefined;
+    this.externalTabs.clear();
   }
 }

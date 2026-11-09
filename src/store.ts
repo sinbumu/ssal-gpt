@@ -138,7 +138,7 @@ export function scoreCandidate(candidate: Candidate, now = Date.now()) {
 
 export class Store {
   readonly db: DatabaseSync;
-  constructor(dir: string) {
+  constructor(readonly dir: string) {
     const file = join(dir, 'state.sqlite');
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);

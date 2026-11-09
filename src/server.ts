@@ -20,6 +20,7 @@ import {
   validateAnswer,
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
+import { AttachmentSchema, addAttachment } from './attachments.js';
 import { inspectForm } from './forms.js';
 import { searchUrl } from './evidence.js';
 import {
@@ -53,6 +54,7 @@ const JobSchema = z.object({
   autonomy: z.boolean().default(false),
   prepareOne: z.boolean().default(false),
   demoInbox: z.boolean().default(false),
+  demoExtended: z.boolean().default(false),
   provider: ProviderSchema,
   goal: z.string().min(1).max(2000),
   eventId: z.string().optional(),
@@ -192,7 +194,9 @@ export async function createApp(options: {
     let data: any = {};
     if (method === 'POST') {
       try {
-        data = JSON.parse(await body(request));
+        data = JSON.parse(
+          await body(request, url.pathname === '/api/attachments' ? 7100000 : 64000),
+        );
       } catch (error) {
         if (error instanceof ServiceError) throw error;
         throw new ServiceError('invalid_json');
@@ -250,6 +254,13 @@ export async function createApp(options: {
         activeId: runner.activeId,
         selection: store.settings('selection', null),
       });
+    }
+    if (method === 'POST' && url.pathname === '/api/attachments') {
+      return send(
+        response,
+        200,
+        await addAttachment(store, options.dir, AttachmentSchema.parse(data)),
+      );
     }
     if (method === 'POST' && url.pathname === '/api/outcomes') {
       const input = OutcomeSchema.parse(data);
@@ -338,6 +349,25 @@ export async function createApp(options: {
       const choice = ProviderSchema.parse(data);
       store.setSettings('selection', choice);
       return send(response, 200, { ok: true });
+    }
+    if (
+      method === 'POST' &&
+      ['/api/browser/connect-list', '/api/browser/connect-tab'].includes(url.pathname)
+    ) {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_changing_browser');
+      manualNavigation = true;
+      store.setSettings('operations', { ...operations(store), queueEnabled: false });
+      try {
+        if (url.pathname.endsWith('connect-list'))
+          return send(response, 200, {
+            tabs: await browser.listConnection(z.string().url().parse(data.endpoint)),
+          });
+        await browser.connectTab(z.string().uuid().parse(data.tabId));
+        return send(response, 200, { ok: true });
+      } finally {
+        manualNavigation = false;
+      }
     }
     if (method === 'POST' && url.pathname === '/api/browser/open') {
       if (runner.isBusy() || manualNavigation)
@@ -468,10 +498,15 @@ export async function createApp(options: {
       };
       if (input.kind === 'autonomy_demo') {
         job.autonomy = createAutonomy(syntheticSettings, origin, true);
+        if (input.demoExtended) {
+          job.autonomy.policy.consent.mode = 'adaptive';
+          job.autonomy.organizer = '쌀-GPT 합성 테스트';
+        }
         store.setSettings(`synthetic:${id}`, {
           page: 1,
           layout: input.layout || 'normal',
           inbox: input.demoInbox,
+          extended: input.demoExtended,
           posts: 0,
         });
       } else if (input.autonomy) {
@@ -578,7 +613,7 @@ export async function createApp(options: {
       }
       if (action === 'inbox') {
         if (
-          runner.isBusy() ||
+          (runner.isBusy() && (!operations(store).queueEnabled || runner.activeId === id)) ||
           manualNavigation ||
           !job.autonomy?.inbox ||
           job.status !== 'needs_user'
@@ -590,14 +625,13 @@ export async function createApp(options: {
           throw new ServiceError('inbox_expired');
         manualNavigation = true;
         try {
-          await browser.selectJob(job.id);
-          if (browser.ownerJobId !== job.id || !browser.page)
-            throw new ServiceError('autonomy_live_page_required');
+          const page = browser.jobPage(job.id);
+          if (!page) throw new ServiceError('autonomy_live_page_required');
           if (inbox.final) {
             if (data.confirm !== true) throw new ServiceError('final_confirmation_required');
             state.finalApproval = inbox.fingerprint;
           } else {
-            if ((await inspectForm(browser.page)).view.fingerprint !== inbox.fingerprint)
+            if ((await inspectForm(page)).view.fingerprint !== inbox.fingerprint)
               throw new ServiceError('inbox_page_changed');
             const answers = z
               .record(z.string(), z.array(z.string().max(2000)).max(30))
@@ -611,7 +645,7 @@ export async function createApp(options: {
               state.overrides[q.signature] = answer!;
               if (q.kind === 'text')
                 state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
-              if (data.remember === true && !state.synthetic)
+              if (data.remember === true && !state.synthetic && q.kind !== 'file')
                 saveAnswer(store, {
                   signature: q.signature,
                   question: q.label,
@@ -624,9 +658,12 @@ export async function createApp(options: {
           }
           state.metrics.waitingMs = (state.metrics.waitingMs || 0) + Date.now() - inbox.createdAt;
           delete state.inbox;
-          job.status = 'paused';
+          job.status = runner.isBusy() ? 'queued' : 'paused';
+          job.note = runner.isBusy()
+            ? '답변을 저장했습니다. 현재 작업이 끝나면 보존한 탭에서 재개합니다.'
+            : '답변을 저장하고 재개합니다.';
           store.saveJob(job);
-          runner.start(id);
+          if (!runner.isBusy()) runner.start(id);
           return send(response, 200, { ok: true });
         } finally {
           manualNavigation = false;
@@ -752,6 +789,7 @@ export async function createApp(options: {
       scheduler.stop();
       if (runner.activeId) await runner.pause(runner.activeId);
       await browser.close();
+      await browser.disconnectPending();
       await new Promise<void>((r, j) => server.close((e) => (e ? j(e) : r())));
       store.close();
     },

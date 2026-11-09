@@ -49,6 +49,8 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  inbox_not_available:
+    '현재 이 확인함에 답변할 수 없습니다. 갱신된 작업 상태를 확인해 주세요. 중지·완료된 작업은 실행 기록에 보관됩니다.',
   instagram_preview_required:
     '현재 계정과 과제 대상을 다시 확인해야 합니다. 새 화면에서 재개한 뒤 승인하세요.',
   instagram_account_not_identified:

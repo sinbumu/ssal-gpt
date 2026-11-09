@@ -208,7 +208,9 @@ export class Runner {
     job.status = job.uncertain ? 'submission_unknown' : stop ? 'stopped' : 'paused';
     job.note = job.uncertain
       ? '제출 결과가 확인되지 않았습니다. 재응모하지 말고 현재 화면을 확인하세요.'
-      : '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.';
+      : stop
+        ? '작업을 중지했습니다. 추가 답변이나 재개 없이 실행 기록만 보관합니다.'
+        : '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.';
     delete job.approval;
     this.browser.invalidate();
     this.browser.setReadOnlyMode(false);

@@ -75,6 +75,8 @@ const userMessages: Record<string, string> = {
     '해당 서비스의 자동 실행 허용 경로가 확인되지 않았거나 만료됐습니다. 과제 확인함에서 직접 수행 결과를 기록할 수 있습니다.',
   task_action_outside_grant:
     '계획한 과제·대상·게시 내용과 동작이 일치하지 않아 실행하지 않았습니다.',
+  task_decision_recovery_exhausted:
+    '실행 전 판단 오류를 자동 복구 한도까지 재검토했지만 해결하지 못했습니다. 실행 내역에 원인을 남겼으며 기존 승인과 완료 과제는 보존됩니다.',
   task_target_changed:
     '과제 대상 주소가 바뀌어 중단했습니다. 기존 승인을 다른 게시물에 적용하지 않습니다.',
   possible_existing_comment:

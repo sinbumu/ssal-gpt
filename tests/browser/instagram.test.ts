@@ -496,3 +496,165 @@ test('Instagram resumes a still-valid task grant after rechecking the same accou
     await f.close();
   }
 });
+
+test('Instagram control identity survives DOM insertion between handles and semantic inspection', async () => {
+  const f = await fixture();
+  try {
+    await f.app.browser.navigate(url);
+    const page = f.app.browser.page!;
+    const evaluate = page.evaluate.bind(page);
+    let injected = false;
+    // observe captures element handles, then evaluates the Instagram scope.
+    // Insert a new element only between those two reads, not during readiness polling.
+    const original = page.locator.bind(page);
+    page.locator = ((...args: Parameters<typeof page.locator>) => {
+      const locator = original(...args);
+      const handles = locator.elementHandles.bind(locator);
+      locator.elementHandles = async () => {
+        const captured = await handles();
+        if (!injected && args[0].includes('[role=button]')) {
+          injected = true;
+          await evaluate(() => {
+            const b = document.createElement('button');
+            b.textContent = '새 알림';
+            document.body.prepend(b);
+          });
+        }
+        return captured;
+      };
+      return locator;
+    }) as typeof page.locator;
+    const o = await f.app.browser.observe(false, [], { url, kind: 'like' });
+    assert.equal(injected, true);
+    assert.equal(o.instagram?.ready, true);
+    assert.equal(o.elements.find((e) => e.ref === o.instagram?.controls.like)?.label, '좋아요');
+    assert.equal(f.data.likes + f.data.follows + f.data.posts + f.data.otherLikes, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram automatically reconsiders a rejected decision while preserving grants and verified follow', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['follow', 'like', 'comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const grants = f.app.store.job(j.id)!.tasks!.map((t) => t.approval!.id);
+    const decide = f.app.runner.model.decide.bind(f.app.runner.model);
+    let wrong = true;
+    f.app.runner.model.decide = async (...args) => {
+      const c = args[2] as any;
+      assert.ok(
+        Object.keys(c.observation.instagram.controls).every((key) =>
+          c.task.kind === 'comment' ? ['comment', 'post'].includes(key) : key === c.task.kind,
+        ),
+      );
+      const result = await decide(...args);
+      if (c.task.kind === 'like' && wrong) {
+        wrong = false;
+        result.step.ref = 'e1'; // Another observed control, never the target like.
+      } else if (c.task.kind === 'like') {
+        assert.equal(c.lastRejection, 'wrong_control');
+        assert.equal(f.data.likes, 0);
+        assert.equal(f.data.follows, 1);
+      }
+      return result;
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.deepEqual(
+      done.tasks!.map((t) => t.approval!.id),
+      grants,
+    );
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts, f.data.otherLikes], [1, 1, 1, 0]);
+    assert.equal(done.autonomy!.metrics.recoveries, 1);
+    assert.equal(done.tasks![1]!.rejections![0]!.reason, 'wrong_control');
+    assert.equal(done.tasks![1]!.rejections![0]!.retryScheduled, true);
+    assert.ok(done.history.some((h) => h.action === 'task_decision_recovery'));
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram decision recovery is bounded, persists diagnostics without raw text, and preserves approval', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like']);
+    j.autonomy!.policy.maxRecoveries = 2;
+    f.app.store.saveJob(j);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const grant = f.app.store.job(j.id)!.tasks![0]!.approval;
+    f.app.runner.model.decide = async (_p, _i, c: any) => ({
+      step: {
+        action: 'click',
+        observationId: c.observation.id,
+        ref: 'private@example.invalid',
+        text: 'unapproved private content',
+        reason: 'untrusted reason',
+      },
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    let stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'needs_user');
+    assert.match(stopped.note, /자동 복구 한도/);
+    assert.equal(stopped.steps, 3);
+    assert.equal(stopped.autonomy!.metrics.recoveries, 2);
+    assert.deepEqual(stopped.tasks![0]!.approval, grant);
+    assert.equal(stopped.tasks![0]!.rejections!.at(-1)!.retryScheduled, false);
+    assert.doesNotMatch(
+      JSON.stringify(stopped.tasks![0]!.rejections),
+      /private@|unapproved|untrusted/,
+    );
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.steps, 4); // Another explicit resume does not reset the retry budget.
+    assert.equal(stopped.autonomy!.metrics.recoveries, 2);
+    assert.equal(f.data.likes + f.data.follows + f.data.posts + f.data.otherLikes, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram rechecks account after a rejected decision instead of recovering across an account change', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    f.app.runner.model.decide = async (_p, _i, c: any) => {
+      await f.app.browser
+        .page!.locator('nav a')
+        .evaluate((e) => e.setAttribute('href', '/changed_user/'));
+      return {
+        step: {
+          action: 'click',
+          observationId: c.observation.id,
+          ref: 'e999',
+          reason: '합성 오류',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'needs_user');
+    assert.match(stopped.note, /계정.*바뀌/);
+    assert.equal(stopped.steps, 1);
+    assert.equal(f.data.likes + f.data.posts + f.data.otherLikes, 0);
+  } finally {
+    await f.close();
+  }
+});

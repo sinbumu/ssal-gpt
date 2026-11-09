@@ -474,7 +474,7 @@ export class Browser {
     const handles = await page.locator(observableControls).elementHandles();
     const elements: VisibleElement[] = [];
     const social = instagram
-      ? await inspectInstagram(page, instagram, observableControls)
+      ? await inspectInstagram(page, instagram, observableControls, handles)
       : undefined;
     const socialRefs: InstagramView['controls'] = {};
     for (const [index, handle] of handles.slice(0, 500).entries()) {

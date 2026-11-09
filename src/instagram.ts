@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { ElementHandle, Page } from 'playwright';
 
 export type InstagramTarget = { url: string; kind: 'like' | 'follow' | 'comment'; text?: string };
 export type InstagramView = {
@@ -58,9 +58,14 @@ export async function waitForInstagram(page: Page, target: InstagramTarget, sele
     await page.waitForTimeout(250);
   }
 }
-export async function inspectInstagram(page: Page, target: InstagramTarget, selector: string) {
+export async function inspectInstagram(
+  page: Page,
+  target: InstagramTarget,
+  selector: string,
+  observedElements?: ElementHandle<Node>[],
+) {
   return page.evaluate(
-    ({ target, selector }) => {
+    ({ target, selector, observedElements }) => {
       const helpers = {
         norm(s: string) {
           return s.replace(/\s+/g, ' ').trim();
@@ -101,7 +106,11 @@ export async function inspectInstagram(page: Page, target: InstagramTarget, sele
         },
       };
       const { norm, visible, label, path, handle } = helpers;
-      const all = [...document.querySelectorAll<HTMLElement>(selector)];
+      // Indexes must address the exact handles captured by observe. Re-querying here
+      // can shift every index when Instagram inserts a comment or navigation item.
+      const all = (observedElements || [
+        ...document.querySelectorAll<HTMLElement>(selector),
+      ]) as HTMLElement[];
       const actors = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')]
         .filter((a) => {
           const img = a.querySelector('img');
@@ -255,6 +264,6 @@ export async function inspectInstagram(page: Page, target: InstagramTarget, sele
           !!editor && ((editor as HTMLTextAreaElement).value ?? editor.innerText) === target.text,
       };
     },
-    { target, selector },
+    { target, selector, observedElements },
   );
 }

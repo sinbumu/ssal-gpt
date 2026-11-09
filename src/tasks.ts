@@ -2,13 +2,13 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Job, EventRecord, Store } from './store.js';
 import type { Browser, Observation } from './browser.js';
-import type { ModelClient } from './model.js';
+import type { ModelClient, Step } from './model.js';
 import { canonicalUrl } from './store.js';
 import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
 import { assessBurden } from './selection.js';
-import { instagramTarget, type InstagramTarget } from './instagram.js';
+import { instagramTarget, type InstagramTarget, type InstagramView } from './instagram.js';
 
 export const TaskSpecSchema = z
   .object({
@@ -22,6 +22,30 @@ export const TaskSpecSchema = z
   })
   .strict();
 export type TaskSpec = z.infer<typeof TaskSpecSchema>;
+type TaskRejectionReason =
+  | 'stale_observation'
+  | 'missing_ref'
+  | 'wrong_control'
+  | 'unsupported_action'
+  | 'label_mismatch'
+  | 'text_mismatch';
+const rejectionMessages: Record<TaskRejectionReason, string> = {
+  stale_observation: '판단에 사용한 화면이 현재 관찰과 다릅니다.',
+  missing_ref: '판단에 실행할 버튼 참조가 없습니다.',
+  wrong_control: '판단한 요소가 이번 과제의 버튼과 다릅니다.',
+  unsupported_action: '판단한 동작이 이번 과제에서 허용한 종류와 다릅니다.',
+  label_mismatch: '연결된 요소의 라벨이 이번 과제와 다릅니다.',
+  text_mismatch: '입력하려는 문구가 승인한 댓글과 다릅니다.',
+};
+type TaskRejection = {
+  at: number;
+  reason: TaskRejectionReason;
+  action: Step['action'];
+  refState: 'missing' | 'not_observed' | 'different' | 'expected';
+  labelKind: 'like' | 'unlike' | 'follow' | 'following' | 'comment' | 'post' | 'other' | 'missing';
+  screenshot: string;
+  retryScheduled: boolean;
+};
 export type EntryTask = TaskSpec & {
   state: 'pending' | 'review' | 'approved' | 'attempted' | 'verified' | 'manual_reported';
   approval?: {
@@ -34,6 +58,7 @@ export type EntryTask = TaskSpec & {
     routeRevision?: string;
   };
   preview?: { actor: string; subject: string; observedAt: number; screenshot: string };
+  rejections?: TaskRejection[];
   attempt?: { at: number; beforeText: string };
   proof?: {
     quote: string;
@@ -375,7 +400,14 @@ export async function runTasks(
             : task.kind === 'follow'
               ? /^(팔로우|팔로잉|팔로우 취소|follow|following|unfollow)$/i
               : /^(게시|등록|댓글 등록|post|send)$/i;
-        const allowedRefs = o.instagram ? Object.values(o.instagram.controls) : undefined;
+        const scopedControls = o.instagram
+          ? Object.fromEntries(
+              Object.entries(o.instagram.controls).filter(([key]) =>
+                task.kind === 'comment' ? ['comment', 'post'].includes(key) : key === task.kind,
+              ),
+            )
+          : undefined;
+        const allowedRefs = scopedControls ? Object.values(scopedControls) : undefined;
         if (!isInstagram && o.elements.filter((e) => targets.test(e.label.trim())).length > 1)
           throw new ServiceError('task_target_ambiguous');
         const proof = desiredState(task, o);
@@ -423,12 +455,17 @@ export async function runTasks(
               ? {
                   ...observation,
                   elements: observation.elements.filter((e) => allowedRefs!.includes(e.ref)),
-                  instagram: { ...o.instagram, actor: '[connected account]' },
+                  instagram: {
+                    ...o.instagram,
+                    controls: scopedControls,
+                    actor: '[connected account]',
+                  },
                 }
               : observation,
             task: { kind: task.kind, instruction: task.instruction },
             approvedText: task.approval.text,
             editorMatchesApproved,
+            lastRejection: task.rejections?.at(-1)?.reason,
             lastActions: job.history.slice(-4),
           },
           image,
@@ -440,7 +477,74 @@ export async function runTasks(
         const step = { ...result.step };
         signal.throwIfAborted();
         assertGrant();
-        if (step.observationId !== o.id) throw new ServiceError('stale_observation');
+        // Only a rejected, not-yet-executed decision can be reconsidered. The next
+        // iteration re-observes and rechecks the same grant, account and target.
+        // Never use this path after an uncertain write or to silently remap a bad ref.
+        const reject = (reason: TaskRejectionReason) => {
+          if (!isInstagram)
+            throw new ServiceError(
+              reason === 'stale_observation' ? 'stale_observation' : 'task_action_outside_grant',
+            );
+          const element = o.elements.find((e) => e.ref === step.ref);
+          const label = element?.label.trim();
+          const labelKind = !element
+            ? 'missing'
+            : /^(좋아요|like)$/i.test(label!)
+              ? 'like'
+              : /^(좋아요 취소|unlike)$/i.test(label!)
+                ? 'unlike'
+                : /^(팔로우|follow)$/i.test(label!)
+                  ? 'follow'
+                  : /^(팔로잉|following)$/i.test(label!)
+                    ? 'following'
+                    : /^(게시|등록|댓글 등록|post|send)$/i.test(label!)
+                      ? 'post'
+                      : /댓글|comment/i.test(label!)
+                        ? 'comment'
+                        : 'other';
+          const expectedKey =
+            task.kind === 'comment' ? (step.action === 'type' ? 'comment' : 'post') : task.kind;
+          const expectedRef = o.instagram?.controls[expectedKey as keyof InstagramView['controls']];
+          const recovered = !!(
+            isInstagram &&
+            !task.attempt &&
+            !job.uncertain &&
+            job.autonomy &&
+            job.autonomy.metrics.recoveries < job.autonomy.policy.maxRecoveries &&
+            job.steps < job.maxSteps
+          );
+          const diagnostic: TaskRejection = {
+            at: Date.now(),
+            reason,
+            action: step.action,
+            refState: !step.ref
+              ? 'missing'
+              : !element
+                ? 'not_observed'
+                : step.ref === expectedRef
+                  ? 'expected'
+                  : 'different',
+            labelKind,
+            screenshot: o.screenshot,
+            retryScheduled: recovered,
+          };
+          // No raw model text/ref, page label, account name or comment in diagnostics.
+          task.rejections = [...(task.rejections || []), diagnostic].slice(-20);
+          const message = `${rejectionMessages[reason]} 동작하지 않았습니다.`;
+          job.history.push({
+            action: recovered ? 'task_decision_recovery' : 'task_decision_rejected',
+            reason: `${message} ${recovered ? '기존 승인으로 새 화면에서 다시 판단합니다.' : '자동 복구 한도에서 멈췄습니다. 기존 승인과 완료 과제는 보존됩니다.'}`,
+            url: task.url,
+          });
+          if (recovered) job.autonomy!.metrics.recoveries++;
+          job.note = message;
+          store.saveJob(job);
+          if (!recovered) throw new ServiceError('task_decision_recovery_exhausted');
+        };
+        if (step.observationId !== o.id) {
+          reject('stale_observation');
+          continue;
+        }
         if (step.action === 'needs_user') {
           job.status = 'needs_user';
           job.note = step.reason;
@@ -457,8 +561,16 @@ export async function runTasks(
             !step.ref ||
             step.ref !== o.instagram!.controls[key] ||
             (step.action === 'type' && task.kind !== 'comment')
-          )
-            throw new ServiceError('task_action_outside_grant');
+          ) {
+            reject(
+              step.action === 'type' && task.kind !== 'comment'
+                ? 'unsupported_action'
+                : !step.ref
+                  ? 'missing_ref'
+                  : 'wrong_control',
+            );
+            continue;
+          }
           const fresh = await browser.observe(false, [], {
             url: task.url,
             kind: task.kind as InstagramTarget['kind'],
@@ -505,6 +617,14 @@ export async function runTasks(
             await browser.assertFresh(o.id, step.action);
           } catch (error) {
             if (
+              isInstagram &&
+              error instanceof ServiceError &&
+              error.code === 'stale_observation'
+            ) {
+              reject('stale_observation');
+              continue;
+            }
+            if (
               error instanceof ServiceError &&
               error.code === 'stale_observation' &&
               !task.attempt &&
@@ -531,8 +651,10 @@ export async function runTasks(
             (isInstagram && step.ref !== o.instagram!.controls.comment) ||
             !/comment|댓글|코멘트/i.test(element.label) ||
             (!['textarea', 'input'].includes(element.tag) && element.role !== 'textbox')
-          )
-            throw new ServiceError('task_action_outside_grant');
+          ) {
+            reject(step.text !== task.approval.text ? 'text_mismatch' : 'label_mismatch');
+            continue;
+          }
         } else if (step.action === 'click') {
           const expected =
             task.kind === 'like'
@@ -548,8 +670,10 @@ export async function runTasks(
                 o.instagram!.controls[
                   task.kind === 'comment' ? 'post' : (task.kind as 'like' | 'follow')
                 ])
-          )
-            throw new ServiceError('task_action_outside_grant');
+          ) {
+            reject('label_mismatch');
+            continue;
+          }
           if (task.kind === 'comment') {
             const values = await browser
               .page!.locator('textarea,input,[role=textbox]')
@@ -559,15 +683,29 @@ export async function runTasks(
             if (!values.includes(task.approval.text))
               throw new ServiceError('comment_content_changed');
           }
-          await browser.assertFresh(o.id, step.action);
+          try {
+            await browser.assertFresh(o.id, step.action);
+          } catch (error) {
+            if (
+              isInstagram &&
+              error instanceof ServiceError &&
+              error.code === 'stale_observation'
+            ) {
+              reject('stale_observation');
+              continue;
+            }
+            throw error;
+          }
           task.attempt = { at: Date.now(), beforeText: o.text };
           task.state = 'attempted';
           job.uncertain = true;
           job.transmitted = true;
           if (job.eventId) store.markSubmission(job.eventId, 'unknown');
           store.saveJob(job);
-        } else if (!['scroll', 'wait'].includes(step.action))
-          throw new ServiceError('task_action_outside_grant');
+        } else if (!['scroll', 'wait'].includes(step.action)) {
+          reject('unsupported_action');
+          continue;
+        }
         await browser.act(step);
         if (isInstagram && step.action === 'click') {
           // Re-read persisted server state instead of accepting only an optimistic UI change.

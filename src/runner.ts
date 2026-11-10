@@ -27,6 +27,8 @@ import {
   MAX_DISCOVERY_SWITCHES,
   selectedDiscoveryLink,
   discoveryPageKey,
+  noteDiscoveryRead,
+  stalledDiscoveryRead,
 } from './discovery.js';
 export { pageProgress } from './page-progress.js';
 
@@ -389,6 +391,7 @@ export class Runner {
         executable.action === 'navigate' && executable.url
           ? searchLocation(executable.url)
           : undefined;
+      noteDiscoveryRead(job, o.url, executable);
       if (executable.action === 'search')
         noteSearch(job, executable.searchEngine || 'naver', executable.text || '');
       else if (search?.query) noteSearch(job, search.engine, search.query);
@@ -607,6 +610,18 @@ export class Runner {
               ? { ...step, action: 'navigate' as const, url: href }
               : step;
           const repeated = guardDiscoverySearch(job, readStep);
+          const stalled = stalledDiscoveryRead(job, o, readStep);
+          if (stalled) {
+            rejectSource(job, o.url, stalled);
+            job.history.push({ action: 'discovery_read_stalled', reason: stalled, url: o.url });
+            const fresh = discoveryState(job).frontier.find((v) => !excludedSource(job, v.url));
+            await this.redirectDiscovery(
+              job,
+              fresh ? { url: fresh.url, reason: stalled } : nextDiscoveryRoute(job),
+              signal,
+            );
+            continue;
+          }
           if (step.action === 'skip_source') {
             rejectSource(job, o.url, step.reason, step.skipCategory === 'restricted');
             job.history.push({ action: 'skip_source', reason: step.reason, url: o.url });

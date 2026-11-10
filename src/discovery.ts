@@ -13,6 +13,8 @@ export type DiscoveryState = {
   blockedEngines: Engine[];
   lastProgressStep: number;
   switches: number;
+  readCounts?: Record<string, number>;
+  navigationCounts?: Record<string, number>;
 };
 export function discoveryState(job: Job): DiscoveryState {
   return (job.discovery ??= {
@@ -86,7 +88,7 @@ export function excludedSource(job: Job, raw: string) {
     (u) => discoveryPageKey(u) === key,
   );
 }
-function readableLink(raw: string, label: string) {
+function readableLink(raw: string, label: string, source?: string) {
   try {
     const u = new URL(raw);
     return (
@@ -101,6 +103,12 @@ function readableLink(raw: string, label: string) {
         label,
       ) &&
       // A tracking query such as ?eventCode=ad is not an event link.
+      !(
+        source &&
+        /^(www\.)?instagram\.com$/.test(new URL(source).hostname) &&
+        /^(www\.)?instagram\.com$/.test(u.hostname) &&
+        !/이벤트|event|경품|응모/i.test(label)
+      ) &&
       (/이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice/i.test(label) ||
         /(?:^|\/)events?(?:\/|\.|$)|\/notice(?:\/|$)/i.test(u.pathname) ||
         (/^(www\.)?instagram\.com$/.test(u.hostname) &&
@@ -125,9 +133,17 @@ export function observeDiscovery(job: Job, o: Observation) {
       noteSearch(job, search.engine, search.query);
   }
   for (const e of o.elements) {
-    if (!e.href || !readableLink(e.href, e.label)) continue;
-    if (!s.frontier.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!)))
+    if (
+      !e.href ||
+      !readableLink(e.href, e.label, o.url) ||
+      s.visited.includes(discoveryPageKey(e.href)) ||
+      excludedSource(job, e.href)
+    )
+      continue;
+    if (!s.frontier.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!))) {
       s.frontier.push({ url: e.href, label: e.label.slice(0, 200), source: o.url });
+      (s.readCounts ??= {})[key] = 0;
+    }
   }
   s.frontier = s.frontier
     .filter((v) => !s.visited.includes(discoveryPageKey(v.url)) && !excludedSource(job, v.url))
@@ -153,10 +169,35 @@ export function rejectSource(job: Job, url: string, reason: string, restricted =
 }
 export function selectedDiscoveryLink(job: Job, o: Observation, url?: string) {
   if (!url || discoveryPageKey(url) === discoveryPageKey(o.url) || excludedSource(job, url)) return;
+  // A visited list is still an observed destination after leaving the frontier.
+  if (job.visitedUrls?.includes(url)) return url;
   const link =
     o.elements.find((e) => e.href === url) ||
     discoveryState(job).frontier.find((e) => e.url === url);
-  return link && readableLink(url, link.label) ? url : undefined;
+  return link && readableLink(url, link.label, o.url) ? url : undefined;
+}
+export function noteDiscoveryRead(job: Job, source: string, step: Step) {
+  const s = discoveryState(job),
+    key = discoveryPageKey(source);
+  if (['scroll', 'wait', 'navigate'].includes(step.action))
+    (s.readCounts ??= {})[key] = (s.readCounts?.[key] || 0) + 1;
+  if (step.action === 'navigate' && step.url && !searchLocation(step.url)) {
+    const target = JSON.stringify([key, discoveryPageKey(step.url)]);
+    (s.navigationCounts ??= {})[target] = (s.navigationCounts?.[target] || 0) + 1;
+  }
+}
+export function stalledDiscoveryRead(job: Job, o: Observation, step: Step) {
+  const s = discoveryState(job),
+    key = discoveryPageKey(o.url);
+  if (['scroll', 'wait'].includes(step.action) && (s.readCounts?.[key] || 0) >= 8)
+    return '새 행사 링크 확보 없이 같은 출처를 8회 읽어 다른 출처로 전환합니다.';
+  if (
+    step.action === 'navigate' &&
+    step.url &&
+    !searchLocation(step.url) &&
+    (s.navigationCounts?.[JSON.stringify([key, discoveryPageKey(step.url)])] || 0) >= 2
+  )
+    return '같은 출처에서 동일한 주소로 이동을 반복해 해당 읽기 경로를 제외합니다.';
 }
 export function discoveryContext(job: Job) {
   const s = discoveryState(job);
@@ -168,6 +209,7 @@ export function discoveryContext(job: Job) {
     freshLinks: s.frontier.slice(0, 16),
     switches: s.switches,
     remainingDecisions: job.maxSteps - job.steps,
+    readsWithoutNewLinks: s.readCounts?.[discoveryPageKey(job.currentUrl || job.startUrl)] || 0,
   };
 }
 export type DiscoveryRoute = { url: string; reason: string; engine?: Engine; query?: string };

@@ -11,6 +11,8 @@ import {
   excludedSource,
   discoveryPageKey,
   selectedDiscoveryLink,
+  noteDiscoveryRead,
+  stalledDiscoveryRead,
 } from '../src/discovery.js';
 import type { Job } from '../src/store.js';
 import type { Observation } from '../src/browser.js';
@@ -124,6 +126,14 @@ test('fallback excludes tracking ads, purchase offers, winners and generic mirro
     discoveryState(j).frontier.map((v) => v.url),
     ['https://www.instagram.com/p/ObservedPost/'],
   );
+  const social = job();
+  observeDiscovery(social, {
+    url: 'https://www.instagram.com/p/Event/',
+    elements: [
+      { href: 'https://www.instagram.com/p/Recommendation/', label: '바다 여행 사진 댓글 20개' },
+    ],
+  } as Observation);
+  assert.equal(discoveryState(social).frontier.length, 0);
 });
 test('Naver article wrappers share identity and a skip can only select an observed readable URL', () => {
   const j = job(),
@@ -145,4 +155,38 @@ test('Naver article wrappers share identity and a skip can only select an observ
     discoveryPageKey('https://www.google.com/sorry/index?q=challenge&continue=private'),
     'https://www.google.com/sorry/index',
   );
+});
+
+test('excluding a detail page may return to an already observed list, but never to a rejected list', () => {
+  const j = job(),
+    url = 'https://example.org/cpevent?isActive=1';
+  j.visitedUrls = [url];
+  const o = { url: 'https://example.org/cpevent/123', elements: [] } as unknown as Observation;
+  assert.equal(selectedDiscoveryLink(j, o, url), url);
+  rejectSource(j, url, '금지', true);
+  assert.equal(selectedDiscoveryLink(j, o, url), undefined);
+});
+
+test('stalled reading and failed navigation counters survive resume but do not block candidate recording', () => {
+  const j = job(),
+    o = { url: 'https://example.org/long', elements: [] } as unknown as Observation;
+  const scroll = { action: 'scroll' as const, observationId: 'o', reason: 'read', delta: 500 };
+  for (let i = 0; i < 8; i++) noteDiscoveryRead(j, o.url, scroll);
+  const resumed = JSON.parse(JSON.stringify(j));
+  assert.ok(stalledDiscoveryRead(resumed, o, scroll));
+  assert.equal(stalledDiscoveryRead(resumed, o, { ...scroll, action: 'record_event' }), undefined);
+  const navigate = {
+    action: 'navigate' as const,
+    observationId: 'o',
+    reason: 'read',
+    url: 'https://example.org/frame',
+  };
+  noteDiscoveryRead(resumed, o.url, navigate);
+  noteDiscoveryRead(resumed, o.url, navigate);
+  assert.ok(stalledDiscoveryRead(resumed, o, navigate));
+  observeDiscovery(resumed, {
+    ...o,
+    elements: [{ href: 'https://example.org/event/new', label: '새 행사 이벤트' }],
+  } as Observation);
+  assert.equal(stalledDiscoveryRead(resumed, o, scroll), undefined);
 });

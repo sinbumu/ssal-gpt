@@ -238,3 +238,62 @@ test('model selects the next observed source while excluding an unsuitable page,
     assert.equal(result.steps, 2);
     assert.ok(result.history.some((h) => h.action === 'skip_source'));
   }));
+
+test('reading a long unproductive source is bounded and switches to another observed source without manual restart', async () =>
+  fixture(async (app, visits) => {
+    const j = job(`${app.origin}/demo/list`);
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === j.startUrl ? { action: 'scroll', delta: 500 } : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.deepEqual(visits, [j.startUrl, `${app.origin}/demo/event`]);
+    assert.equal(result.steps, 10);
+    assert.equal(result.maxSteps, 10);
+    assert.equal(result.history.filter((h) => h.action === 'scroll').length, 8);
+    assert.ok(result.history.some((h) => h.action === 'discovery_read_stalled'));
+  }));
+
+test('an observed iframe redirect loop is abandoned after two attempts without widening navigation permissions', async () =>
+  fixture(async (app, visits) => {
+    const j = job(`${app.origin}/demo/list`),
+      frame = `${app.origin}/demo/loop-target`;
+    await app.browser.context!.route('**/demo/list', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<a href="${frame}">본문 보기</a><a href="${app.origin}/demo/event">다른 이벤트</a>`,
+      }),
+    );
+    let loops = 0;
+    await app.browser.context!.route('**/demo/loop-target', (r) => {
+      loops++;
+      return r.fulfill({ status: 302, headers: { location: j.startUrl } });
+    });
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === j.startUrl
+          ? { action: 'navigate', url: frame }
+          : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(loops, 2);
+    assert.equal(result.steps, 4);
+    assert.equal(result.discovery!.switches, 1);
+    assert.ok(visits.includes(`${app.origin}/demo/event`));
+  }));

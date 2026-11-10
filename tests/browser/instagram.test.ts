@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createApp } from '../../src/server.js';
-import { ServiceError } from '../../src/auth.js';
+import { Auth, ServiceError } from '../../src/auth.js';
+import { Model } from '../../src/model.js';
+import { runtimePath, privateDirectory, writePrivate } from '../../src/config.js';
 import { createAutonomy, syntheticSettings } from '../../src/autonomy.js';
 import { approveTask, type EntryTask } from '../../src/tasks.js';
 import type { Job } from '../../src/store.js';
@@ -27,6 +29,9 @@ async function fixture() {
     renderDelay: 0,
     otherLikes: 0,
     receiptPages: 0,
+    carousel: false,
+    imageQuiz: false,
+    shifted: false,
   };
   app.store.setSettings('autonomy', syntheticSettings);
   app.store.setSettings('instagramBrowser', { enabled: true, revision: 'fixture-route' });
@@ -44,6 +49,20 @@ async function fixture() {
       }
       return route.fulfill({ body: 'ok' });
     }
+    const cards = [
+      'OX 퀴즈 2문제',
+      '문제 1: 삼각형의 변은 3개다. O/X?',
+      '문제 2: 5 더하기 4는 8이다. O/X?',
+      '정답: 1번 O, 2번 X',
+    ];
+    const quizImage = (text: string) =>
+      'data:image/svg+xml,' +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300"><rect width="640" height="300" fill="#e3effc"/><text x="24" y="120" font-size="26" font-family="sans-serif">${text}</text></svg>`,
+      );
+    const carousel = data.carousel
+      ? `<div style="position:relative;width:${data.imageQuiz ? 640 : 360}px;height:${data.imageQuiz ? 300 : 180}px"><img id="card" width="${data.imageQuiz ? 640 : 360}" height="${data.imageQuiz ? 300 : 180}" alt="합성 카드" src="${quizImage(data.imageQuiz ? cards[0]! : '')}">${data.imageQuiz ? '' : '<p id="card-label" style="position:absolute;top:30px;left:20px">퀴즈 표지</p>'}<button id="next-card" aria-label="다음" style="position:absolute;right:4px;top:60px">→</button></div><script>let card=0;document.querySelector('#next-card').onclick=()=>{card++;${data.imageQuiz ? `document.querySelector('#card').src=${JSON.stringify(cards.map(quizImage))}[card]` : `document.querySelector('#card-label').textContent=['퀴즈 표지','문제 1: 1+1=2','문제 2: 2+2=5','정답: 1=O, 2=X'][card]`};if(card===3)document.querySelector('#next-card').remove()};</script>`
+      : '';
     const comments = data.hideOwn
       ? ''
       : data.comments
@@ -60,7 +79,7 @@ async function fixture() {
       : comments;
     return route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:230px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p><div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
+      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:${data.shifted ? 330 : 230}px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p>${carousel}<div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
     });
   });
   app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -747,6 +766,7 @@ test('missing comment draft uses the visible page before batch review, shows its
           observationId: c.observation.id,
           text: '합성 응모합니다',
           draftBasis: 'source_text',
+          draftRequirementsMet: true,
           evidenceQuote: '합성 이벤트',
           url,
           reason: '관측한 원문의 문구를 권장 댓글로 준비했습니다.',
@@ -836,6 +856,7 @@ test('draft evidence cannot invent sources and its bounded attempts survive resu
           observationId: c.observation.id,
           text: '근거 없는 정답',
           draftBasis: 'source_text',
+          draftRequirementsMet: true,
           evidenceQuote: '존재하지 않는 근거',
           url: 'https://invented.invalid/source',
           reason: '가상 검증',
@@ -877,6 +898,7 @@ test('draft inference is labeled, missing personal facts stay with the user, and
           observationId: c.observation.id,
           text: '공개 단서에서 추론한 합성 답안',
           draftBasis: 'inference',
+          draftRequirementsMet: true,
           evidenceQuote: '합성 이벤트',
           reason: '이미지와 공개 설명을 함께 해석한 제안입니다.',
         },
@@ -918,3 +940,200 @@ test('draft inference is labeled, missing personal facts stay with the user, and
     await f.close();
   }
 });
+
+test('carousel quiz prepares a verified score from frozen earlier answers and replaces only unapproved legacy drafts', async () => {
+  const f = await fixture();
+  try {
+    f.data.carousel = true;
+    const j = f.make(['like', 'follow', 'comment']);
+    const task = j.tasks![2]!;
+    task.instruction = '2가지 OX퀴즈를 풀고 맞힌 문제 개수를 댓글로 남겨주세요.';
+    task.draft = '근거 없이 응원합니다';
+    task.draftPreparation = {
+      state: 'ready',
+      calls: 2,
+      basis: 'suggestion',
+      reason: '문항 미확인',
+    };
+    // B10: evidence from discovery must be retained on disk but not repeated in this phase.
+    j.autonomy!.evidence = [
+      {
+        id: 'old',
+        url: 'https://unrelated.invalid/old',
+        title: '무관한 자료',
+        text: 'unrelated '.repeat(10000),
+        screenshot: 'old.png',
+        observedAt: 1,
+      },
+    ];
+    f.app.store.saveJob(j);
+    const execute = f.app.runner.model.decide.bind(f.app.runner.model);
+    let rejected = false;
+    f.app.runner.model.decide = async (p, i, c: any, image, signal) => {
+      if (c.phase !== 'comment_draft') return execute(p, i, c, image, signal);
+      assert.ok(image.length > 100);
+      assert.ok(!JSON.stringify(c).includes('unrelated.invalid'));
+      const o = c.observation;
+      const step: any = { observationId: o.id, reason: '합성 카드의 공개 자료 읽기' };
+      if (!rejected) {
+        rejected = true;
+        Object.assign(step, {
+          action: 'done',
+          text: '응원합니다',
+          draftBasis: 'suggestion',
+          draftRequirementsMet: true,
+        });
+      } else if (o.text.includes('정답: 1=O')) {
+        assert.equal(c.quizAttempts.length, 2);
+        assert.equal(c.quizAttempts[0].answer, 'O');
+        assert.equal(c.quizAttempts[1].answer, 'O'); // Wrong initial answer must not be rewritten.
+        Object.assign(step, {
+          action: 'done',
+          text: '2문제 중 1개 정답입니다.',
+          draftBasis: 'inference',
+          draftRequirementsMet: true,
+          evidenceQuote: '정답: 1=O, 2=X',
+          draftScore: { correct: 1, total: 2 },
+          quizAnswers: [{ number: 2, question: '문제 2', answer: 'X' }],
+          quizKey: [
+            { number: 1, answer: 'O', evidenceQuote: '정답: 1=O' },
+            { number: 2, answer: 'X', evidenceQuote: '2=X' },
+          ],
+        });
+      } else {
+        assert.equal(o.hasResponseFields, true);
+        const next = o.elements.find((e: any) => e.mediaNavigation === 'next');
+        assert.ok(next, 'post image arrow is a read control despite comment editor');
+        Object.assign(step, { action: 'click', ref: next.ref });
+        if (o.text.includes('문제 1:'))
+          step.quizAnswers = [{ number: 1, question: '1+1=2', answer: 'O' }];
+        if (o.text.includes('문제 2:'))
+          step.quizAnswers = [{ number: 2, question: '2+2=5', answer: 'O' }];
+      }
+      return { step, inputTokens: 1, outputTokens: 1 };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const ready = f.app.store.job(j.id)!;
+    assert.equal(ready.tasks![2]!.draft, '2문제 중 1개 정답입니다.', ready.note);
+    assert.equal(ready.tasks![2]!.draftPreparation?.superseded?.draft, '근거 없이 응원합니다');
+    assert.equal(ready.tasks![2]!.draftPreparation?.quiz?.[1]?.answer, 'O');
+    assert.ok(ready.history.some((h) => h.action === 'comment_draft_rejected'));
+    assert.ok(ready.autonomy!.evidence.some((s) => s.id === 'old'));
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    f.approve(j.id);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.status, 'completed', f.app.store.job(j.id)!.note);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [1, 1, 1]);
+    assert.deepEqual(f.data.comments, ['2문제 중 1개 정답입니다.']);
+  } finally {
+    await f.close();
+  }
+});
+
+// Opt-in only: uses the user's already connected ChatGPT plan, never an API fallback.
+// Isolated fixture browser/store; no real Instagram requests or participation.
+test(
+  'live AI reads image-only quiz cards on two layouts before preparing review',
+  { skip: process.env.SSAL_LIVE_COMMENT_QUIZ !== '1' },
+  async () => {
+    const dir = runtimePath();
+    const live = new Model(new Auth(dir));
+    const state = (await fetch('http://127.0.0.1:4317/api/state').then((r) => r.json())) as any;
+    assert.equal(state.busy, false);
+    assert.equal(state.selection.kind, 'chatgpt');
+    assert.ok(state.operations.dailyCalls - state.usage.calls >= 20);
+    assert.ok(state.operations.dailyTokens - state.usage.tokens >= 300000);
+    const reportDir = privateDirectory(join(dir, 'benchmarks', 'image-quiz-' + Date.now()));
+    const reports: any[] = [];
+    const digest = () =>
+      createHash('sha256')
+        .update(
+          ['browser', 'task-draft', 'tasks', 'model', 'research']
+            .map((name) =>
+              readFileSync(new URL('../../src/' + name + '.ts', import.meta.url), 'utf8'),
+            )
+            .join('\n'),
+        )
+        .digest('hex');
+    const sourceDigest = digest();
+    let usedCalls = 0,
+      usedTokens = 0;
+    for (const shifted of [false, true]) {
+      const f = await fixture();
+      let calls = 0;
+      try {
+        f.data.carousel = f.data.imageQuiz = true;
+        f.data.shifted = shifted;
+        const j = f.make(['comment']);
+        j.provider = state.selection;
+        j.tasks![0]!.instruction =
+          '2가지 OX퀴즈를 직접 풀고 맞힌 문제 개수를 댓글로 남겨주세요. 이미지에 문항과 정답이 있습니다.';
+        j.tasks![0]!.quote = '2가지 OX퀴즈를 풀고 댓글로 맞힌 문제 개수를 남겨주세요.';
+        delete j.tasks![0]!.draft;
+        f.app.store.saveJob(j);
+        f.app.runner.model.decide = async (...args) => {
+          assert.ok(++calls <= 10);
+          assert.ok(++usedCalls <= 20);
+          assert.equal(digest(), sourceDigest, 'freeze benchmark source during the run');
+          const current = (await fetch('http://127.0.0.1:4317/api/state').then((r) =>
+            r.json(),
+          )) as any;
+          assert.equal(current.busy, false, 'do not overlap with a real entry');
+          assert.equal((args[2] as any).phase, 'comment_draft');
+          assert.ok(current.usage.calls + usedCalls < current.operations.dailyCalls);
+          assert.ok(current.usage.tokens + usedTokens < current.operations.dailyTokens);
+          const result = await live.decide(...args);
+          usedTokens += result.inputTokens + result.outputTokens;
+          return result;
+        };
+        const start = Date.now();
+        f.app.runner.start(j.id);
+        await f.app.runner.finished();
+        const done = f.app.store.job(j.id)!;
+        const report = {
+          shifted,
+          elapsedMs: Date.now() - start,
+          calls,
+          status: done.status,
+          note: done.note,
+          inputTokens: done.inputTokens,
+          outputTokens: done.outputTokens,
+          task: done.tasks![0],
+          history: done.history,
+        };
+        reports.push(report);
+        cpSync(join(f.app.store.dir, 'evidence'), join(reportDir, shifted ? 'shifted' : 'normal'), {
+          recursive: true,
+        });
+        writePrivate(join(reportDir, 'results.json'), reports);
+        console.log(
+          JSON.stringify({
+            shifted,
+            calls,
+            elapsedMs: report.elapsedMs,
+            tokens: done.inputTokens + done.outputTokens,
+            ready: report.task.draftPreparation?.state === 'ready',
+            reportDir,
+          }),
+        );
+        assert.equal(done.tasks![0]!.draftPreparation?.state, 'ready', done.note);
+        const attempts = done.tasks![0]!.draftPreparation!.quiz!;
+        assert.equal(attempts.length, 2);
+        assert.deepEqual(
+          attempts.map((q) => q.answer),
+          ['O', 'X'],
+        );
+        assert.deepEqual(
+          attempts.map((q) => q.key?.answer),
+          ['O', 'X'],
+        );
+        assert.match(done.tasks![0]!.draft!, /2\s*(개|문제|문항)/);
+        assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+      } finally {
+        await f.close();
+      }
+    }
+  },
+);

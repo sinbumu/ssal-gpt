@@ -8,7 +8,7 @@ import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
 import { assessBurden } from './selection.js';
-import { prepareCommentDraft, type DraftPreparation } from './task-draft.js';
+import { prepareCommentDraft, outdatedDraft, type DraftPreparation } from './task-draft.js';
 import {
   instagramTarget,
   moveInstagramReceiptView,
@@ -301,7 +301,7 @@ export async function runTasks(
       if (
         task.kind === 'comment' &&
         task.state === 'review' &&
-        !task.draft?.trim() &&
+        (!task.draft?.trim() || outdatedDraft(task)) &&
         !task.approval &&
         !task.attempt &&
         (pendingForm < 0 || index < pendingForm) &&

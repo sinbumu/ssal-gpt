@@ -89,3 +89,57 @@ test('public header menus can navigate read-only while login, form links and net
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('post media arrows are read controls while forms, outside arrows, stale refs and profile arrows are not', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-media-nav-'));
+  const browser = new Browser(dir, undefined, true);
+  let writes = 0;
+  try {
+    await browser.open();
+    await browser.context!.route('https://www.instagram.com/**', async (route) => {
+      if (route.request().method() === 'POST') writes++;
+      await route.fulfill({
+        contentType: 'text/html',
+        body: `<main><div style="position:relative;width:400px;height:240px"><img width="400" height="240" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"><button id="media" aria-label="Next" style="position:absolute;right:5px;top:100px" onclick="document.querySelector('#card').textContent='second card'">→</button><form style="position:absolute;left:5px;top:100px"><button id="form-arrow" aria-label="Previous">←</button></form></div><p id="card">first card</p><form><input placeholder="answer"><button id="submit">Next</button></form><button id="outside">Next</button><button id="like" aria-pressed="false">Like</button></main>`,
+      });
+    });
+    browser.setManual(false);
+    browser.setReadOnlyMode(true);
+    await browser.navigate('https://www.instagram.com/p/media-fixture/');
+    const o = await browser.observe();
+    const next = o.elements.find((e) => e.mediaNavigation === 'next')!;
+    assert.ok(next);
+    assert.equal(o.hasResponseFields, true);
+    assert.equal(o.elements.filter((e) => e.mediaNavigation).length, 1);
+    const step = {
+      action: 'click' as const,
+      observationId: o.id,
+      ref: next.ref,
+      reason: 'read next card',
+    };
+    // Existing generic Next rule would reject this because a comment/form field exists.
+    assert.equal(
+      actionPolicy({ kind: 'discover' } as Job, step, {
+        ...o,
+        elements: o.elements.map((e) => ({ ...e, mediaNavigation: undefined })),
+      }),
+      'block',
+    );
+    assert.equal(actionPolicy({ kind: 'discover' } as Job, step, o), 'allow');
+    for (const e of o.elements.filter((e) => !e.mediaNavigation))
+      if (e.tag === 'button')
+        assert.equal(
+          actionPolicy({ kind: 'discover' } as Job, { ...step, ref: e.ref }, o),
+          'block',
+        );
+    await browser.act(step);
+    assert.match((await browser.observe()).text, /second card/);
+    await assert.rejects(() => browser.act(step), /stale_observation/);
+    await browser.navigate('https://www.instagram.com/fixture_profile/');
+    assert.ok((await browser.observe()).elements.every((e) => !e.mediaNavigation));
+    assert.equal(writes, 0);
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

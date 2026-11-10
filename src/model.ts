@@ -70,6 +70,30 @@ export const StepSchema = z
     resultKind: z.enum(['announced', 'pending', 'unavailable']).optional(),
     receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
     draftBasis: z.enum(['source_text', 'source_image', 'inference', 'suggestion']).optional(),
+    draftRequirementsMet: z.boolean().optional(),
+    draftScore: z
+      .object({ correct: z.number().int().min(0).max(20), total: z.number().int().min(1).max(20) })
+      .optional(),
+    quizAnswers: z
+      .array(
+        z.object({
+          number: z.number().int().min(1).max(20),
+          question: z.string().min(1).max(500),
+          answer: z.enum(['O', 'X']),
+        }),
+      )
+      .max(20)
+      .optional(),
+    quizKey: z
+      .array(
+        z.object({
+          number: z.number().int().min(1).max(20),
+          answer: z.enum(['O', 'X']),
+          evidenceQuote: z.string().min(1).max(500),
+        }),
+      )
+      .max(20)
+      .optional(),
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;

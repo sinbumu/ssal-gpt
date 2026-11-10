@@ -947,7 +947,7 @@ function renderDraftPreparation(task) {
     inference: '공개 단서에 따른 AI 추론',
     suggestion: 'AI 문구 제안',
   };
-  return `<div class="hint draft-preparation"><strong>${draft.state === 'ready' ? 'AI 권장 댓글 · ' + (basis[draft.basis] || '초안') : '댓글 준비 확인 필요'}</strong><p>${esc(draft.reason || '')}</p>${draft.evidenceQuote ? `<blockquote>${esc(draft.evidenceQuote)}</blockquote>` : ''}${draft.sourceUrl ? safeLink(draft.sourceUrl, '답안 근거 열기') : ''}</div>`;
+  return `<div class="hint draft-preparation"><strong>${draft.state === 'ready' ? 'AI 권장 댓글 · ' + (basis[draft.basis] || '초안') : '댓글 준비 확인 필요'}</strong><p>${esc(draft.reason || '')}</p>${draft.evidenceQuote ? `<blockquote>${esc(draft.evidenceQuote)}</blockquote>` : ''}${draft.sourceUrl ? safeLink(draft.sourceUrl, '답안 근거 열기') : ''}${draft.quiz?.length ? `<details><summary>AI 풀이 기록 · ${draft.quiz.length}문항</summary><ul>${draft.quiz.map((q) => `<li>${esc(q.question)} — 먼저 푼 답: ${esc(q.answer)} · ${q.key ? `공개 정답: ${esc(q.key.answer)} (${q.answer === q.key.answer ? '일치' : '불일치'})` : '정답 확인 전'}</li>`).join('')}</ul></details>` : ''}</div>`;
 }
 function renderTasks(job) {
   if (!job.tasks?.length) return '';

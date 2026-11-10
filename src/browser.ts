@@ -33,6 +33,7 @@ export type VisibleElement = {
   label: string;
   href?: string;
   navigationOnly?: boolean;
+  mediaNavigation?: 'next' | 'previous';
   x: number;
   y: number;
   width: number;
@@ -525,6 +526,44 @@ export class Browser {
             !/가입|로그인|로그아웃|신청|등록|응모|제출|참여|신고|삭제|저장|동의|구매|결제|해지|login|logout|sign.?up|submit|send|post|delete|save|buy|follow|like/i.test(
               label,
             );
+          // Only an arrow over the visible post's large media is a read control.
+          // A generic Next button, a form control, or a feed/profile arrow is not.
+          const direction = /^(다음|next)$/i.test(label.trim())
+            ? 'next'
+            : /^(이전|previous|prev)$/i.test(label.trim())
+              ? 'previous'
+              : undefined;
+          const mediaNavigation: 'next' | 'previous' | undefined =
+            direction &&
+            /^(www\.)?instagram\.com$/.test(location.hostname) &&
+            /^\/(p|reel|reels)\/[^/]+\/?$/.test(location.pathname) &&
+            el.matches('button,[role=button]') &&
+            !el.closest('form') &&
+            !el.hasAttribute('aria-pressed') &&
+            !el.hasAttribute('aria-checked') &&
+            [...document.querySelectorAll('main img,main video,article img,article video')].some(
+              (media) => {
+                const r = media.getBoundingClientRect(),
+                  s = getComputedStyle(media);
+                return (
+                  r.width >= 200 &&
+                  r.height >= 160 &&
+                  s.visibility !== 'hidden' &&
+                  s.display !== 'none' &&
+                  box.width <= 80 &&
+                  box.height <= 80 &&
+                  box.left >= r.left &&
+                  box.right <= r.right &&
+                  box.top >= r.top &&
+                  box.bottom <= r.bottom &&
+                  (direction === 'next'
+                    ? box.left > r.left + r.width * 0.65
+                    : box.right < r.left + r.width * 0.35)
+                );
+              },
+            )
+              ? direction
+              : undefined;
           return {
             tag: el.tagName.toLowerCase(),
             role: el.getAttribute('role') || '',
@@ -535,6 +574,7 @@ export class Browser {
             label: label.slice(0, 240),
             href: el instanceof HTMLAnchorElement ? el.href : undefined,
             navigationOnly,
+            mediaNavigation,
             x: Math.max(0, box.x),
             y: Math.max(0, box.y),
             width: box.width,

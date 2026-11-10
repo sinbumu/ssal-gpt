@@ -14,7 +14,7 @@ test('collapsed reel caption is a scoped read control; form, toggles and nested 
     browser = new Browser(dir, undefined, true);
   let writes = 0;
   const text = '이벤트 설명입니다. 팔로우 좋아요 댓글 조건을 끝까지 확인합니다. '.repeat(12);
-  const clipped = `<div style="overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;width:273px;line-height:18px">${text}</div>`;
+  const clipped = `<div style="overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;width:273px;line-height:18px">본문 읽기 첫 줄<br><a style="display:block" href="/wrong/" onclick="event.stopPropagation();fetch('/write',{method:'POST'})">#해시태그 링크를 누르면 안 됨</a>${text}</div>`;
   try {
     await browser.open();
     browser.setManual(false);

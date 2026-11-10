@@ -947,6 +947,8 @@ function renderReadTraces(job) {
     wrong_observation: '이전 화면의 선택',
     stale_observation: '선택 후 화면이 변경됨',
     read_action: '읽기 동작 실행',
+    read_plan: '읽기 계획 확인',
+    candidate_evidence_verified: '후보의 원문 근거 확인',
     draft_ready: '권장 댓글 준비 완료',
     candidate_requirements_unresolved: '필수 답안을 확인할 수 없어 후보 전환 판단',
     draft_requirements: '필수 댓글 조건 미충족',

@@ -893,6 +893,26 @@ export class Runner {
             await this.execute(job, step, o, signal);
             trace?.finish('executed', 'read_action');
           } catch (error) {
+            trace?.finish('failed', error instanceof ServiceError ? error.code : 'browser_error');
+            if (
+              job.kind === 'discover' &&
+              !signal.aborted &&
+              error instanceof ServiceError &&
+              error.code === 'stale_observation' &&
+              step.action === 'click' &&
+              !!step.ref &&
+              (targetElement(o, step)?.mediaNavigation || targetElement(o, step)?.readDisclosure) &&
+              this.browser.page?.url() === o.url &&
+              rejectedReads++ < 5
+            ) {
+              job.history.push({
+                action: 'read_refused',
+                reason: '읽기 제어가 변경되어 실행하지 않았습니다. 새 화면에서 다시 선택합니다.',
+                url: o.url,
+              });
+              this.store.saveJob(job);
+              continue;
+            }
             const recoverable =
               error instanceof ServiceError &&
               [

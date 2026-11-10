@@ -37,6 +37,7 @@ export type VisibleElement = {
   mediaKey?: string;
   readDisclosure?: 'caption';
   disclosureKey?: string;
+  readPoint?: { x: number; y: number };
   mediaBounds?: { x: number; y: number; width: number; height: number }[];
   x: number;
   y: number;
@@ -548,7 +549,7 @@ export class Browser {
             !el.hasAttribute('aria-pressed') &&
             !el.hasAttribute('aria-checked') &&
             !el.querySelector(
-              'a[href],button,[role=button],input,textarea,select,[contenteditable=true]',
+              'button,[role=button],input,textarea,select,[contenteditable=true]',
             ) &&
             label.trim().length >= 40 &&
             box.width >= 120 &&
@@ -560,10 +561,31 @@ export class Browser {
                 lines >= 1 &&
                 lines <= 5 &&
                 css.overflow === 'hidden' &&
+                node.innerText.trim() === el.innerText.trim() &&
                 node.clientHeight > 0 &&
                 node.scrollHeight > node.clientHeight + 10
               );
             });
+          // Hashtags may be links inside the clipped body. Select a point whose
+          // nearest interactive ancestor is the caption itself, never a link.
+          const readPoint = clippedCaption
+            ? [
+                [0.5, 0.5],
+                [0.15, 0.25],
+                [0.85, 0.25],
+                [0.15, 0.75],
+                [0.85, 0.75],
+              ]
+                .map(([x, y]) => ({ x: box.width * x!, y: box.height * y! }))
+                .find(
+                  (p) =>
+                    document
+                      .elementFromPoint(box.x + p.x, box.y + p.y)
+                      ?.closest(
+                        'a[href],button,[role=button],input,textarea,select,[contenteditable=true]',
+                      ) === el,
+                )
+            : undefined;
           const mediaNavigation: 'next' | 'previous' | undefined =
             direction &&
             /^(www\.)?instagram\.com$/.test(location.hostname) &&
@@ -609,8 +631,9 @@ export class Browser {
             navigationOnly,
             mediaNavigation,
             mediaIdentity,
-            readDisclosure: clippedCaption ? ('caption' as const) : undefined,
-            disclosureIdentity: clippedCaption ? `${location.pathname}|${label}` : undefined,
+            readDisclosure: readPoint ? ('caption' as const) : undefined,
+            disclosureIdentity: readPoint ? `${location.pathname}|${label}` : undefined,
+            readPoint,
             mediaBounds: direction
               ? [...document.querySelectorAll('main img,main video,article img,article video')]
                   .map((media) => media.getBoundingClientRect())
@@ -936,7 +959,24 @@ export class Browser {
           const labelElement = label?.asElement();
           const clickTarget =
             labelElement && (await labelElement.isVisible()) ? labelElement : target;
-          await clickTarget.click({ timeout: 6000 });
+          if (element?.readDisclosure) {
+            const point = element.readPoint;
+            if (
+              !point ||
+              !(await target.evaluate((el, p) => {
+                const b = el.getBoundingClientRect();
+                return (
+                  document
+                    .elementFromPoint(b.x + p.x, b.y + p.y)
+                    ?.closest(
+                      'a[href],button,[role=button],input,textarea,select,[contenteditable=true]',
+                    ) === el
+                );
+              }, point))
+            )
+              throw new ServiceError('stale_observation');
+            await clickTarget.click({ timeout: 6000, position: point });
+          } else await clickTarget.click({ timeout: 6000 });
         } finally {
           await label?.dispose();
         }

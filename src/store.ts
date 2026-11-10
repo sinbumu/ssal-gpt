@@ -8,6 +8,7 @@ import type { AutonomyState } from './autonomy.js';
 import type { BrowserEngine } from './browser.js';
 import type { SourceEvidence } from './evidence.js';
 import type { EntryTask } from './tasks.js';
+import type { DiscoveryState } from './discovery.js';
 
 export type JobStatus =
   | 'queued'
@@ -78,6 +79,7 @@ export type Job = {
   visitedUrls?: string[];
   skippedUrls?: string[];
   searchEngine?: 'google' | 'naver';
+  discovery?: DiscoveryState;
   receiptObservations?: (SourceEvidence & { intentHash: string })[];
   userContext?: string;
   memory?: string;

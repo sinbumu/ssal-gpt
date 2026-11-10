@@ -10,6 +10,7 @@ import {
 } from './store.js';
 import { evaluateCandidate, nextDiscoveryAfterSkip } from './selection.js';
 import { buildTasks, taskPermission } from './tasks.js';
+import { discoveryState, excludedSource } from './discovery.js';
 
 // A failed candidate consumes a switch, not a reset of the failed job's history.
 // Reuse remaining candidates first; otherwise create a separately metered search.
@@ -94,6 +95,49 @@ export function canPrepareEntry(store: Store, e: EventRecord) {
     (!/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) || !!e.tasks?.length) &&
     e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl))
   );
+}
+
+// Re-open a previously observed, unentered candidate before spending another search.
+// Only current-page discovery may record it again and trigger normal preparation.
+export function reuseUnenteredCandidates(store: Store, job: Job, now = Date.now()) {
+  if (!job.prepareOne) return;
+  const d = discoveryState(job),
+    config = settings(store);
+  if (
+    d.reusedCandidates ||
+    !config.policy.enabled ||
+    job.prepareOne.revision !== config.revision ||
+    job.prepareOne.expires <= now
+  )
+    return;
+  d.reusedCandidates = [];
+  for (const e of store.events()) {
+    const prior = store.job(e.jobId);
+    if (
+      !prior ||
+      prior.id === job.id ||
+      prior.goal !== job.goal ||
+      prior.browserEngine !== job.browserEngine ||
+      now - Date.parse(e.foundAt) > 6 * 60 * 60_000 ||
+      !canPrepareEntry(store, e) ||
+      excludedSource(job, e.entryUrl)
+    )
+      continue;
+    if (!d.frontier.some((f) => f.url === e.entryUrl))
+      d.frontier.push({
+        url: e.entryUrl,
+        label: `미응모 후보 원문 재확인: ${e.title}`,
+        source: e.sourceUrl,
+      });
+    d.reusedCandidates.push({ fromJob: prior.id, eventId: e.id, url: e.entryUrl });
+    if (d.reusedCandidates.length >= 10) break;
+  }
+  if (d.reusedCandidates.length)
+    job.history.push({
+      action: 'discovery_candidates_reused',
+      reason: `기존 미응모 후보 ${d.reusedCandidates.length}개의 현재 원문을 먼저 재확인합니다. 과거 조건만으로 참여하지 않습니다.`,
+      url: job.startUrl,
+    });
 }
 
 // A narrow, opt-in route. This is not permission for arbitrary SNS engagement.

@@ -38,6 +38,26 @@ export function eventType(e: Pick<EventRecord, 'requirements' | 'entryType'>) {
         ? 'survey'
         : 'other';
 }
+const PROFILE_QUALIFICATION_KEYS: Record<string, keyof Profile> = {
+  거주지역: 'region',
+  지역: 'region',
+  region: 'region',
+  연령대: 'ageRange',
+  ageRange: 'ageRange',
+  직업: 'occupation',
+  occupation: 'occupation',
+};
+
+// A saved Korean province establishes domestic residence, never nationality or a narrower district.
+function domesticRegion(value: string, acceptedValues: string[], quote: string) {
+  return (
+    acceptedValues.some((v) => ['대한민국', '한국'].includes(v.trim())) &&
+    /국내|대한민국|한국/.test(quote) &&
+    /^(?:대한민국|한국|서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기(?:도)?|강원(?:도|특별자치도)?|충청북도|충북|충청남도|충남|전북(?:특별자치도)?|전라북도|전라남도|전남|경상북도|경북|경상남도|경남|제주(?:도|특별자치도)?)(?:\s|$)/.test(
+      value.trim(),
+    )
+  );
+}
 export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()) {
   const p = selection(store),
     reasons: string[] = [];
@@ -56,19 +76,23 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       reject(`자격 원문 확인 필요: ${condition.key}`, true);
       continue;
     }
-    const profileKey = (
-      { 거주지역: 'region', 지역: 'region', 연령대: 'ageRange', 직업: 'occupation' } as Record<
-        string,
-        keyof Profile
-      >
-    )[condition.key];
+    const profileKey = PROFILE_QUALIFICATION_KEYS[condition.key];
     const savedValue = profileKey ? settings(store).profile[profileKey] : undefined;
     const fact =
       p.facts.find((f) => f.key === condition.key) ||
+      (profileKey
+        ? p.facts.find((f) => PROFILE_QUALIFICATION_KEYS[f.key] === profileKey)
+        : undefined) ||
       (savedValue ? { key: condition.key, value: savedValue } : undefined);
     if (!fact) reject(`저장하지 않은 자격: ${condition.key}`, true);
-    else if (!condition.acceptedValues.includes(fact.value))
-      reject(`자격 불일치: ${condition.key}`);
+    else if (!condition.acceptedValues.includes(fact.value)) {
+      if (
+        profileKey === 'region' &&
+        domesticRegion(fact.value, condition.acceptedValues, condition.quote)
+      )
+        reasons.push('저장된 거주지역으로 국내 범위를 확인');
+      else reject(`자격 불일치: ${condition.key}`);
+    }
   }
   const preferred = p.preferredPrizes.filter((v) => e.prize.includes(v));
   if (preferred.length) reasons.push(`선호 경품: ${preferred.join(', ')}`);

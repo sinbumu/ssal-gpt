@@ -20,6 +20,7 @@ export type DiscoveryState = {
   redirects?: { requested: string; resolved: string }[];
   contextSize?: { samples: number; originalChars: number; submittedChars: number };
   reusedRejections?: { fromJob: string; url: string }[];
+  reusedCandidates?: { fromJob: string; eventId: string; url: string }[];
 };
 export function discoveryState(job: Job): DiscoveryState {
   return (job.discovery ??= {

@@ -91,6 +91,112 @@ test('eligibility evidence, preferences, runtime burden and bounded alternative 
   }
 });
 
+test('saved profile aliases and domestic residence are used without inventing nationality or narrower eligibility', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-region-')),
+    store = new Store(dir);
+  try {
+    store.setSettings('autonomy', {
+      ...syntheticSettings,
+      profile: {
+        ...syntheticSettings.profile,
+        region: '서울특별시 중구',
+        ageRange: '30대',
+        occupation: '개발자',
+      },
+    });
+    const e = store.record(
+      {
+        title: '가상 국내 이벤트',
+        organizer: '가상',
+        entryUrl: 'https://form.naver.com/response/region',
+        deadline: '2099-01-01T00:00:00Z',
+        prize: '커피',
+        winners: 5,
+        requirements: ['국내 한정'],
+        blockers: [],
+        evidenceKind: 'text',
+        evidenceQuote: '국내 한정',
+        effortMinutes: 2,
+        eligibility: [{ key: 'region', acceptedValues: ['대한민국'], quote: '국내 한정' }],
+      },
+      'https://example.org/event',
+      'source',
+      'fixture.png',
+      {
+        sourceEvidence: [
+          {
+            id: 's',
+            url: 'https://form.naver.com/response/region',
+            title: '원문',
+            text: '국내 한정. 국적은 대한민국. 서울 거주자. 30대 개발자.',
+            screenshot: 'fixture.png',
+            observedAt: Date.now(),
+          },
+        ],
+      },
+    ).event;
+    assert.equal(evaluateCandidate(store, e).state, 'eligible');
+    assert.equal(
+      evaluateCandidate(store, {
+        ...e,
+        eligibility: [{ key: '거주지역', acceptedValues: ['대한민국'], quote: '국내 한정' }],
+      }).state,
+      'eligible',
+    );
+    assert.equal(
+      evaluateCandidate(store, {
+        ...e,
+        eligibility: [{ key: '국적', acceptedValues: ['대한민국'], quote: '국적은 대한민국' }],
+      }).state,
+      'review',
+    );
+    assert.equal(evaluateCandidate(store, { ...e, sourceEvidence: [] }).state, 'review');
+    assert.equal(
+      evaluateCandidate(store, {
+        ...e,
+        eligibility: [{ key: 'region', acceptedValues: ['서울'], quote: '서울 거주자' }],
+      }).state,
+      'excluded',
+    );
+    assert.equal(
+      evaluateCandidate(store, {
+        ...e,
+        eligibility: [
+          { key: 'ageRange', acceptedValues: ['30대'], quote: '30대 개발자' },
+          { key: 'occupation', acceptedValues: ['개발자'], quote: '30대 개발자' },
+        ],
+      }).state,
+      'eligible',
+    );
+    for (const region of ['일본 도쿄', '서울마을', '해외 거주', '']) {
+      store.setSettings('autonomy', {
+        ...syntheticSettings,
+        profile: { ...syntheticSettings.profile, region },
+      });
+      assert.notEqual(evaluateCandidate(store, e).state, 'eligible');
+    }
+    store.setSettings('autonomy', {
+      ...syntheticSettings,
+      profile: { ...syntheticSettings.profile, region: '서울' },
+    });
+    store.setSettings('selectionPolicy', { facts: [{ key: 'region', value: '일본' }] });
+    assert.equal(
+      evaluateCandidate(store, e).state,
+      'excluded',
+      'explicit qualification takes precedence over the general profile',
+    );
+    store.setSettings('selectionPolicy', { facts: [{ key: '거주지역', value: '일본' }] });
+    assert.equal(
+      evaluateCandidate(store, e).state,
+      'excluded',
+      'the same qualification alias also takes precedence',
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('platform permission, exact action scope and user approval remain independent', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-permission-')),
     store = new Store(dir);

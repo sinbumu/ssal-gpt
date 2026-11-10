@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store, type Job } from '../src/store.js';
 import { syntheticSettings } from '../src/autonomy.js';
-import { prepareDiscoveredEntry, nextWorkflowJob } from '../src/workflow.js';
+import {
+  prepareDiscoveredEntry,
+  nextWorkflowJob,
+  reuseUnenteredCandidates,
+} from '../src/workflow.js';
 import { buildTasks } from '../src/tasks.js';
 
 test('a skipped candidate starts a separate metered discovery with inherited switch and expiry bounds', () => {
@@ -224,6 +228,93 @@ test('opted-in discovery chooses one observed eligible form and claims it atomic
       store.job(mixedId)!.tasks!.map((t) => t.kind),
       ['like', 'form'],
     );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('only observed eligible unentered candidates from the same goal become read-only recheck links', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-candidate-recheck-')),
+    store = new Store(dir);
+  try {
+    store.setSettings('autonomy', syntheticSettings);
+    const prior = {
+      id: 'prior',
+      kind: 'discover',
+      status: 'completed',
+      goal: '같은 무료 이벤트',
+      createdAt: new Date().toISOString(),
+      history: [],
+    } as unknown as Job;
+    store.saveJob(prior);
+    const make = (id: string, changes: object = {}) =>
+      store.record(
+        {
+          title: id,
+          organizer: '가상',
+          entryUrl: 'https://form.naver.com/response/' + id,
+          deadline: '2099-01-01T00:00:00Z',
+          prize: '커피',
+          winners: 3,
+          requirements: ['설문'],
+          blockers: [],
+          evidenceQuote: '공개 설문',
+          evidenceKind: 'text',
+          effortMinutes: 2,
+          ...changes,
+        },
+        'https://example.org/event',
+        prior.id,
+        'fixture.png',
+        {
+          sourceEvidence: [
+            {
+              id: 's',
+              url: 'https://form.naver.com/response/' + id,
+              title: '원문',
+              text: '공개 설문',
+              screenshot: 'fixture.png',
+              observedAt: Date.now(),
+            },
+          ],
+        },
+      ).event;
+    const eligible = make('ready'),
+      entered = make('entered'),
+      blocked = make('blocked', { blockers: ['자격 미확인'] });
+    store.claimSubmission(entered.id, 'existing');
+    const j = {
+      ...prior,
+      id: 'new',
+      status: 'queued',
+      startUrl: 'https://example.org/list',
+      history: [],
+      prepareOne: { revision: syntheticSettings.revision, expires: Date.now() + 10000 },
+    } as Job;
+    reuseUnenteredCandidates(store, j);
+    assert.deepEqual(
+      j.discovery!.frontier.map((f) => f.url),
+      [eligible.entryUrl],
+    );
+    assert.equal(j.discovery!.reusedCandidates![0]!.fromJob, prior.id);
+    assert.equal(store.submission(eligible.id), undefined);
+    assert.equal(store.submission(blocked.id), undefined);
+    assert.equal(store.jobs().filter((j) => j.kind === 'apply').length, 0);
+    reuseUnenteredCandidates(store, j);
+    assert.equal(j.discovery!.frontier.length, 1);
+    const different = { ...j, id: 'other', goal: '다른 요청', history: [], discovery: undefined };
+    reuseUnenteredCandidates(store, different);
+    assert.equal(different.discovery!.frontier.length, 0);
+    const expired = {
+      ...j,
+      id: 'expired',
+      history: [],
+      discovery: undefined,
+      prepareOne: { ...j.prepareOne!, expires: Date.now() - 1 },
+    };
+    reuseUnenteredCandidates(store, expired);
+    assert.equal(expired.discovery!.frontier.length, 0);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

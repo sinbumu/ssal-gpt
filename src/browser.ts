@@ -35,6 +35,8 @@ export type VisibleElement = {
   navigationOnly?: boolean;
   mediaNavigation?: 'next' | 'previous';
   mediaKey?: string;
+  readDisclosure?: 'caption';
+  disclosureKey?: string;
   mediaBounds?: { x: number; y: number; width: number; height: number }[];
   x: number;
   y: number;
@@ -536,6 +538,32 @@ export class Browser {
               ? 'previous'
               : undefined;
           let mediaIdentity: string | undefined;
+          // Instagram reels expose the collapsed caption itself as a button.
+          // Classify the clipping structure, not words such as "like" in its text.
+          const clippedCaption =
+            /^(www\.)?instagram\.com$/.test(location.hostname) &&
+            /^\/(p|reel|reels)\/[^/]+\/?$/.test(location.pathname) &&
+            el.matches('button,[role=button]') &&
+            !el.closest('form,[contenteditable=true]') &&
+            !el.hasAttribute('aria-pressed') &&
+            !el.hasAttribute('aria-checked') &&
+            !el.querySelector(
+              'a[href],button,[role=button],input,textarea,select,[contenteditable=true]',
+            ) &&
+            label.trim().length >= 40 &&
+            box.width >= 120 &&
+            box.height <= 160 &&
+            [el, ...el.querySelectorAll<HTMLElement>('div,span,p')].some((node) => {
+              const css = getComputedStyle(node),
+                lines = Number(css.webkitLineClamp);
+              return (
+                lines >= 1 &&
+                lines <= 5 &&
+                css.overflow === 'hidden' &&
+                node.clientHeight > 0 &&
+                node.scrollHeight > node.clientHeight + 10
+              );
+            });
           const mediaNavigation: 'next' | 'previous' | undefined =
             direction &&
             /^(www\.)?instagram\.com$/.test(location.hostname) &&
@@ -581,6 +609,8 @@ export class Browser {
             navigationOnly,
             mediaNavigation,
             mediaIdentity,
+            readDisclosure: clippedCaption ? ('caption' as const) : undefined,
+            disclosureIdentity: clippedCaption ? `${location.pathname}|${label}` : undefined,
             mediaBounds: direction
               ? [...document.querySelectorAll('main img,main video,article img,article video')]
                   .map((media) => media.getBoundingClientRect())
@@ -608,12 +638,15 @@ export class Browser {
       }
       const ref = `e${elements.length + 1}`;
       this.handles.set(ref, handle as ElementHandle<HTMLElement>);
-      const { mediaIdentity, ...visibleItem } = item;
+      const { mediaIdentity, disclosureIdentity, ...visibleItem } = item;
       elements.push({
         ref,
         ...visibleItem,
         mediaKey: mediaIdentity
           ? createHash('sha256').update(mediaIdentity).digest('hex')
+          : undefined,
+        disclosureKey: disclosureIdentity
+          ? createHash('sha256').update(disclosureIdentity).digest('hex')
           : undefined,
       });
       if (social)
@@ -849,8 +882,7 @@ export class Browser {
         error.code !== 'stale_observation' ||
         step.action !== 'click' ||
         prior?.id !== step.observationId ||
-        !old?.mediaNavigation ||
-        !old.mediaKey ||
+        !((old?.mediaNavigation && old.mediaKey) || (old?.readDisclosure && old.disclosureKey)) ||
         !this.page ||
         !this.readOnlyPages.has(this.page) ||
         this.page.url() !== prior.url
@@ -861,6 +893,8 @@ export class Browser {
         (e) =>
           e.mediaNavigation === old.mediaNavigation &&
           e.mediaKey === old.mediaKey &&
+          e.readDisclosure === old.readDisclosure &&
+          e.disclosureKey === old.disclosureKey &&
           e.tag === old.tag &&
           e.role === old.role &&
           e.label === old.label,

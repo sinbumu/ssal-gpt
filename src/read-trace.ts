@@ -20,7 +20,9 @@ export function readDecision(
   if (!step.ref) return 'missing_ref';
   const target = o.elements.find((e) => e.ref === step.ref);
   if (!target) return 'unknown_ref';
-  return target.navigationOnly || target.mediaNavigation ? 'allowed' : 'not_read_control';
+  return target.navigationOnly || target.mediaNavigation || target.readDisclosure
+    ? 'allowed'
+    : 'not_read_control';
 }
 
 export type ReadTraceSummary = {

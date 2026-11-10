@@ -7,6 +7,60 @@ import { tmpdir } from 'node:os';
 import { Browser } from '../../src/browser.js';
 import { actionPolicy } from '../../src/runner.js';
 import type { Job } from '../../src/store.js';
+import { readDecision } from '../../src/read-trace.js';
+
+test('collapsed reel caption is a scoped read control; form, toggles and nested links are not', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-caption-')),
+    browser = new Browser(dir, undefined, true);
+  let writes = 0;
+  const text = '이벤트 설명입니다. 팔로우 좋아요 댓글 조건을 끝까지 확인합니다. '.repeat(12);
+  const clipped = `<div style="overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;width:273px;line-height:18px">${text}</div>`;
+  try {
+    await browser.open();
+    browser.setManual(false);
+    browser.setReadOnlyMode(true);
+    await browser.context!.route('https://www.instagram.com/**', async (route) => {
+      if (route.request().method() === 'POST') writes++;
+      await route.fulfill({
+        contentType: 'text/html',
+        body: `<main><div id="caption" role="button" onclick="this.firstElementChild.style.webkitLineClamp='unset';this.removeAttribute('role')">${clipped}</div><form><div role="button">${clipped}</div></form><div role="button" aria-pressed="false">${clipped}</div><div role="button">${clipped}<a href="/account/">가입</a></div><button>더 보기</button></main>`,
+      });
+    });
+    await browser.navigate('https://www.instagram.com/reels/synthetic/');
+    const o = await browser.observe(),
+      controls = o.elements.filter((e) => e.readDisclosure);
+    assert.equal(controls.length, 1);
+    const step = {
+      action: 'click' as const,
+      observationId: o.id,
+      ref: controls[0]!.ref,
+      reason: '본문 펼치기',
+    };
+    assert.equal(readDecision(o, step, []), 'allowed');
+    assert.equal(actionPolicy({ kind: 'discover' } as Job, step, o), 'allow');
+    await browser.page!.evaluate(() => document.body.append(document.createElement('span')));
+    assert.equal(await browser.act(step), true, 'unrelated mutation rebinds the identical caption');
+    assert.equal((await browser.observe()).elements.filter((e) => e.readDisclosure).length, 0);
+    assert.equal(await browser.page!.locator('#caption').getAttribute('role'), null);
+    await browser.navigate('https://www.instagram.com/reels/synthetic/');
+    const prior = await browser.observe(),
+      target = prior.elements.find((e) => e.readDisclosure)!;
+    await browser.page!.locator('#caption > div').evaluate((e) => e.append('내용이 바뀜'));
+    await assert.rejects(
+      () => browser.act({ ...step, observationId: prior.id, ref: target.ref }),
+      /stale_observation/,
+    );
+    await browser.navigate('https://www.instagram.com/synthetic_profile/');
+    assert.equal(
+      (await browser.observe()).elements.some((e) => e.readDisclosure),
+      false,
+    );
+    assert.equal(writes, 0);
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('hidden verification frames permit public reading but displayed challenges invalidate observations', async () => {
   const server = createServer((req, res) => {

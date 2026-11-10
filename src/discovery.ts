@@ -17,6 +17,8 @@ export type DiscoveryState = {
   navigationCounts?: Record<string, number>;
   replans?: number;
   needsFreshSearch?: boolean;
+  redirects?: { requested: string; resolved: string }[];
+  contextSize?: { samples: number; originalChars: number; submittedChars: number };
 };
 export function discoveryState(job: Job): DiscoveryState {
   return (job.discovery ??= {
@@ -86,9 +88,32 @@ export function noteSearch(job: Job, engine: Engine, query: string) {
 export function excludedSource(job: Job, raw: string) {
   const key = discoveryPageKey(raw);
   const host = new URL(raw).hostname.replace(/^www\./, '');
-  if (discoveryState(job).rejected.some((v) => v.host === host)) return true;
+  if (promotionalLink(raw) || discoveryState(job).rejected.some((v) => v.host === host))
+    return true;
   return [...(job.skippedUrls || []), ...discoveryState(job).rejected.map((r) => r.url)].some(
     (u) => discoveryPageKey(u) === key,
+  );
+}
+export function promotionalLink(raw: string, label = '') {
+  const u = new URL(raw);
+  return (
+    /(?:^|\/)(?:advertise|advertising|ads)(?:\/|$)/i.test(u.pathname) ||
+    /광고\s*(?:문의|상품|단가|집행)|이벤트\s*홍보가\s*필요|추천\s*캠페인\s*집행|매체\s*소개서|advertis(?:e with us|ing rates)/i.test(
+      label,
+    )
+  );
+}
+export function noteDiscoveryDestination(job: Job, requested: string, resolved: string) {
+  const s = discoveryState(job),
+    from = discoveryPageKey(requested),
+    to = discoveryPageKey(resolved);
+  if (!s.visited.includes(to) && !searchLocation(resolved)) s.lastProgressStep = job.steps;
+  s.needsFreshSearch = false;
+  s.visited = [...new Set([...s.visited, from, to])].slice(-200);
+  if (from !== to && !(s.redirects || []).some((r) => r.requested === from && r.resolved === to))
+    s.redirects = [...(s.redirects || []), { requested: from, resolved: to }].slice(-100);
+  s.frontier = s.frontier.filter(
+    (f) => !s.visited.includes(discoveryPageKey(f.url)) && !promotionalLink(f.url, f.label),
   );
 }
 function readableLink(raw: string, label: string, source?: string) {
@@ -99,6 +124,7 @@ function readableLink(raw: string, label: string, source?: string) {
       !u.username &&
       !u.password &&
       !searchLocation(raw) &&
+      !promotionalLink(raw, label) &&
       !/\/login|\/signin|\/challenge|\/checkpoint|\/accounts|logout|signout/i.test(u.pathname) &&
       !/^(accounts|nid|auth)\./.test(u.hostname) &&
       !/로그인|로그아웃|회원가입|개인정보|이용약관|광고문의/.test(label) &&
@@ -150,7 +176,12 @@ export function observeDiscovery(job: Job, o: Observation) {
     }
   }
   s.frontier = s.frontier
-    .filter((v) => !s.visited.includes(discoveryPageKey(v.url)) && !excludedSource(job, v.url))
+    .filter(
+      (v) =>
+        !s.visited.includes(discoveryPageKey(v.url)) &&
+        !excludedSource(job, v.url) &&
+        !promotionalLink(v.url, v.label),
+    )
     .sort((a, b) => {
       const score = (link: typeof a) =>
         words(job.goal).filter((w) => link.label.toLowerCase().includes(w)).length +

@@ -90,6 +90,57 @@ test('default Naver does not override an explicit model choice of Google', async
     assert.equal(visits[1], searchUrl('다른 검색', 'google'));
     assert.equal(app.store.job(j.id)!.searchEngine, 'google');
   }));
+
+test('candidate evidence remains bound to its screenshot despite decorative DOM changes, never another URL', async () => {
+  for (const changeUrl of [false, true])
+    await fixture(async (app) => {
+      const j = job(`${app.origin}/demo/event`);
+      j.maxSteps = 1;
+      const runner = new Runner(
+        app.store,
+        app.browser,
+        {
+          async decide(_p, _i, c: any) {
+            if (changeUrl) await app.browser.navigate(`${app.origin}/demo/other`);
+            else
+              await app.browser.page!.evaluate(() =>
+                document.body.append(document.createElement('span')),
+              );
+            return {
+              step: {
+                action: 'record_event',
+                observationId: c.observation.id,
+                reason: '관찰한 원문 보관',
+                candidate: {
+                  title: '가상 이벤트',
+                  organizer: '가상 주최',
+                  entryUrl: c.observation.url,
+                  deadline: null,
+                  deadlineDate: '2099-12-01',
+                  prize: '가상 경품',
+                  winners: 10,
+                  requirements: ['댓글'],
+                  blockers: [],
+                  evidenceQuote: '무료 댓글 이벤트',
+                  evidenceKind: 'text',
+                  effortMinutes: 2,
+                },
+              },
+              inputTokens: 1,
+              outputTokens: 1,
+            };
+          },
+        },
+        app.origin,
+      );
+      app.store.saveJob(j);
+      runner.start(j.id);
+      await runner.finished();
+      assert.equal(app.store.events().length, changeUrl ? 0 : 1);
+      assert.equal(app.store.job(j.id)!.status, changeUrl ? 'paused' : 'completed');
+      assert.ok(app.store.job(j.id)!.readTraces?.length);
+    });
+});
 test('repeated search switches engine then follows observed frontier and records a new candidate without intervention', async () =>
   fixture(async (app, visits) => {
     const query = '인스타 이벤트 좋아요 댓글 팔로우';

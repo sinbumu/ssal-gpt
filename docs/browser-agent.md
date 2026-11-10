@@ -110,3 +110,6 @@ ChatGPT 로그인 경로의 이미지 입력과 사용자 정의 도구를 이�
 - [Playwright BrowserType](https://playwright.dev/docs/api/class-browsertype): 브라우저 실행, 지속 프로필과 기존 인스턴스 연결 기능.
 
 2026-11-09 추가 확인: [Playwright CDP 연결](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp), [연결 해제 동작](https://playwright.dev/docs/api/class-browser#browser-close), [파일 입력](https://playwright.dev/docs/input#upload-files), [Chrome 136 기본 프로필의 원격 디버깅 제한](https://developer.chrome.com/blog/remote-debugging-port). 기본 Chrome 프로필을 복사하거나 디버깅 제한을 우회하지 않는다.
+
+
+2026-11-10 후속 설계: [사례 조사와 비교 검증 계획](browser-agent-benchmark.md)에 Playwright·Stagehand·Browser Use·Skyvern·VisualWebArena·BrowserGym의 기법, 현재 코드 차이, 고정 비교 과제와 적용 우선순위를 기록했다. 변경의 성공은 해당 재현 검사와 실제 AI/실서비스 검증을 통과한 범위로만 보고한다.

@@ -35,6 +35,7 @@ export type VisibleElement = {
   navigationOnly?: boolean;
   mediaNavigation?: 'next' | 'previous';
   mediaKey?: string;
+  mediaBounds?: { x: number; y: number; width: number; height: number }[];
   x: number;
   y: number;
   width: number;
@@ -580,6 +581,13 @@ export class Browser {
             navigationOnly,
             mediaNavigation,
             mediaIdentity,
+            mediaBounds: direction
+              ? [...document.querySelectorAll('main img,main video,article img,article video')]
+                  .map((media) => media.getBoundingClientRect())
+                  .filter((r) => r.width >= 200 && r.height >= 160)
+                  .slice(0, 8)
+                  .map(({ x, y, width, height }) => ({ x, y, width, height }))
+              : undefined,
             x: Math.max(0, box.x),
             y: Math.max(0, box.y),
             width: box.width,

@@ -9,6 +9,7 @@ import type { BrowserEngine } from './browser.js';
 import type { SourceEvidence } from './evidence.js';
 import type { EntryTask } from './tasks.js';
 import type { DiscoveryState } from './discovery.js';
+import type { ReadTraceSummary } from './read-trace.js';
 
 export type JobStatus =
   | 'queued'
@@ -31,6 +32,7 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  readTraces?: ReadTraceSummary[];
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
   prepareOne?: { revision: string; expires: number; childId?: string; switches?: number };

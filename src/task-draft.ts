@@ -8,8 +8,9 @@ import { collectEvidence, observedQuote, searchPage } from './evidence.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { researchQuestion } from './research.js';
 import { createHash } from 'node:crypto';
+import { beginReadTrace, readDecision } from './read-trace.js';
 
-export const DRAFT_VERSION = 3;
+export const DRAFT_VERSION = 4;
 type QuizAttempt = {
   number: number;
   question: string;
@@ -123,12 +124,14 @@ export async function prepareCommentDraft(
     )
       throw new ServiceError('delegation_expired_or_changed');
   };
+  let trace: ReturnType<typeof beginReadTrace> | undefined;
   try {
     return await browser.inReadOnlyTab(async () => {
       await browser.navigate(task.url);
       while (preparation.calls < 6 && job.steps < job.maxSteps) {
         assertPolicy();
         const o = await browser.observe(false, secrets);
+        trace = beginReadTrace(store, job, 'comment_draft', o, secrets);
         state.evidence = collectEvidence(state.evidence || [], o);
         const { image, ...observation } = o;
         const result = await model.decide(
@@ -163,7 +166,11 @@ export async function prepareCommentDraft(
         store.saveJob(job);
         assertPolicy();
         const step = result.step;
-        if (step.observationId !== o.id) continue;
+        trace.proposed(step);
+        if (step.observationId !== o.id) {
+          trace.finish('rejected', 'wrong_observation');
+          continue;
+        }
         if (step.memory) preparation.memory = clean(step.memory).slice(0, 4000);
         const frame = createHash('sha256').update(o.image).digest('hex');
         const quiz = (preparation.quiz ??= []);
@@ -218,6 +225,7 @@ export async function prepareCommentDraft(
             (['source_image', 'inference'].includes(basis) &&
               (!currentImage || !step.evidenceQuote?.trim()))
           ) {
+            trace.finish('rejected', problem ? 'draft_requirements' : 'draft_evidence');
             job.history.push({
               action: 'comment_draft_rejected',
               reason: problem || '댓글 문구·공개 근거를 확인하지 못해 다시 읽습니다.',
@@ -236,11 +244,16 @@ export async function prepareCommentDraft(
             screenshot: basis === 'source_text' ? source!.screenshot : o.screenshot,
           });
           store.saveJob(job);
+          trace.finish('accepted', 'draft_ready');
           return true;
         }
-        if (step.action === 'needs_user') return unavailable(step.reason);
+        if (step.action === 'needs_user') {
+          trace.finish('accepted', 'model_needs_user');
+          return unavailable(step.reason);
+        }
         if (step.action === 'research' && step.text && !preparation.researched) {
           preparation.researched = true;
+          trace.finish('accepted', 'public_research');
           store.saveJob(job);
           preparation.researchUrls = await researchQuestion(
             store,
@@ -253,14 +266,12 @@ export async function prepareCommentDraft(
           store.saveJob(job);
           continue;
         }
-        const link =
-          step.action === 'navigate' &&
-          step.url &&
-          state.evidence.some((s) => s.url === step.url || s.links?.includes(step.url!));
-        const menu =
-          step.action === 'click' &&
-          o.elements.some((e) => e.ref === step.ref && (e.navigationOnly || e.mediaNavigation));
-        if (link || menu || ['scroll', 'wait'].includes(step.action)) {
+        const decision = readDecision(
+          o,
+          step,
+          state.evidence.flatMap((s) => [s.url, ...(s.links || [])]),
+        );
+        if (decision === 'allowed') {
           if (await browser.act(step, secrets)) {
             preparation.readRebinds = (preparation.readRebinds || 0) + 1;
             job.history.push({
@@ -270,7 +281,9 @@ export async function prepareCommentDraft(
             });
             store.saveJob(job);
           }
+          trace.finish('executed', 'read_action');
         } else {
+          trace.finish('rejected', decision);
           return unavailable(
             '공개 근거 읽기 범위를 벗어난 동작을 차단했습니다. 댓글 준비를 다시 확인해 주세요.',
           );
@@ -281,6 +294,7 @@ export async function prepareCommentDraft(
       );
     });
   } catch (error) {
+    trace?.finish('failed', error instanceof ServiceError ? error.code : 'browser_error');
     if (signal.aborted) throw error;
     // Login, provider and budget errors can be retried through the normal resume path.
     // Do not turn a temporary failure into a permanent missing-answer decision.

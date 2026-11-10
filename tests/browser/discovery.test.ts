@@ -209,3 +209,32 @@ test('source exclusion keeps the reason and moves only to a rendered new link', 
     assert.equal(result.discovery!.switches, 1);
     assert.deepEqual(result.skippedUrls, [j.startUrl]);
   }));
+
+test('model selects the next observed source while excluding an unsuitable page, without spending an automatic recovery', async () =>
+  fixture(async (app, visits) => {
+    const j = job(`${app.origin}/demo/expired`);
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url.endsWith('/expired')
+          ? {
+              action: 'skip_source',
+              reason: '조건 불일치',
+              skipCategory: 'requirements',
+              url: `${app.origin}/demo/event`,
+            }
+          : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(visits, [`${app.origin}/demo/expired`, `${app.origin}/demo/event`]);
+    assert.equal(result.discovery!.switches, 0);
+    assert.equal(result.steps, 2);
+    assert.ok(result.history.some((h) => h.action === 'skip_source'));
+  }));

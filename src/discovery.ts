@@ -32,6 +32,26 @@ export function searchLocation(raw: string) {
   if (/^(www\.)?google\.[a-z.]+$/.test(u.hostname) && /^\/(search|sorry)/.test(u.pathname))
     return { engine: 'google' as const, query: u.searchParams.get('q') || '' };
 }
+// Navigation wrappers and tracking parameters are not new source material.
+export function discoveryPageKey(raw: string) {
+  const u = new URL(raw);
+  if (u.hostname === 'blog.naver.com' && u.pathname === '/PostView.naver') {
+    const blog = u.searchParams.get('blogId'),
+      post = u.searchParams.get('logNo');
+    if (blog && post)
+      return `https://blog.naver.com/${encodeURIComponent(blog)}/${encodeURIComponent(post)}`;
+  }
+  if (/\/(sorry|challenge|checkpoint)(\/|$)/.test(u.pathname)) u.search = '';
+  for (const key of [...u.searchParams.keys()])
+    if (/^__cf_|^dtm_/i.test(key)) u.searchParams.delete(key);
+  return canonicalUrl(u.toString());
+}
+function sourceFamily(raw: string) {
+  const u = new URL(discoveryPageKey(raw));
+  return u.hostname === 'blog.naver.com'
+    ? `${u.hostname}/${u.searchParams.get('blogId') || u.pathname.split('/')[1]}`
+    : u.hostname.replace(/^www\./, '');
+}
 function words(query: string) {
   return [
     ...new Set(
@@ -59,11 +79,11 @@ export function noteSearch(job: Job, engine: Engine, query: string) {
   job.searchEngine = engine;
 }
 export function excludedSource(job: Job, raw: string) {
-  const key = canonicalUrl(raw);
+  const key = discoveryPageKey(raw);
   const host = new URL(raw).hostname.replace(/^www\./, '');
   if (discoveryState(job).rejected.some((v) => v.host === host)) return true;
   return [...(job.skippedUrls || []), ...discoveryState(job).rejected.map((r) => r.url)].some(
-    (u) => canonicalUrl(u) === key,
+    (u) => discoveryPageKey(u) === key,
   );
 }
 function readableLink(raw: string, label: string) {
@@ -77,9 +97,14 @@ function readableLink(raw: string, label: string) {
       !/\/login|\/signin|\/challenge|\/checkpoint|\/accounts|logout|signout/i.test(u.pathname) &&
       !/^(accounts|nid|auth)\./.test(u.hostname) &&
       !/로그인|로그아웃|회원가입|개인정보|이용약관|광고문의/.test(label) &&
-      /이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|instagram|인스타|공지|notice/i.test(
-        label + ' ' + raw,
-      )
+      !/당첨자\s*발표|당첨\s*결과|요금제|유심|개통|카드\s*발급|멤버십\s*전용|사용후기|예약\s*구매/.test(
+        label,
+      ) &&
+      // A tracking query such as ?eventCode=ad is not an event link.
+      (/이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice/i.test(label) ||
+        /(?:^|\/)events?(?:\/|\.|$)|\/notice(?:\/|$)/i.test(u.pathname) ||
+        (/^(www\.)?instagram\.com$/.test(u.hostname) &&
+          /^\/(?:[\w.]+\/)?(?:p|reel)\//.test(u.pathname)))
     );
   } catch {
     return false;
@@ -87,7 +112,7 @@ function readableLink(raw: string, label: string) {
 }
 export function observeDiscovery(job: Job, o: Observation) {
   const s = discoveryState(job),
-    key = canonicalUrl(o.url),
+    key = discoveryPageKey(o.url),
     search = searchLocation(o.url);
   if (!s.visited.includes(key)) {
     s.visited.push(key);
@@ -101,15 +126,16 @@ export function observeDiscovery(job: Job, o: Observation) {
   }
   for (const e of o.elements) {
     if (!e.href || !readableLink(e.href, e.label)) continue;
-    if (!s.frontier.some((v) => canonicalUrl(v.url) === canonicalUrl(e.href!)))
+    if (!s.frontier.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!)))
       s.frontier.push({ url: e.href, label: e.label.slice(0, 200), source: o.url });
   }
   s.frontier = s.frontier
-    .filter((v) => !s.visited.includes(canonicalUrl(v.url)) && !excludedSource(job, v.url))
+    .filter((v) => !s.visited.includes(discoveryPageKey(v.url)) && !excludedSource(job, v.url))
     .sort((a, b) => {
       const score = (link: typeof a) =>
         words(job.goal).filter((w) => link.label.toLowerCase().includes(w)).length +
-        (/instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url) ? 8 : 0);
+        (/instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url) ? 8 : 0) -
+        s.rejected.filter((r) => sourceFamily(r.url) === sourceFamily(link.url)).length * 4;
       return score(b) - score(a);
     })
     .slice(0, 100);
@@ -117,12 +143,20 @@ export function observeDiscovery(job: Job, o: Observation) {
 }
 export function rejectSource(job: Job, url: string, reason: string, restricted = false) {
   const s = discoveryState(job);
+  url = discoveryPageKey(url);
   const host = restricted ? new URL(url).hostname.replace(/^www\./, '') : undefined;
-  const existing = s.rejected.find((v) => canonicalUrl(v.url) === canonicalUrl(url));
+  const existing = s.rejected.find((v) => discoveryPageKey(v.url) === url);
   if (existing && host) existing.host = host;
   if (!existing) s.rejected.push({ url, reason: reason.slice(0, 500), host });
   s.rejected = s.rejected.slice(-80);
   job.skippedUrls = [...new Set([...(job.skippedUrls || []), url])].slice(-80);
+}
+export function selectedDiscoveryLink(job: Job, o: Observation, url?: string) {
+  if (!url || discoveryPageKey(url) === discoveryPageKey(o.url) || excludedSource(job, url)) return;
+  const link =
+    o.elements.find((e) => e.href === url) ||
+    discoveryState(job).frontier.find((e) => e.url === url);
+  return link && readableLink(url, link.label) ? url : undefined;
 }
 export function discoveryContext(job: Job) {
   const s = discoveryState(job);
@@ -161,7 +195,7 @@ export function nextDiscoveryRoute(
     };
   }
   const link = s.frontier.find(
-    (v) => !s.visited.includes(canonicalUrl(v.url)) && !excludedSource(job, v.url),
+    (v) => !s.visited.includes(discoveryPageKey(v.url)) && !excludedSource(job, v.url),
   );
   if (link)
     return {

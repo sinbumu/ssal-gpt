@@ -9,6 +9,8 @@ import {
   rejectSource,
   similarQuery,
   excludedSource,
+  discoveryPageKey,
+  selectedDiscoveryLink,
 } from '../src/discovery.js';
 import type { Job } from '../src/store.js';
 import type { Observation } from '../src/browser.js';
@@ -104,4 +106,43 @@ test('explicitly restricted sources exclude alternate pages on that host, not ot
   rejectSource(j, 'https://www.example.org/event/1', '출처에서 자동 수집을 금지함', true);
   assert.equal(excludedSource(j, 'https://example.org/event/2?view=other'), true);
   assert.equal(excludedSource(j, 'https://another.example.org/event/2'), false);
+});
+
+test('fallback excludes tracking ads, purchase offers, winners and generic mirror profiles', () => {
+  const j = job();
+  observeDiscovery(j, {
+    url: 'https://example.org/list',
+    elements: [
+      { href: 'https://mkt.example.org/card?eventCode=1', label: '적립적인 멤버십 전용카드' },
+      { href: 'https://example.org/event/plan', label: '무료 요금제 개통 혜택' },
+      { href: 'https://example.org/event/result', label: '이벤트 당첨자 발표' },
+      { href: 'https://mirror.example/profile/name', label: 'Instagram 프로필' },
+      { href: 'https://www.instagram.com/p/ObservedPost/', label: '원문' },
+    ],
+  } as Observation);
+  assert.deepEqual(
+    discoveryState(j).frontier.map((v) => v.url),
+    ['https://www.instagram.com/p/ObservedPost/'],
+  );
+});
+test('Naver article wrappers share identity and a skip can only select an observed readable URL', () => {
+  const j = job(),
+    article = 'https://blog.naver.com/brand/123';
+  const wrapper = 'https://blog.naver.com/PostView.naver?blogId=brand&logNo=123&redirect=Dlog';
+  assert.equal(discoveryPageKey(wrapper), article);
+  rejectSource(j, wrapper, '종료');
+  assert.ok(excludedSource(j, article));
+  const o = {
+    url: article,
+    elements: [{ href: 'https://example.org/event/new', label: '새 이벤트' }],
+  } as Observation;
+  assert.equal(
+    selectedDiscoveryLink(j, o, 'https://example.org/event/new'),
+    'https://example.org/event/new',
+  );
+  assert.equal(selectedDiscoveryLink(j, o, 'https://unseen.example/event'), undefined);
+  assert.equal(
+    discoveryPageKey('https://www.google.com/sorry/index?q=challenge&continue=private'),
+    'https://www.google.com/sorry/index',
+  );
 });

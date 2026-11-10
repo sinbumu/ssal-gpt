@@ -19,6 +19,7 @@ export type DiscoveryState = {
   needsFreshSearch?: boolean;
   redirects?: { requested: string; resolved: string }[];
   contextSize?: { samples: number; originalChars: number; submittedChars: number };
+  reusedRejections?: { fromJob: string; url: string }[];
 };
 export function discoveryState(job: Job): DiscoveryState {
   return (job.discovery ??= {
@@ -46,6 +47,14 @@ export function discoveryPageKey(raw: string) {
       post = u.searchParams.get('logNo');
     if (blog && post)
       return `https://blog.naver.com/${encodeURIComponent(blog)}/${encodeURIComponent(post)}`;
+  }
+  // Carousel position changes the view, not which Instagram event was rejected.
+  if (
+    /^(www\.)?instagram\.com$/.test(u.hostname) &&
+    /^\/(?:[\w.]+\/)?(?:p|reels?)\/[\w-]+\/?$/.test(u.pathname)
+  ) {
+    u.pathname = u.pathname.replace('/reels/', '/reel/');
+    u.searchParams.delete('img_index');
   }
   if (/\/(sorry|challenge|checkpoint)(\/|$)/.test(u.pathname)) u.search = '';
   for (const key of [...u.searchParams.keys()])
@@ -86,12 +95,98 @@ export function noteSearch(job: Job, engine: Engine, query: string) {
   s.needsFreshSearch = false;
 }
 export function excludedSource(job: Job, raw: string) {
-  const key = discoveryPageKey(raw);
-  const host = new URL(raw).hostname.replace(/^www\./, '');
-  if (promotionalLink(raw) || discoveryState(job).rejected.some((v) => v.host === host))
-    return true;
-  return [...(job.skippedUrls || []), ...discoveryState(job).rejected.map((r) => r.url)].some(
-    (u) => discoveryPageKey(u) === key,
+  const s = discoveryState(job);
+  const aliases = new Set([discoveryPageKey(raw)]);
+  // Follow observed redirect aliases in either direction; cycles stay bounded.
+  for (let i = 0; i <= (s.redirects?.length || 0); i++) {
+    const size = aliases.size;
+    for (const r of s.redirects || []) {
+      const from = discoveryPageKey(r.requested),
+        to = discoveryPageKey(r.resolved);
+      if (aliases.has(from) || aliases.has(to)) {
+        aliases.add(from);
+        aliases.add(to);
+      }
+    }
+    if (aliases.size === size) break;
+  }
+  return [...aliases].some(
+    (key) =>
+      promotionalLink(key) ||
+      s.rejected.some((r) => r.host === new URL(key).hostname.replace(/^www\./, '')) ||
+      [...(job.skippedUrls || []), ...s.rejected.map((r) => r.url)].some(
+        (u) => discoveryPageKey(u) === key,
+      ),
+  );
+}
+
+// A prior factual rejection can save a repeated check, never grant entry permission.
+export function reuseDiscoveryRejections(job: Job, pastJobs: Job[], now = Date.now()) {
+  const s = discoveryState(job);
+  if (s.reusedRejections || !job.prepareOne) return;
+  s.reusedRejections = [];
+  for (const past of pastJobs
+    .filter(
+      (p) =>
+        p.id !== job.id &&
+        p.kind === 'discover' &&
+        p.goal === job.goal &&
+        p.prepareOne?.revision === job.prepareOne?.revision &&
+        p.browserEngine === job.browserEngine &&
+        Date.parse(p.updatedAt) <= Date.parse(job.createdAt) &&
+        now - Date.parse(p.updatedAt) <= 6 * 60 * 60_000,
+    )
+    .slice(0, 10)) {
+    for (const r of past.discovery?.rejected || []) {
+      // Technical failures and inferred user facts are not durable source exclusions.
+      if (
+        !past.history.some(
+          (h) =>
+            h.action === 'skip_source' &&
+            discoveryPageKey(h.url) === discoveryPageKey(r.url) &&
+            h.reason === r.reason,
+        ) ||
+        /인증|로그인|읽기 실패|접근 실패|접속 실패/.test(r.reason)
+      )
+        continue;
+      rejectSource(job, r.url, r.reason, !!r.host);
+      s.reusedRejections.push({ fromJob: past.id, url: r.url });
+    }
+    // Only aliases connected to an imported rejection are needed.
+    for (const r of past.discovery?.redirects || []) {
+      const probe = { ...job, discovery: { ...s, redirects: past.discovery!.redirects } };
+      if (
+        excludedSource(probe, r.requested) &&
+        !s.redirects?.some((v) => v.requested === r.requested && v.resolved === r.resolved)
+      )
+        s.redirects = [...(s.redirects || []), r].slice(-100);
+    }
+  }
+  if (s.reusedRejections.length)
+    job.history.push({
+      action: 'discovery_rejections_reused',
+      reason: `같은 목표·위임으로 최근 확인한 제외 사유 ${s.reusedRejections.length}개를 재사용합니다.`,
+      url: job.startUrl,
+    });
+}
+
+const PAGE_LINK_LABEL = /^(?:\d+|다음(?:\s*페이지)?|next(?:\s*page)?|[›»>])$/i;
+function nextPageLink(raw: string, label: string, source?: string) {
+  if (!source || !PAGE_LINK_LABEL.test(label.trim())) return false;
+  const u = new URL(raw),
+    base = new URL(source);
+  if (u.origin !== base.origin || u.pathname !== base.pathname) return false;
+  const keys = ['page', 'p', 'pg', 'pageNo', 'page_num', 'pageno'];
+  const key = keys.find((k) => u.searchParams.has(k));
+  if (!key || !/^\d+$/.test(u.searchParams.get(key)!)) return false;
+  const target = Number(u.searchParams.get(key)),
+    current = Number(base.searchParams.get(key) || 1);
+  u.searchParams.delete(key);
+  base.searchParams.delete(key);
+  return (
+    target > current &&
+    target <= current + 10 &&
+    canonicalUrl(u.toString()) === canonicalUrl(base.toString())
   );
 }
 export function promotionalLink(raw: string, label = '') {
@@ -125,6 +220,7 @@ function readableLink(raw: string, label: string, source?: string) {
       !u.password &&
       !searchLocation(raw) &&
       !promotionalLink(raw, label) &&
+      (!PAGE_LINK_LABEL.test(label.trim()) || nextPageLink(raw, label, source)) &&
       !/\/login|\/signin|\/challenge|\/checkpoint|\/accounts|logout|signout/i.test(u.pathname) &&
       !/^(accounts|nid|auth)\./.test(u.hostname) &&
       !/로그인|로그아웃|회원가입|개인정보|이용약관|광고문의/.test(label) &&
@@ -138,7 +234,8 @@ function readableLink(raw: string, label: string, source?: string) {
         /^(www\.)?instagram\.com$/.test(u.hostname) &&
         !/이벤트|event|경품|응모/i.test(label)
       ) &&
-      (/이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice/i.test(label) ||
+      (nextPageLink(raw, label, source) ||
+        /이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice/i.test(label) ||
         /(?:^|\/)events?(?:\/|\.|$)|\/notice(?:\/|$)/i.test(u.pathname) ||
         (/^(www\.)?instagram\.com$/.test(u.hostname) &&
           /^\/(?:[\w.]+\/)?(?:p|reel)\//.test(u.pathname)))
@@ -185,7 +282,8 @@ export function observeDiscovery(job: Job, o: Observation) {
     .sort((a, b) => {
       const score = (link: typeof a) =>
         words(job.goal).filter((w) => link.label.toLowerCase().includes(w)).length +
-        (/instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url) ? 8 : 0) -
+        (/instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url) ? 8 : 0) +
+        (nextPageLink(link.url, link.label, link.source) ? 5 : 0) -
         s.rejected.filter((r) => sourceFamily(r.url) === sourceFamily(link.url)).length * 4;
       return score(b) - score(a);
     })

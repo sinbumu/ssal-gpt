@@ -9,6 +9,7 @@ import { Runner } from '../../src/runner.js';
 import type { ModelClient, Step } from '../../src/model.js';
 import type { Job } from '../../src/store.js';
 import { searchUrl } from '../../src/evidence.js';
+import { discoveryState, noteDiscoveryDestination, rejectSource } from '../../src/discovery.js';
 
 function job(startUrl: string): Job {
   return {
@@ -212,6 +213,54 @@ test('automatic discovery counts preparable candidates, preserves unready leads 
       assert.equal(result.uncertain, false);
     });
 });
+
+test('a prior rejected carousel redirect is skipped and an observed next page is read without manual recovery', async () =>
+  fixture(async (app, visits) => {
+    const source = 'https://example.org/catalog',
+      next = source + '?page=2';
+    const post = 'https://www.instagram.com/p/old/?img_index=2';
+    const wrapper = 'https://example.org/link?id=old';
+    await app.browser.page!.context().route('https://example.org/**', async (r) => {
+      assert.equal(r.request().method(), 'GET');
+      visits.push(r.request().url());
+      await r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<h1>이벤트 목록</h1><a href="${wrapper}">이벤트 원문</a><a href="${next}">2</a>`,
+      });
+    });
+    const prior = job(source);
+    prior.status = 'completed';
+    prior.prepareOne = { revision: 'same', expires: Date.now() + 10000 };
+    rejectSource(prior, post, '친구 태그 필수');
+    noteDiscoveryDestination(prior, wrapper, post);
+    prior.history = [{ action: 'skip_source', url: post, reason: '친구 태그 필수' }];
+    app.store.saveJob(prior);
+    const j = job(source);
+    j.prepareOne = { ...prior.prepareOne };
+    j.maxSteps = 3;
+    discoveryState(j).blockedEngines = ['google', 'naver'];
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === source ? { action: 'navigate', url: wrapper } : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.deepEqual(visits, [source, next]);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.steps, 2);
+    assert.equal(result.maxSteps, 3);
+    assert.equal(result.discovery?.reusedRejections?.length, 1);
+    assert.equal(result.discovery?.switches, 1);
+    assert.equal(result.approval, undefined);
+    assert.equal(app.store.events().length, 0);
+    assert.equal(result.uncertain, false);
+  }));
 
 test('repeated search switches engine then follows observed frontier and records a new candidate without intervention', async () =>
   fixture(async (app, visits) => {

@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
-import { canonicalUrl, deadlineState, scoreCandidate, type Job, type Store } from './store.js';
+import {
+  canonicalUrl,
+  deadlineState,
+  scoreCandidate,
+  type EventRecord,
+  type Job,
+  type Store,
+} from './store.js';
 import { evaluateCandidate, nextDiscoveryAfterSkip } from './selection.js';
 import { buildTasks, taskPermission } from './tasks.js';
 
@@ -62,6 +69,33 @@ export function nextWorkflowJob(store: Store, job: Job) {
   }
 }
 
+// Shared by discovery stopping and preparation, so an unready saved lead is not success.
+export function canPrepareEntry(store: Store, e: EventRecord) {
+  try {
+    const tasks = buildTasks(e);
+    if (tasks?.some((t) => t.kind !== 'form' && (t.kind === 'manual' || !taskPermission(store, t))))
+      return false;
+  } catch {
+    return false;
+  }
+  const url = new URL(e.entryUrl);
+  return (
+    !store.submission(e.id) &&
+    url.protocol === 'https:' &&
+    ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
+      (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
+      (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname)) ||
+      (url.hostname === 'docs.google.com' && /^\/forms\//.test(url.pathname)) ||
+      !!e.tasks?.length) &&
+    deadlineState(e) === 'available' &&
+    !e.blockers.length &&
+    evaluateCandidate(store, e).state === 'eligible' &&
+    !/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')) &&
+    (!/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) || !!e.tasks?.length) &&
+    e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl))
+  );
+}
+
 // A narrow, opt-in route. This is not permission for arbitrary SNS engagement.
 export function prepareDiscoveredEntry(store: Store, parent: Job) {
   const grant = parent.prepareOne;
@@ -76,36 +110,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
   }
   const event = store
     .events()
-    .filter((e) => {
-      try {
-        const tasks = buildTasks(e);
-        if (
-          tasks?.some(
-            (t) => t.kind !== 'form' && (t.kind === 'manual' || !taskPermission(store, t)),
-          )
-        )
-          return false;
-      } catch {
-        return false;
-      }
-      const url = new URL(e.entryUrl);
-      return (
-        e.jobId === parent.id &&
-        !store.submission(e.id) &&
-        url.protocol === 'https:' &&
-        ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
-          (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
-          (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname)) ||
-          (url.hostname === 'docs.google.com' && /^\/forms\//.test(url.pathname)) ||
-          !!e.tasks?.length) &&
-        deadlineState(e) === 'available' &&
-        !e.blockers.length &&
-        evaluateCandidate(store, e).state === 'eligible' &&
-        !/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')) &&
-        (!/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) || !!e.tasks?.length) &&
-        e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl))
-      );
-    })
+    .filter((e) => e.jobId === parent.id && canPrepareEntry(store, e))
     .sort(
       (a, b) =>
         evaluateCandidate(store, b).score - evaluateCandidate(store, a).score ||

@@ -141,6 +141,78 @@ test('candidate evidence remains bound to its screenshot despite decorative DOM 
       assert.ok(app.store.job(j.id)!.readTraces?.length);
     });
 });
+test('automatic discovery counts preparable candidates, preserves unready leads and never extends its budget', async () => {
+  for (const mode of ['automatic', 'collect', 'capped'])
+    await fixture(async (app, visits) => {
+      const first = 'https://form.naver.com/response/unready';
+      const next = 'https://form.naver.com/response/ready';
+      await app.browser.page!.context().route('https://form.naver.com/**', async (r) => {
+        visits.push(r.request().url());
+        assert.equal(r.request().method(), 'GET');
+        await r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: `<h1>무료 설문 이벤트</h1><p>국내 한정. 마감 2099년 12월 1일, 커피 10명.</p><a href="${next}">다른 이벤트</a>`,
+        });
+      });
+      const j = job(first);
+      if (mode !== 'collect') j.prepareOne = { revision: 'fixture', expires: Date.now() + 10000 };
+      j.maxSteps = mode === 'capped' ? 1 : 3;
+      let calls = 0;
+      const runner = new Runner(
+        app.store,
+        app.browser,
+        model((ctx) => {
+          calls++;
+          if (calls === 2) {
+            assert.equal(ctx.history.at(-1).action, 'candidate_unready');
+            assert.match(ctx.history.at(-1).reason, /저장하지 않은 자격/);
+            return { action: 'navigate', url: next };
+          }
+          return {
+            action: 'record_event',
+            candidate: {
+              title: calls === 1 ? '자격 미확인 후보' : '준비 가능한 후보',
+              organizer: '가상 주최',
+              entryUrl: ctx.observation.url,
+              deadline: null,
+              deadlineDate: '2099-12-01',
+              prize: '커피',
+              winners: 10,
+              requirements: ['설문'],
+              blockers: [],
+              evidenceQuote: '무료 설문 이벤트',
+              evidenceKind: 'text',
+              effortMinutes: 2,
+              ...(calls === 1
+                ? {
+                    eligibility: [
+                      { key: 'region', acceptedValues: ['대한민국'], quote: '국내 한정.' },
+                    ],
+                  }
+                : {}),
+            },
+          };
+        }),
+        app.origin,
+      );
+      app.store.saveJob(j);
+      runner.start(j.id);
+      await runner.finished();
+      const result = app.store.job(j.id)!;
+      assert.equal(result.maxSteps, mode === 'capped' ? 1 : 3);
+      assert.equal(result.steps, mode === 'automatic' ? 3 : 1);
+      assert.equal(result.status, mode === 'capped' ? 'paused' : 'completed');
+      assert.equal(app.store.events().length, mode === 'automatic' ? 2 : 1);
+      assert.equal(app.store.jobs().filter((j) => j.kind === 'apply').length, 0);
+      assert.equal(
+        app.store.events().find((e) => e.title === '자격 미확인 후보')!.eligibility![0]!.key,
+        'region',
+      );
+      assert.equal(result.approval, undefined);
+      assert.equal(result.uncertain, false);
+    });
+});
+
 test('repeated search switches engine then follows observed frontier and records a new candidate without intervention', async () =>
   fixture(async (app, visits) => {
     const query = '인스타 이벤트 좋아요 댓글 팔로우';

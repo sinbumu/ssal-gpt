@@ -120,6 +120,7 @@ export function nextDiscoveryAfterSkip(store: Store, job: Job) {
     p = selection(store);
   if (
     !parent?.prepareOne ||
+    parent.prepareOne.childId !== job.id ||
     !p.switchOnBurden ||
     (parent.prepareOne.switches || 0) >= p.maxSwitches
   )

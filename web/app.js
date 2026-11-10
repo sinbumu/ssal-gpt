@@ -948,6 +948,7 @@ function renderReadTraces(job) {
     stale_observation: '선택 후 화면이 변경됨',
     read_action: '읽기 동작 실행',
     draft_ready: '권장 댓글 준비 완료',
+    candidate_requirements_unresolved: '필수 답안을 확인할 수 없어 후보 전환 판단',
     draft_requirements: '필수 댓글 조건 미충족',
     draft_evidence: '답안 근거 미확인',
   };

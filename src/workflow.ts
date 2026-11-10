@@ -1,8 +1,66 @@
 import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
 import { canonicalUrl, deadlineState, scoreCandidate, type Job, type Store } from './store.js';
-import { evaluateCandidate } from './selection.js';
+import { evaluateCandidate, nextDiscoveryAfterSkip } from './selection.js';
 import { buildTasks, taskPermission } from './tasks.js';
+
+// A failed candidate consumes a switch, not a reset of the failed job's history.
+// Reuse remaining candidates first; otherwise create a separately metered search.
+export function nextWorkflowJob(store: Store, job: Job) {
+  const parent = nextDiscoveryAfterSkip(store, job);
+  if (!parent) return prepareDiscoveredEntry(store, job);
+  const existing = prepareDiscoveredEntry(store, parent);
+  if (existing) return existing;
+  const grant = parent.prepareOne!,
+    config = settings(store);
+  if (
+    !config.policy.enabled ||
+    grant.revision !== config.revision ||
+    grant.expires <= Date.now() ||
+    !parent.startUrl ||
+    !parent.maxSteps
+  )
+    return;
+  const now = new Date().toISOString();
+  const next: Job = {
+    id: randomUUID(),
+    kind: 'discover',
+    parentId: parent.id,
+    provider: parent.provider,
+    browserEngine: parent.browserEngine,
+    goal: parent.goal,
+    startUrl: parent.startUrl,
+    searchEngine: parent.searchEngine,
+    userContext: parent.userContext,
+    candidateLimit: parent.candidateLimit,
+    maxSteps: parent.maxSteps,
+    steps: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    status: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    uncertain: false,
+    allowedOrigins: [new URL(parent.startUrl).origin],
+    approvedTexts: [],
+    history: [],
+    prepareOne: { revision: grant.revision, expires: grant.expires, switches: grant.switches },
+    note: `후보 전환 ${grant.switches}회: 새 공개 기회를 탐색합니다.`,
+    memory: `이전 후보는 전송 전에 중단했습니다: ${job.switchReason}. 이미 시작한 이벤트는 재선택하지 마세요.`,
+  };
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    grant.childId = next.id;
+    parent.note = next.note;
+    store.saveJob(next);
+    store.saveJob(parent);
+    store.db.exec('COMMIT');
+    return next.id;
+  } catch (error) {
+    store.db.exec('ROLLBACK');
+    throw error;
+  }
+}
 
 // A narrow, opt-in route. This is not permission for arbitrary SNS engagement.
 export function prepareDiscoveredEntry(store: Store, parent: Job) {

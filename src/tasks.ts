@@ -308,7 +308,8 @@ export async function runTasks(
         taskPermission(store, task, job.autonomy?.synthetic)
       ) {
         if (!(await prepareCommentDraft(store, browser, model, job, task, signal))) {
-          job.status = 'needs_user';
+          job.status =
+            task.draftPreparation?.failureKind === 'read_control' ? 'paused' : 'needs_user';
           job.note = task.draftPreparation?.reason || '댓글을 준비할 근거가 부족합니다.';
           return false;
         }

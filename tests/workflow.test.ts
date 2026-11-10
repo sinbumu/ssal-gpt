@@ -5,8 +5,65 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store, type Job } from '../src/store.js';
 import { syntheticSettings } from '../src/autonomy.js';
-import { prepareDiscoveredEntry } from '../src/workflow.js';
+import { prepareDiscoveredEntry, nextWorkflowJob } from '../src/workflow.js';
 import { buildTasks } from '../src/tasks.js';
+
+test('a skipped candidate starts a separate metered discovery with inherited switch and expiry bounds', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-switch-search-')),
+    store = new Store(dir);
+  try {
+    store.setSettings('autonomy', syntheticSettings);
+    store.setSettings('selectionPolicy', { maxSwitches: 1 });
+    const parent = {
+      id: 'parent',
+      kind: 'discover',
+      status: 'completed',
+      goal: '새 공개 이벤트',
+      startUrl: 'https://example.org/events',
+      maxSteps: 40,
+      candidateLimit: 1,
+      provider: { kind: 'api', model: 'fixture' },
+      prepareOne: {
+        revision: syntheticSettings.revision,
+        expires: Date.now() + 10000,
+        childId: 'child',
+      },
+    } as Job;
+    const child = {
+      id: 'child',
+      parentId: parent.id,
+      status: 'stopped',
+      switchReason: '사전 점수 미확인',
+    } as Job;
+    store.saveJob(parent);
+    store.saveJob(child);
+    child.uncertain = true;
+    assert.equal(nextWorkflowJob(store, child), undefined);
+    child.uncertain = false;
+    const next = store.job(nextWorkflowJob(store, child)!)!;
+    assert.equal(next.kind, 'discover');
+    assert.equal(next.parentId, parent.id);
+    assert.equal(next.maxSteps, 40);
+    assert.equal(next.steps, 0);
+    assert.equal(next.prepareOne?.switches, 1);
+    assert.equal(next.prepareOne?.expires, parent.prepareOne?.expires);
+    assert.equal(
+      nextWorkflowJob(store, child),
+      undefined,
+      'same skipped job cannot schedule twice',
+    );
+    next.prepareOne!.childId = 'later';
+    store.saveJob(next);
+    assert.equal(
+      nextWorkflowJob(store, { ...child, id: 'later', parentId: next.id }),
+      undefined,
+      'switch cap survives nested discovery',
+    );
+  } finally {
+    store.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('opted-in discovery chooses one observed eligible form and claims it atomically; changed policy blocks chaining', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-chain-'));

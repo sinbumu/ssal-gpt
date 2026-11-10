@@ -7,8 +7,8 @@ import { ServiceError, safeMessage } from './auth.js';
 import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
-import { prepareDiscoveredEntry } from './workflow.js';
-import { nextDiscoveryAfterSkip, selection } from './selection.js';
+import { nextWorkflowJob } from './workflow.js';
+import { selection } from './selection.js';
 import { runTasks, buildTasks, instagramBrowser } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
 import { meteredModel, operations } from './operations.js';
@@ -203,10 +203,7 @@ export class Runner {
         this.activeId = undefined;
         if (mayContinue) {
           try {
-            const childId = prepareDiscoveredEntry(
-              this.store,
-              nextDiscoveryAfterSkip(this.store, job) || job,
-            );
+            const childId = nextWorkflowJob(this.store, job);
             if (childId && !operations(this.store).queueEnabled) this.start(childId);
           } catch {
             this.store.note(

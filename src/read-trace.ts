@@ -83,6 +83,10 @@ export function beginReadTrace(
       });
       record.choice = clean({
         action: step.action,
+        reason: step.reason,
+        skipCategory: step.skipCategory,
+        draftBasis: step.draftBasis,
+        draftRequirementsMet: step.draftRequirementsMet,
         observationId: step.observationId,
         ref,
         x: step.x,

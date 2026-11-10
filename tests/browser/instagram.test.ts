@@ -30,6 +30,7 @@ async function fixture() {
     otherLikes: 0,
     receiptPages: 0,
     carousel: false,
+    revealedQuiz: false,
     imageQuiz: false,
     shifted: false,
   };
@@ -79,7 +80,7 @@ async function fixture() {
       : comments;
     return route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:${data.shifted ? 330 : 230}px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p>${carousel}<div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
+      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:${data.shifted ? 330 : 230}px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p>${data.revealedQuiz ? '<p>퀴즈: 1+1=2인가요? 정답 O. 맞힌 개수를 댓글로 남겨주세요.</p>' : ''}${carousel}<div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
     });
   });
   app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -831,7 +832,8 @@ test('draft phase rejects external input and leaves the editor and all engagemen
     f.app.runner.start(j.id);
     await f.app.runner.finished();
     const stopped = f.app.store.job(j.id)!;
-    assert.equal(stopped.status, 'needs_user');
+    assert.equal(stopped.status, 'paused');
+    assert.equal(stopped.tasks![1]!.draftPreparation?.readRefusals, 3);
     assert.match(stopped.note, /읽기 범위를 벗어난 동작/);
     assert.equal(stopped.tasks![1]!.draft, undefined);
     assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
@@ -1027,6 +1029,100 @@ test('carousel quiz prepares a verified score from frozen earlier answers and re
     assert.equal(f.app.store.job(j.id)!.status, 'completed', f.app.store.job(j.id)!.note);
     assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [1, 1, 1]);
     assert.deepEqual(f.data.comments, ['2문제 중 1개 정답입니다.']);
+  } finally {
+    await f.close();
+  }
+});
+
+test('read refusal is replayable and recovers without widening click permissions or posting', async () => {
+  const f = await fixture();
+  try {
+    f.data.carousel = true;
+    const j = f.make(['like', 'follow', 'comment']);
+    delete j.tasks![2]!.draft;
+    f.app.store.saveJob(j);
+    let calls = 0;
+    f.app.runner.model.decide = async (_p, _i, c: any) => {
+      calls++;
+      const next = c.observation.elements.find((e: any) => e.mediaNavigation === 'next');
+      return {
+        step:
+          calls === 1
+            ? {
+                action: 'click',
+                observationId: c.observation.id,
+                x: next.x + 1,
+                y: next.y + 1,
+                reason: '합성 좌표 선택',
+              }
+            : calls === 2
+              ? {
+                  action: 'click',
+                  observationId: c.observation.id,
+                  ref: next.ref,
+                  reason: '새 관찰 요소 선택',
+                }
+              : {
+                  action: 'done',
+                  observationId: c.observation.id,
+                  text: '새 출발을 응원합니다!',
+                  reason: '공개 응원 제안',
+                  draftBasis: 'suggestion',
+                  draftRequirementsMet: true,
+                },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const ready = f.app.store.job(j.id)!;
+    assert.equal(ready.status, 'needs_user', ready.note);
+    assert.equal(ready.tasks![2]!.draft, '새 출발을 응원합니다!');
+    assert.deepEqual(
+      ready.readTraces?.map((r) => r.reason),
+      ['missing_ref', 'read_action', 'draft_ready'],
+    );
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+  } finally {
+    await f.close();
+  }
+});
+
+test('unverifiable quiz score skips only before approval under configured candidate policy', async () => {
+  const f = await fixture();
+  try {
+    f.data.revealedQuiz = true;
+    for (const enabled of [false, true]) {
+      f.app.store.setSettings('selectionPolicy', { switchOnBurden: enabled });
+      const j = f.make(['like', 'follow', 'comment']);
+      j.parentId = 'synthetic-parent';
+      delete j.tasks![2]!.draft;
+      j.tasks![2]!.instruction = '퀴즈에서 맞힌 개수를 남겨주세요.';
+      f.app.store.saveJob(j);
+      f.app.runner.model.decide = async (_p, _i, c: any) => {
+        assert.match(c.observation.text, /퀴즈: 1\+1=2인가요\? 정답 O/);
+        return {
+          step: {
+            action: 'skip_source',
+            skipCategory: 'requirements',
+            observationId: c.observation.id,
+            reason: '문제와 정답이 함께 보여 사전에 푼 답안 없이 맞힌 개수를 확인할 수 없습니다.',
+          },
+          inputTokens: 1,
+          outputTokens: 1,
+        };
+      };
+      f.app.runner.start(j.id);
+      await f.app.runner.finished();
+      const result = f.app.store.job(j.id)!;
+      assert.equal(result.status, enabled ? 'stopped' : 'needs_user', result.note);
+      assert.equal(result.tasks![2]!.draftPreparation?.failureKind, 'public_evidence');
+      assert.equal(result.readTraces?.at(-1)?.reason, 'candidate_requirements_unresolved');
+      assert.equal(result.readTraces?.at(-1)?.status, 'accepted');
+      assert.equal(result.tasks![2]!.draft, undefined);
+      assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    }
   } finally {
     await f.close();
   }

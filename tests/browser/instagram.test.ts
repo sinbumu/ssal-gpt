@@ -1093,6 +1093,7 @@ test(
         await f.app.runner.finished();
         const done = f.app.store.job(j.id)!;
         const report = {
+          sourceDigest,
           shifted,
           elapsedMs: Date.now() - start,
           calls,

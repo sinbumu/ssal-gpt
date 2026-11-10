@@ -34,6 +34,7 @@ export type VisibleElement = {
   href?: string;
   navigationOnly?: boolean;
   mediaNavigation?: 'next' | 'previous';
+  mediaKey?: string;
   x: number;
   y: number;
   width: number;
@@ -533,6 +534,7 @@ export class Browser {
             : /^(이전|previous|prev)$/i.test(label.trim())
               ? 'previous'
               : undefined;
+          let mediaIdentity: string | undefined;
           const mediaNavigation: 'next' | 'previous' | undefined =
             direction &&
             /^(www\.)?instagram\.com$/.test(location.hostname) &&
@@ -545,7 +547,7 @@ export class Browser {
               (media) => {
                 const r = media.getBoundingClientRect(),
                   s = getComputedStyle(media);
-                return (
+                const matches =
                   r.width >= 200 &&
                   r.height >= 160 &&
                   s.visibility !== 'hidden' &&
@@ -558,8 +560,10 @@ export class Browser {
                   box.bottom <= r.bottom &&
                   (direction === 'next'
                     ? box.left > r.left + r.width * 0.65
-                    : box.right < r.left + r.width * 0.35)
-                );
+                    : box.right < r.left + r.width * 0.35);
+                if (matches)
+                  mediaIdentity = `${(media as HTMLImageElement).currentSrc || media.getAttribute('src')}|${media.getAttribute('alt') || ''}`;
+                return matches;
               },
             )
               ? direction
@@ -575,6 +579,7 @@ export class Browser {
             href: el instanceof HTMLAnchorElement ? el.href : undefined,
             navigationOnly,
             mediaNavigation,
+            mediaIdentity,
             x: Math.max(0, box.x),
             y: Math.max(0, box.y),
             width: box.width,
@@ -595,7 +600,14 @@ export class Browser {
       }
       const ref = `e${elements.length + 1}`;
       this.handles.set(ref, handle as ElementHandle<HTMLElement>);
-      elements.push({ ref, ...item });
+      const { mediaIdentity, ...visibleItem } = item;
+      elements.push({
+        ref,
+        ...visibleItem,
+        mediaKey: mediaIdentity
+          ? createHash('sha256').update(mediaIdentity).digest('hex')
+          : undefined,
+      });
       if (social)
         for (const [kind, targetIndex] of Object.entries(social.controls)) {
           if (index === targetIndex) socialRefs[kind as keyof typeof socialRefs] = ref;
@@ -816,8 +828,41 @@ export class Browser {
       });
     });
   }
-  async act(step: Step) {
-    const o = await this.assertFresh(step.observationId, step.action);
+  async act(step: Step, secrets: string[] = []) {
+    let o: Observation;
+    let rebound = false;
+    const prior = this.latest;
+    try {
+      o = await this.assertFresh(step.observationId, step.action);
+    } catch (error) {
+      const old = prior?.elements.find((e) => e.ref === step.ref);
+      if (
+        !(error instanceof ServiceError) ||
+        error.code !== 'stale_observation' ||
+        step.action !== 'click' ||
+        prior?.id !== step.observationId ||
+        !old?.mediaNavigation ||
+        !old.mediaKey ||
+        !this.page ||
+        !this.readOnlyPages.has(this.page) ||
+        this.page.url() !== prior.url
+      )
+        throw error;
+      const fresh = await this.observe(false, secrets);
+      const matches = fresh.elements.filter(
+        (e) =>
+          e.mediaNavigation === old.mediaNavigation &&
+          e.mediaKey === old.mediaKey &&
+          e.tag === old.tag &&
+          e.role === old.role &&
+          e.label === old.label,
+      );
+      if (fresh.url !== prior.url || matches.length !== 1) throw error;
+      step = { ...step, observationId: fresh.id, ref: matches[0]!.ref };
+      // One rebind only, with a new handle. A changed image or another mutation stops.
+      o = await this.assertFresh(step.observationId, step.action);
+      rebound = true;
+    }
     const page = this.page!;
     const blockedBefore = this.readOnlyBlocks;
     const target = step.ref ? this.handles.get(step.ref) : undefined;
@@ -877,6 +922,7 @@ export class Browser {
     await page.waitForTimeout(250);
     if (this.readOnlyPages.has(page) && this.readOnlyBlocks > blockedBefore)
       throw new ServiceError('read_only_request_blocked');
+    return rebound;
   }
   async close() {
     if (this.external) {

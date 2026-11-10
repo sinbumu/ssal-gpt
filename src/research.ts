@@ -83,7 +83,7 @@ export async function researchQuestion(
           o.elements.some((e) => e.ref === step.ref && (e.navigationOnly || e.mediaNavigation));
         if (!navigationMenu && !['navigate', 'scroll', 'wait', 'search'].includes(step.action))
           break;
-        await browser.act({ ...step, searchEngine: 'naver' });
+        await browser.act({ ...step, searchEngine: 'naver' }, secrets);
       }
     })
     .catch((error) => {

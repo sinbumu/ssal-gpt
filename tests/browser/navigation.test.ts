@@ -132,9 +132,28 @@ test('post media arrows are read controls while forms, outside arrows, stale ref
           actionPolicy({ kind: 'discover' } as Job, { ...step, ref: e.ref }, o),
           'block',
         );
-    await browser.act(step);
+    await browser.page!.evaluate(() => {
+      const a = document.createElement('button');
+      a.textContent = 'unrelated';
+      document.body.prepend(a);
+    });
+    assert.equal(
+      await browser.act(step),
+      true,
+      'unrelated mutation rebinds the same read-only media control',
+    );
     assert.match((await browser.observe()).text, /second card/);
     await assert.rejects(() => browser.act(step), /stale_observation/);
+    const changed = await browser.observe();
+    const arrow = changed.elements.find((e) => e.mediaNavigation)!;
+    await browser.page!.locator('img').evaluate((img: HTMLImageElement) => {
+      img.src =
+        'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="240"/%3E';
+    });
+    await assert.rejects(
+      () => browser.act({ ...step, observationId: changed.id, ref: arrow.ref }),
+      /stale_observation/,
+    );
     await browser.navigate('https://www.instagram.com/fixture_profile/');
     assert.ok((await browser.observe()).elements.every((e) => !e.mediaNavigation));
     assert.equal(writes, 0);

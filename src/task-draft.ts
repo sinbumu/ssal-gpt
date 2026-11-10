@@ -9,7 +9,7 @@ import { ServiceError, safeMessage } from './auth.js';
 import { researchQuestion } from './research.js';
 import { createHash } from 'node:crypto';
 
-export const DRAFT_VERSION = 2;
+export const DRAFT_VERSION = 3;
 type QuizAttempt = {
   number: number;
   question: string;
@@ -60,6 +60,7 @@ export type DraftPreparation = {
   version?: number;
   startedAt?: number;
   memory?: string;
+  readRebinds?: number;
   quiz?: QuizAttempt[];
   superseded?: { draft?: string; reason?: string; calls: number };
   calls: number;
@@ -88,7 +89,11 @@ export async function prepareCommentDraft(
       calls: 0,
       state: 'reading',
       version: DRAFT_VERSION,
-      superseded: { draft: task.draft, reason: prior.reason, calls: prior.calls },
+      superseded: prior.superseded || {
+        draft: task.draft,
+        reason: prior.reason,
+        calls: prior.calls,
+      },
     };
     delete task.draft;
     store.saveJob(job);
@@ -256,7 +261,15 @@ export async function prepareCommentDraft(
           step.action === 'click' &&
           o.elements.some((e) => e.ref === step.ref && (e.navigationOnly || e.mediaNavigation));
         if (link || menu || ['scroll', 'wait'].includes(step.action)) {
-          await browser.act(step);
+          if (await browser.act(step, secrets)) {
+            preparation.readRebinds = (preparation.readRebinds || 0) + 1;
+            job.history.push({
+              action: 'read_control_rebound',
+              reason: '새 화면에서 같은 이미지와 이동 버튼을 다시 확인했습니다.',
+              url: o.url,
+            });
+            store.saveJob(job);
+          }
         } else {
           return unavailable(
             '공개 근거 읽기 범위를 벗어난 동작을 차단했습니다. 댓글 준비를 다시 확인해 주세요.',

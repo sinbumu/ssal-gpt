@@ -297,3 +297,114 @@ test('an observed iframe redirect loop is abandoned after two attempts without w
     assert.equal(result.discovery!.switches, 1);
     assert.ok(visits.includes(`${app.origin}/demo/event`));
   }));
+
+test('an exhausted frontier requests a new model search within the existing budget instead of stopping early', async () =>
+  fixture(async (app, visits) => {
+    const j = job(`${app.origin}/demo/empty`);
+    j.discovery = {
+      searches: [],
+      visited: [],
+      frontier: [],
+      rejected: [],
+      blockedEngines: ['google'],
+      lastProgressStep: 0,
+      switches: 0,
+    };
+    await app.browser.context!.route('**/demo/empty', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<p>종료된 행사. 다른 링크 없음.</p>',
+      }),
+    );
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) => {
+        if (ctx.discovery.needsFreshSearch)
+          return { action: 'search', searchEngine: 'naver', text: '다른 주최자 온라인 경품' };
+        return ctx.observation.url === j.startUrl
+          ? { action: 'skip_source', reason: '종료된 행사' }
+          : { action: 'done' };
+      }),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(result.steps, 3);
+    assert.equal(result.maxSteps, 10);
+    assert.equal(result.discovery!.replans, 1);
+    assert.equal(result.discovery!.needsFreshSearch, false);
+    assert.ok(visits.includes(searchUrl('다른 주최자 온라인 경품')));
+  }));
+
+test('failed replanning remains bounded after resume and reports missing sources separately from decision exhaustion', async () =>
+  fixture(async (app) => {
+    const j = job(`${app.origin}/demo/empty`);
+    j.discovery = {
+      searches: [],
+      visited: [],
+      frontier: [],
+      rejected: [],
+      blockedEngines: ['google'],
+      lastProgressStep: 0,
+      switches: 0,
+      replans: 2,
+    };
+    await app.browser.context!.route('**/demo/empty', (r) =>
+      r.fulfill({ contentType: 'text/html; charset=utf-8', body: '<p>다른 링크 없음.</p>' }),
+    );
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model(() => ({ action: 'skip_source', reason: '조건 불일치' })),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'paused');
+    assert.equal(result.steps, 1);
+    assert.equal(result.discovery!.replans, 2);
+    assert.match(result.note, /출처/);
+    assert.doesNotMatch(result.note, /판단 한도에 도달/);
+    assert.equal(result.approval, undefined);
+  }));
+
+test('a model-selected next source uses the normal read failure recovery instead of asking the user to repair it', async () =>
+  fixture(async (app, visits) => {
+    const j = job(`${app.origin}/demo/expired`),
+      blocked = 'https://example.org:8443/event';
+    await app.browser.context!.route('**/demo/expired', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<a href="${blocked}">다음 이벤트</a><a href="${app.origin}/demo/event">다른 이벤트</a>`,
+      }),
+    );
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === j.startUrl
+          ? {
+              action: 'skip_source',
+              reason: '종료된 행사',
+              url: ctx.skippedUrls.includes(blocked) ? `${app.origin}/demo/event` : blocked,
+            }
+          : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.ok(result.skippedUrls!.includes(blocked));
+    assert.equal(result.approval, undefined);
+    assert.equal(visits.includes(blocked), false);
+    assert.ok(visits.includes(`${app.origin}/demo/event`));
+  }));

@@ -15,6 +15,8 @@ export type DiscoveryState = {
   switches: number;
   readCounts?: Record<string, number>;
   navigationCounts?: Record<string, number>;
+  replans?: number;
+  needsFreshSearch?: boolean;
 };
 export function discoveryState(job: Job): DiscoveryState {
   return (job.discovery ??= {
@@ -79,6 +81,7 @@ export function noteSearch(job: Job, engine: Engine, query: string) {
     s.searches.push({ engine, query: query.slice(0, 1000), step: job.steps });
   s.searches = s.searches.slice(-80);
   job.searchEngine = engine;
+  s.needsFreshSearch = false;
 }
 export function excludedSource(job: Job, raw: string) {
   const key = discoveryPageKey(raw);
@@ -124,6 +127,7 @@ export function observeDiscovery(job: Job, o: Observation) {
     search = searchLocation(o.url);
   if (!s.visited.includes(key)) {
     s.visited.push(key);
+    s.needsFreshSearch = false;
     if (!search) s.lastProgressStep = job.steps;
     // Count the initial search, too. Later searches are persisted before navigation.
     if (
@@ -208,6 +212,8 @@ export function discoveryContext(job: Job) {
     rejectedSources: s.rejected.slice(-12),
     freshLinks: s.frontier.slice(0, 16),
     switches: s.switches,
+    replans: s.replans || 0,
+    needsFreshSearch: !!s.needsFreshSearch,
     remainingDecisions: job.maxSteps - job.steps,
     readsWithoutNewLinks: s.readCounts?.[discoveryPageKey(job.currentUrl || job.startUrl)] || 0,
   };

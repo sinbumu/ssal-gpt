@@ -232,6 +232,11 @@ export async function inspectInstagram(
           : target.kind === 'like'
             ? like.length === 1
             : follow.length === 1;
+      const unavailable =
+        !root &&
+        /^(?:죄송합니다\.\s*페이지를 사용할 수 없습니다\.|(?:sorry,?\s*)?this page (?:isn['’]t|is not) available\.?)$/im.test(
+          document.body.innerText.trim(),
+        );
       return {
         actor,
         subject,
@@ -247,11 +252,13 @@ export async function inspectInstagram(
           ? 'instagram_account_restricted'
           : !actor
             ? 'instagram_account_not_identified'
-            : !root || !subject || !controlExists
-              ? 'instagram_target_not_identified'
-              : path(location.href) !== targetPath
-                ? 'task_target_changed'
-                : undefined,
+            : unavailable
+              ? 'instagram_target_unavailable'
+              : !root || !subject || !controlExists
+                ? 'instagram_target_not_identified'
+                : path(location.href) !== targetPath
+                  ? 'task_target_changed'
+                  : undefined,
         liked:
           like.length === 1 &&
           (/^(좋아요 취소|unlike)$/i.test(label(like[0]!)) ||

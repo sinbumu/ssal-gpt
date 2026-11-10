@@ -80,7 +80,7 @@ async function fixture() {
       : comments;
     return route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:${data.shifted ? 330 : 230}px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p>${data.revealedQuiz ? '<p>퀴즈: 1+1=2인가요? 정답 O. 맞힌 개수를 댓글로 남겨주세요.</p>' : ''}${carousel}<div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
+      body: `<!doctype html><style>nav,main{visibility:${data.renderDelay ? 'hidden' : 'visible'}}body{font:18px sans-serif}nav{position:absolute;left:20px;top:20px}main{margin-left:${data.shifted ? 330 : 230}px;width:720px}button{padding:12px}section{padding:15px}textarea{width:400px;height:60px}.row{margin:15px}</style><nav><a href="/${data.actor}/"><img width="40" height="40" alt="${data.actor} 프로필 사진" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E"></a></nav><main><div id="post"><header><a href="/fixture_host/">fixture_host</a><button id="follow">${data.follows ? '팔로잉' + icon('아래쪽 방향 V자형 아이콘') : '팔로우'}</button></header><div><p>합성 이벤트</p>${data.revealedQuiz ? '<p>퀴즈: 1+1=2인가요? 정답 O. 맞힌 개수를 댓글로 남겨주세요.</p>' : ''}${carousel}<div class="row"><a href="/other_user/">other_user</a><span>합성 응모합니다</span><button onclick="fetch('/fixture/other',{method:'POST'})">${icon('좋아요')}</button></div>${renderedComments}</div><section><button id="like">${icon(data.likes ? '좋아요 취소' : '좋아요')}</button><button>${icon('댓글 달기')}</button></section><section><form onsubmit="return false"><textarea placeholder="댓글 달기..."></textarea><button id="send">게시</button></form></section></div><article><button>${icon('좋아요')}</button><a href="/other_host/">추천 게시물</a></article></main><script>setTimeout(()=>document.querySelectorAll('nav,main').forEach(e=>e.style.visibility='visible'),${data.renderDelay});async function send(kind,text){await fetch('/fixture/'+kind,{method:'POST',body:text||''});location.reload()}document.querySelector('#like').onclick=()=>send('like');document.querySelector('#follow').onclick=()=>send('follow');document.querySelector('#send').onclick=()=>send('comment',document.querySelector('textarea').value);</script>${receiptScript}`,
     });
   });
   app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -188,6 +188,106 @@ test('Instagram scopes real-looking SVG controls and batches approval; verifies 
     await f.close();
   }
 });
+test('an unavailable required target switches candidates only before grants or writes and preserves evidence', async () => {
+  for (const mode of ['switch', 'policyOff', 'approved', 'unknown', 'missingActor']) {
+    const f = await fixture();
+    try {
+      const j = f.make(['follow']);
+      j.parentId = 'parent';
+      j.startUrl = 'https://www.instagram.com/deleted_profile/';
+      j.tasks![0]!.url = j.startUrl;
+      if (mode === 'approved')
+        j.tasks![0]!.approval = {
+          id: 'grant',
+          text: '',
+          revision: syntheticSettings.revision,
+          expires: Date.now() + 60000,
+        };
+      if (mode === 'unknown') j.uncertain = true;
+      f.app.store.setSettings('selectionPolicy', {
+        switchOnBurden: mode !== 'policyOff',
+        maxSwitches: 1,
+      });
+      const parent = {
+        ...j,
+        id: 'parent',
+        kind: 'discover',
+        status: 'completed',
+        tasks: undefined,
+        autonomy: undefined,
+        parentId: undefined,
+        goal: '새 이벤트',
+        maxSteps: 5,
+        candidateLimit: 1,
+        prepareOne: {
+          revision: syntheticSettings.revision,
+          expires: Date.now() + 60000,
+          childId: j.id,
+        },
+      } as Job;
+      f.app.store.saveJob(parent);
+      f.app.store.saveJob(j);
+      await f.app.browser.context!.route('https://www.instagram.com/**', async (r) => {
+        assert.equal(r.request().method(), 'GET');
+        await r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: `<style>nav{position:absolute;left:20px;top:20px}main{margin:120px}</style>${mode === 'missingActor' ? '' : '<nav><a href="/fixture_user/"><img alt="프로필 사진" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E"></a></nav>'}<main><h2>죄송합니다. 페이지를 사용할 수 없습니다.</h2><p>클릭하신 링크가 잘못되었거나 페이지가 삭제되었습니다.</p></main>`,
+        });
+      });
+      f.app.runner.model.decide = async (_p, _i, c: any) => {
+        assert.equal(c.mode, 'discover');
+        return {
+          step: {
+            action: 'done',
+            observationId: c.observation.id,
+            reason: '새 후보 탐색 모의 종료',
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      };
+      f.app.runner.start(j.id);
+      await f.app.runner.finished();
+      const done = f.app.store.job(j.id)!;
+      assert.equal(
+        done.status,
+        mode === 'switch' ? 'stopped' : mode === 'unknown' ? 'submission_unknown' : 'needs_user',
+      );
+      assert.equal(!!done.switchReason, mode === 'switch');
+      assert.ok(done.screenshot);
+      const next = f.app.store
+        .jobs()
+        .filter((x) => x.parentId === 'parent' && x.kind === 'discover');
+      assert.equal(next.length, mode === 'switch' ? 1 : 0);
+      if (next.length) {
+        assert.equal(next[0]!.maxSteps, 5);
+        assert.equal(next[0]!.prepareOne!.switches, 1);
+      }
+      assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test('an unavailable-page phrase inside a valid post never overrides identified controls', async () => {
+  const f = await fixture();
+  try {
+    await f.app.browser.navigate(url);
+    await f.app.browser.page!.evaluate(() =>
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        '<p>죄송합니다. 페이지를 사용할 수 없습니다.</p>',
+      ),
+    );
+    const o = await f.app.browser.observe(false, [], { url, kind: 'like' });
+    assert.equal(o.instagram?.ready, true);
+    assert.notEqual(o.instagram?.reason, 'instagram_target_unavailable');
+  } finally {
+    await f.close();
+  }
+});
+
 test('Instagram account change and revoked delegation prevent external actions', async () => {
   const f = await fixture();
   try {

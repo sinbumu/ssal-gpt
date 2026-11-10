@@ -55,6 +55,8 @@ const userMessages: Record<string, string> = {
     '현재 계정과 과제 대상을 다시 확인해야 합니다. 새 화면에서 재개한 뒤 승인하세요.',
   instagram_account_not_identified:
     '현재 인스타 로그인 계정을 화면에서 확정하지 못했습니다. 전용 브라우저에서 로그인 상태를 확인하세요.',
+  instagram_target_unavailable:
+    '필수 인스타 대상 페이지를 사용할 수 없습니다. 원문의 대상 계정을 임의로 바꾸지 않습니다.',
   instagram_target_not_identified:
     '현재 인스타 화면에서 대상 게시물과 필요한 동작을 구분하지 못했습니다. 새 화면에서 재개해 다시 확인할 수 있습니다.',
   instagram_receipt_changed:

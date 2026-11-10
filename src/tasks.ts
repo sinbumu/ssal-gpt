@@ -7,7 +7,7 @@ import { canonicalUrl } from './store.js';
 import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
-import { assessBurden } from './selection.js';
+import { assessBurden, selection } from './selection.js';
 import { prepareCommentDraft, outdatedDraft, type DraftPreparation } from './task-draft.js';
 import {
   instagramTarget,
@@ -273,6 +273,7 @@ export async function runTasks(
         url: task.url,
         kind: task.kind as InstagramTarget['kind'],
       });
+      job.screenshot = o.screenshot;
       if (!o.instagram?.ready)
         throw new ServiceError(o.instagram?.reason || 'instagram_target_not_identified');
       task.preview = {
@@ -817,6 +818,26 @@ export async function runTasks(
     }
     return false;
   } catch (error) {
+    if (
+      error instanceof ServiceError &&
+      error.code === 'instagram_target_unavailable' &&
+      !signal.aborted &&
+      job.parentId &&
+      !job.uncertain &&
+      !job.transmitted &&
+      !job.tasks?.some(
+        (t) => t.approval || t.attempt || ['verified', 'manual_reported'].includes(t.state),
+      ) &&
+      selection(store).switchOnBurden
+    ) {
+      job.switchReason =
+        '필수 인스타 대상 페이지를 사용할 수 없어 참여 전에 다른 후보로 전환합니다. 대상 계정을 임의로 바꾸지 않습니다.';
+      job.history.push({
+        action: 'task_target_unavailable',
+        reason: job.switchReason,
+        url: browser.page?.url() || job.startUrl,
+      });
+    }
     if (!job.uncertain && !signal.aborted) {
       for (const task of job.tasks || [])
         if (task.state === 'approved' && !task.attempt) {

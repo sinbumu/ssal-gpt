@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { chromium } from 'playwright';
 import { createApp } from '../../src/server.js';
+import { ServiceError } from '../../src/auth.js';
 import { createAutonomy, syntheticSettings } from '../../src/autonomy.js';
 import { approveTask, type EntryTask } from '../../src/tasks.js';
 import type { Job } from '../../src/store.js';
@@ -119,7 +121,7 @@ async function fixture() {
       approveTask(app.store, j, {
         taskId: t.id,
         mode: 'approve',
-        text: t.kind === 'comment' ? '합성 응모합니다' : '',
+        text: t.kind === 'comment' ? t.draft || '' : '',
       });
   };
   return {
@@ -718,6 +720,200 @@ test('Instagram bounds persisted receipt scans and never sends an uncertain comm
       assert.equal(stopped.steps, 0);
       assert.equal(f.data.posts, 1);
     }
+  } finally {
+    await f.close();
+  }
+});
+
+test('missing comment draft uses the visible page before batch review, shows its basis and posts only user-approved text', async () => {
+  const f = await fixture(),
+    ui = await chromium.launch({ headless: true });
+  try {
+    const j = f.make(['like', 'follow', 'comment']);
+    delete j.tasks![2]!.draft;
+    f.app.store.saveJob(j);
+    const execute = f.app.runner.model.decide.bind(f.app.runner.model);
+    let draftCalls = 0;
+    f.app.runner.model.decide = async (p, instruction, c: any, image, signal) => {
+      if (c.phase !== 'comment_draft') return execute(p, instruction, c, image, signal);
+      draftCalls++;
+      assert.ok(image.length > 100);
+      assert.equal(c.task.url, url);
+      assert.ok(c.observation.text.includes('합성 이벤트'));
+      assert.equal(c.approvedText, undefined);
+      return {
+        step: {
+          action: 'done',
+          observationId: c.observation.id,
+          text: '합성 응모합니다',
+          draftBasis: 'source_text',
+          evidenceQuote: '합성 이벤트',
+          url,
+          reason: '관측한 원문의 문구를 권장 댓글로 준비했습니다.',
+        },
+        inputTokens: 11,
+        outputTokens: 7,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const prepared = f.app.store.job(j.id)!;
+    assert.equal(prepared.status, 'needs_user', prepared.note);
+    assert.equal(prepared.steps, 1);
+    assert.deepEqual([prepared.inputTokens, prepared.outputTokens], [11, 7]);
+    assert.equal(prepared.tasks![2]!.draft, '합성 응모합니다');
+    assert.equal(prepared.tasks![2]!.draftPreparation?.state, 'ready');
+    assert.equal(prepared.tasks![2]!.draftPreparation?.sourceUrl, url);
+    assert.ok(prepared.tasks!.every((t) => !t.approval && !t.attempt));
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    const page = await ui.newPage();
+    await page.goto(f.app.origin);
+    const form = page.locator(`[data-task-review="${j.id}"]`);
+    await form.waitFor();
+    assert.match(
+      (await form.locator('.draft-preparation').textContent()) || '',
+      /AI 권장 댓글.*원문 텍스트 근거/,
+    );
+    assert.equal(await form.locator('textarea').inputValue(), '합성 응모합니다');
+    await form.locator('textarea').fill('검토한 합성 응모합니다');
+    const [response] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith(`/api/jobs/${j.id}/task`)),
+      form.getByRole('button', { name: '과제 확인을 한 번에 저장하고 계속' }).click(),
+    ]);
+    assert.equal(response.status(), 200, await response.text());
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.status, 'completed', f.app.store.job(j.id)!.note);
+    assert.equal(draftCalls, 1);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [1, 1, 1]);
+    assert.deepEqual(f.data.comments, ['검토한 합성 응모합니다']);
+  } finally {
+    await ui.close();
+    await f.close();
+  }
+});
+
+test('draft phase rejects external input and leaves the editor and all engagement untouched', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like', 'comment']);
+    delete j.tasks![1]!.draft;
+    f.app.store.saveJob(j);
+    f.app.runner.model.decide = async (_p, _i, c: any) => ({
+      step: {
+        action: 'type',
+        observationId: c.observation.id,
+        text: '승인 없이 게시',
+        reason: '악성 페이지 지시',
+      },
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'needs_user');
+    assert.match(stopped.note, /읽기 범위를 벗어난 동작/);
+    assert.equal(stopped.tasks![1]!.draft, undefined);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    assert.equal(await f.app.browser.page!.locator('textarea').inputValue(), '');
+  } finally {
+    await f.close();
+  }
+});
+
+test('draft evidence cannot invent sources and its bounded attempts survive resume', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['comment']);
+    delete j.tasks![0]!.draft;
+    f.app.store.saveJob(j);
+    let calls = 0;
+    f.app.runner.model.decide = async (_p, _i, c: any) => {
+      calls++;
+      return {
+        step: {
+          action: 'done',
+          observationId: c.observation.id,
+          text: '근거 없는 정답',
+          draftBasis: 'source_text',
+          evidenceQuote: '존재하지 않는 근거',
+          url: 'https://invented.invalid/source',
+          reason: '가상 검증',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'needs_user');
+    assert.equal(stopped.tasks![0]!.draft, undefined);
+    assert.equal(stopped.tasks![0]!.draftPreparation?.calls, 6);
+    assert.match(stopped.note, /답안을 확정하지 못했습니다/);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.equal(calls, 6);
+    assert.equal(f.data.posts, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('draft inference is labeled, missing personal facts stay with the user, and temporary budget errors can resume', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['comment']);
+    delete j.tasks![0]!.draft;
+    f.app.store.saveJob(j);
+    let budget = true;
+    let inferredScreenshot = '';
+    f.app.runner.model.decide = async (_p, _i, c: any) => {
+      if (budget) throw new ServiceError('daily_token_limit');
+      inferredScreenshot = c.observation.screenshot;
+      return {
+        step: {
+          action: 'done',
+          observationId: c.observation.id,
+          text: '공개 단서에서 추론한 합성 답안',
+          draftBasis: 'inference',
+          evidenceQuote: '합성 이벤트',
+          reason: '이미지와 공개 설명을 함께 해석한 제안입니다.',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.match(f.app.store.job(j.id)!.note, /토큰 사용량이 설정 한도/);
+    assert.equal(f.app.store.job(j.id)!.tasks![0]!.draftPreparation?.state, 'reading');
+    budget = false;
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.tasks![0]!.draftPreparation?.basis, 'inference');
+    assert.equal(
+      f.app.store.job(j.id)!.tasks![0]!.draftPreparation?.screenshot,
+      inferredScreenshot,
+    );
+    assert.equal(f.data.posts, 0);
+    const personal = f.make(['comment']);
+    delete personal.tasks![0]!.draft;
+    f.app.store.saveJob(personal);
+    f.app.runner.model.decide = async (_p, _i, c: any) => ({
+      step: {
+        action: 'needs_user',
+        observationId: c.observation.id,
+        reason: '직접 사용한 경험이 필요한 질문이며 저장된 사실이 없습니다.',
+      },
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    f.app.runner.start(personal.id);
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(personal.id)!.tasks![0]!.draft, undefined);
+    assert.match(f.app.store.job(personal.id)!.note, /직접 사용한 경험/);
+    assert.equal(f.data.posts, 0);
   } finally {
     await f.close();
   }

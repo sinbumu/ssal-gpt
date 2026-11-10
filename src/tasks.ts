@@ -8,6 +8,7 @@ import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
 import { assessBurden } from './selection.js';
+import { prepareCommentDraft, type DraftPreparation } from './task-draft.js';
 import {
   instagramTarget,
   moveInstagramReceiptView,
@@ -63,6 +64,7 @@ export type EntryTask = TaskSpec & {
     routeRevision?: string;
   };
   preview?: { actor: string; subject: string; observedAt: number; screenshot: string };
+  draftPreparation?: DraftPreparation;
   rejections?: TaskRejection[];
   receiptReads?: number;
   receiptScanStartedAt?: number;
@@ -293,6 +295,24 @@ export async function runTasks(
         task.state = 'approved';
       job.screenshot = o.screenshot;
       store.saveJob(job);
+    }
+    // Prepare public text before asking for approval or executing any part of this phase.
+    for (const [index, task] of (job.tasks || []).entries()) {
+      if (
+        task.kind === 'comment' &&
+        task.state === 'review' &&
+        !task.draft?.trim() &&
+        !task.approval &&
+        !task.attempt &&
+        (pendingForm < 0 || index < pendingForm) &&
+        taskPermission(store, task, job.autonomy?.synthetic)
+      ) {
+        if (!(await prepareCommentDraft(store, browser, model, job, task, signal))) {
+          job.status = 'needs_user';
+          job.note = task.draftPreparation?.reason || '댓글을 준비할 근거가 부족합니다.';
+          return false;
+        }
+      }
     }
     for (const task of job.tasks || []) {
       if (['verified', 'manual_reported'].includes(task.state)) continue;

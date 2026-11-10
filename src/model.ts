@@ -69,6 +69,7 @@ export const StepSchema = z
     questionId: z.string().optional(),
     resultKind: z.enum(['announced', 'pending', 'unavailable']).optional(),
     receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
+    draftBasis: z.enum(['source_text', 'source_image', 'inference', 'suggestion']).optional(),
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;

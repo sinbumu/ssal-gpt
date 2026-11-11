@@ -515,7 +515,7 @@ export class Browser {
       : undefined;
     const socialRefs: InstagramView['controls'] = {};
     for (const [index, handle] of handles.slice(0, 500).entries()) {
-      const item = await handle
+      const serialized = await handle
         .evaluate((el: HTMLElement) => {
           const box = el.getBoundingClientRect();
           const style = getComputedStyle(el);
@@ -529,7 +529,7 @@ export class Browser {
             style.visibility === 'hidden' ||
             style.display === 'none'
           )
-            return null;
+            return 'null';
           const input = el as HTMLInputElement;
           const label =
             el.getAttribute('aria-label') ||
@@ -650,7 +650,7 @@ export class Browser {
             )
               ? direction
               : undefined;
-          return {
+          return JSON.stringify({
             tag: el.tagName.toLowerCase(),
             role: el.getAttribute('role') || '',
             type:
@@ -683,9 +683,12 @@ export class Browser {
                   ? el.getAttribute('aria-pressed') === 'true'
                   : undefined,
             value: input.type === 'radio' || input.type === 'checkbox' ? input.value : undefined,
-          };
+          });
         })
-        .catch(() => null);
+        .catch(() => 'null');
+      const item = JSON.parse(serialized) as
+        | (Omit<VisibleElement, 'ref'> & { mediaIdentity?: string; disclosureIdentity?: string })
+        | null;
       if (!item) {
         await handle.dispose();
         continue;
@@ -708,35 +711,42 @@ export class Browser {
           if (index === targetIndex) socialRefs[kind as keyof typeof socialRefs] = ref;
         }
     }
-    const frames = await page.locator('iframe[src]').evaluateAll((frames) =>
-      frames.flatMap((frame) => {
-        const el = frame as HTMLIFrameElement;
-        const box = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        if (
-          !box.width ||
-          !box.height ||
-          box.bottom <= 0 ||
-          box.top >= innerHeight ||
-          style.display === 'none' ||
-          style.visibility === 'hidden' ||
-          !/^https?:/.test(el.src)
-        )
-          return [];
-        return [
-          {
-            tag: 'iframe',
-            role: 'link',
-            type: 'frame',
-            label: el.title || '내장 본문을 별도 페이지로 읽기',
-            href: el.src,
-            x: Math.max(0, box.x),
-            y: Math.max(0, box.y),
-            width: box.width,
-            height: box.height,
-          },
-        ];
-      }),
+    // evaluateAll injects a selector engine into the page's main world, where
+    // legacy sites may replace Map. These fixed DOM reads need no selector engine
+    // and must not restore/overwrite the site's globals to make it work.
+    const frames: Omit<VisibleElement, 'ref'>[] = JSON.parse(
+      await page.evaluate(() =>
+        JSON.stringify(
+          [...document.querySelectorAll('iframe[src]')].flatMap((frame) => {
+            const el = frame as HTMLIFrameElement;
+            const box = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (
+              !box.width ||
+              !box.height ||
+              box.bottom <= 0 ||
+              box.top >= innerHeight ||
+              style.display === 'none' ||
+              style.visibility === 'hidden' ||
+              !/^https?:/.test(el.src)
+            )
+              return [];
+            return [
+              {
+                tag: 'iframe',
+                role: 'link',
+                type: 'frame',
+                label: el.title || '내장 본문을 별도 페이지로 읽기',
+                href: el.src,
+                x: Math.max(0, box.x),
+                y: Math.max(0, box.y),
+                width: box.width,
+                height: box.height,
+              },
+            ];
+          }),
+        ),
+      ),
     );
     for (const frame of frames) elements.push({ ref: `frame${elements.length + 1}`, ...frame });
     let text = await page.evaluate((fullPage) => {
@@ -792,21 +802,23 @@ export class Browser {
     const viewport =
       page.viewportSize() ||
       (await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })));
-    const hasResponseFields = await page
-      .locator('input,textarea,select,[role=checkbox],[role=radio],[contenteditable=true]')
-      .evaluateAll((fields) =>
-        fields.some((el) => {
-          if (['hidden', 'submit', 'button', 'reset'].includes((el as HTMLInputElement).type))
-            return false;
-          const style = getComputedStyle(el);
-          return (
-            (!!el.getClientRects().length &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden') ||
-            [...((el as HTMLInputElement).labels || [])].some((l) => !!l.getClientRects().length)
-          );
-        }),
-      );
+    const hasResponseFields = await page.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          'input,textarea,select,[role=checkbox],[role=radio],[contenteditable=true]',
+        ),
+      ].some((el) => {
+        if (['hidden', 'submit', 'button', 'reset'].includes((el as HTMLInputElement).type))
+          return false;
+        const style = getComputedStyle(el);
+        return (
+          (!!el.getClientRects().length &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden') ||
+          [...((el as HTMLInputElement).labels || [])].some((l) => !!l.getClientRects().length)
+        );
+      }),
+    );
     const fingerprint = createHash('sha256')
       .update(JSON.stringify({ url, text, elements }))
       .digest('hex');

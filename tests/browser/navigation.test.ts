@@ -9,6 +9,44 @@ import { actionPolicy } from '../../src/runner.js';
 import type { Job } from '../../src/store.js';
 import { readDecision } from '../../src/read-trace.js';
 
+test('page-defined Map does not break observation or change page globals', async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (req.url === '/demo/frame') {
+      res.end('<p>공개 본문</p>');
+      return;
+    }
+    res.end(`<script>window.Map = function SiteMap() { this.siteValue = true; };</script>
+      <h1>공개 행사</h1><label>배송 주소<input value="private delivery address"></label>
+      <a href="/demo/next">행사 원문</a><iframe title="공개 본문" src="/demo/frame"></iframe>`);
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const origin = `http://127.0.0.1:${(server.address() as any).port}`;
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-page-globals-'));
+  const browser = new Browser(dir, origin, true);
+  try {
+    await browser.navigate(origin + '/demo/start');
+    const o = await browser.observe(false, ['private delivery address']);
+    assert.match(o.text, /공개 행사/);
+    assert.equal(o.hasResponseFields, true);
+    assert.ok(o.elements.some((e) => e.tag === 'iframe' && e.label === '공개 본문'));
+    assert.ok(o.elements.some((e) => e.label === '행사 원문'));
+    assert.ok(o.image.length > 1000);
+    assert.ok(
+      !JSON.stringify({ text: o.text, elements: o.elements }).includes('private delivery address'),
+    );
+    assert.equal(await browser.page!.evaluate(() => (window as any).Map.name), 'SiteMap');
+    await browser.page!.evaluate(() => {
+      document.querySelector('input')!.type = 'password';
+    });
+    await assert.rejects(() => browser.observe(), /needs_login_manual/);
+  } finally {
+    await browser.close();
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('collapsed reel caption is a scoped read control; form, toggles and nested links are not', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-caption-')),
     browser = new Browser(dir, undefined, true);

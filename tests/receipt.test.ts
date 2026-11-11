@@ -50,6 +50,7 @@ test('participation acknowledgements allow spacing but reject instructions, erro
     '이벤트에 참여 되지 않았습니다.',
     '이벤트에 참여되지 않았습니다.',
     '이미 이벤트에 참여하셨습니다.',
+    '이미 이번호 이벤트에 참여하셨습니다.',
     '이미 참여 되었습니다.',
     '예시: 이벤트에 참여 되었습니다.',
     '동의하면 이벤트에 참여 되었습니다.',

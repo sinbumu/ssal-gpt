@@ -12,6 +12,7 @@ import { runtimePath, privateDirectory, writePrivate } from '../../src/config.js
 import { createAutonomy, syntheticSettings } from '../../src/autonomy.js';
 import { approveTask, type EntryTask } from '../../src/tasks.js';
 import type { Job } from '../../src/store.js';
+import { DRAFT_VERSION } from '../../src/task-draft.js';
 const url = 'https://www.instagram.com/p/fixture/';
 const icon = (s: string) =>
   `<svg aria-label="${s}" width="24" height="24"><title>${s}</title><circle cx="12" cy="12" r="8" /></svg>`;
@@ -1334,3 +1335,53 @@ test(
     }
   },
 );
+
+test('object-count draft resumes an unapproved legacy failure and reaches review without a score ledger', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['comment']),
+      task = j.tasks![0]!;
+    delete task.draft;
+    task.instruction =
+      '그림의 동그라미 개수를 확인하고 정답 댓글을 작성합니다. 친구 태그는 제외합니다.';
+    task.quote = '여섯 개의 그림 중 동그라미는 몇 개일까요? 정답을 댓글로 남겨주세요.';
+    task.draftPreparation = {
+      state: 'needs_input',
+      calls: 6,
+      version: DRAFT_VERSION - 1,
+      reason: '이전 분류에서 문제 풀이 기록을 요구했습니다.',
+    };
+    f.app.store.saveJob(j);
+    let calls = 0;
+    f.app.runner.model.decide = async (_p, instructions, c: any) => {
+      calls++;
+      assert.match(instructions, /Counting visible objects/);
+      return {
+        step: {
+          action: 'done',
+          observationId: c.observation.id,
+          text: '정답은 3개입니다!',
+          draftBasis: 'inference',
+          draftRequirementsMet: true,
+          evidenceQuote: '합성 이벤트',
+          reason: '합성 공개 그림의 개수를 판단한 제안입니다.',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const ready = f.app.store.job(j.id)!;
+    assert.equal(ready.status, 'needs_user', ready.note);
+    assert.equal(ready.tasks![0]!.draft, '정답은 3개입니다!');
+    assert.ok(ready.tasks![0]!.preview);
+    assert.equal(ready.tasks![0]!.approval, undefined);
+    assert.equal(ready.tasks![0]!.draftPreparation?.superseded?.calls, 6);
+    assert.equal(ready.tasks![0]!.draftPreparation?.calls, 1);
+    assert.equal(calls, 1);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+  } finally {
+    await f.close();
+  }
+});

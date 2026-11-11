@@ -114,6 +114,13 @@ export async function researchQuestion(
     .catch((error) => {
       if (signal.aborted) throw error;
       if (!(error instanceof ServiceError)) throw error;
+      job.history.push({
+        action: 'research_stopped',
+        reason: error.code,
+        url: [...researchUrls].at(-1) || job.startUrl,
+      });
+      job.history = job.history.slice(-30);
+      store.saveJob(job);
       store.note(job.id, '공개 근거 탐색을 마치고 원래 응모 화면으로 돌아왔습니다.');
     });
   return [...researchUrls];

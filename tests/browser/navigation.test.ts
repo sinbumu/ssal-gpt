@@ -38,6 +38,11 @@ test('page-defined Map does not break observation or change page globals', async
     assert.equal(await browser.page!.evaluate(() => (window as any).Map.name), 'SiteMap');
     await browser.page!.evaluate(() => {
       document.querySelector('input')!.type = 'password';
+      document.querySelector('input')!.style.display = 'none';
+    });
+    assert.match((await browser.observe()).text, /공개 행사/);
+    await browser.page!.evaluate(() => {
+      document.querySelector('input')!.style.display = '';
     });
     await assert.rejects(() => browser.observe(), /needs_login_manual/);
   } finally {

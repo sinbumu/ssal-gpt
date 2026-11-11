@@ -500,7 +500,7 @@ export class Browser {
     }
     if (
       /\/login|\/signin|\/challenge|\/checkpoint|accounts\.google|auth\.openai/i.test(url) ||
-      (await page.locator('input[type=password]').count())
+      (await page.locator('input[type=password]').filter({ visible: true }).count())
     ) {
       this.invalidate();
       throw new ServiceError('needs_login_manual');

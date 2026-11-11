@@ -626,6 +626,71 @@ test('public research restores the original form and rejects a proposed write', 
   }
 });
 
+test('public research records an unobserved URL rejection and recovers without visiting it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-research-recovery-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  try {
+    const job = prepare(app);
+    await app.browser.navigate(job.startUrl);
+    const original = app.browser.page!;
+    const source = 'https://example.org/observed-source';
+    let forbiddenVisits = 0;
+    await app.browser.context!.route('https://example.org/unobserved', (r) => {
+      forbiddenVisits++;
+      return r.fulfill({ body: 'Must never visit' });
+    });
+    await app.browser.context!.route('https://search.naver.com/**', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<p>공개 검색 결과에서 찾은 공식 기관 자료입니다. 아래 링크로 원문을 확인할 수 있습니다.</p><a href="${source}">공식 자료</a>`,
+      }),
+    );
+    await app.browser.context!.route(source, (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<p>공식 기관의 원문 자료이며 공개 퀴즈의 정답은 가상자료입니다. 이 내용은 테스트용입니다.</p>',
+      }),
+    );
+    let calls = 0;
+    const model = {
+      async decide(_p: unknown, _i: string, ctx: any) {
+        calls++;
+        if (calls === 2)
+          assert.ok(
+            ctx.history.some(
+              (h: any) => h.action === 'research_rejected' && h.reason.startsWith('unobserved_url'),
+            ),
+          );
+        return {
+          step: {
+            action: calls < 3 ? 'navigate' : 'done',
+            observationId: ctx.observation.id,
+            reason: '공식 원문 읽기',
+            url: calls === 1 ? 'https://example.org/unobserved' : source,
+          },
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    } as unknown as Model;
+    await researchQuestion(
+      app.store,
+      app.browser,
+      model,
+      job,
+      '공개 퀴즈',
+      new AbortController().signal,
+    );
+    assert.equal(calls, 3);
+    assert.equal(forbiddenVisits, 0);
+    assert.equal(app.browser.page, original);
+    assert.ok(job.autonomy!.evidence!.some((e) => e.url === source && e.text.includes('가상자료')));
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('discovery automatically starts exactly one observed form and waits at the dashboard final review', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-chain-browser-'));
   const app = await createApp({ dir, port: 0, headless: true });

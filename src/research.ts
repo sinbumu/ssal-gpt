@@ -22,6 +22,13 @@ export async function researchQuestion(
       await browser.navigate(searchUrl(safeQuery));
       const links = new Set<string>();
       let loadingWaits = 0;
+      let recoveryAttempts = 0;
+      const rejected = (code: string, url: string) => {
+        job.history.push({ action: 'research_rejected', reason: code, url });
+        job.history = job.history.slice(-30);
+        store.saveJob(job);
+        return recoveryAttempts++ < 2;
+      };
       for (let i = 0; i < 10 && job.steps < job.maxSteps; i++) {
         signal.throwIfAborted();
         const o = await browser.observe(false, secrets);
@@ -77,7 +84,11 @@ export async function researchQuestion(
         store.saveJob(job);
         if (step.observationId !== o.id) continue;
         if (['done', 'needs_user'].includes(step.action)) break;
-        if (step.action === 'navigate' && (!step.url || !links.has(step.url))) break;
+        if (step.action === 'navigate' && (!step.url || !links.has(step.url))) {
+          if (rejected('unobserved_url: choose an exact observedUrls entry or a new search', o.url))
+            continue;
+          break;
+        }
         const navigationMenu =
           step.action === 'click' &&
           o.elements.some(
@@ -86,7 +97,18 @@ export async function researchQuestion(
           );
         if (!navigationMenu && !['navigate', 'scroll', 'wait', 'search'].includes(step.action))
           break;
-        await browser.act({ ...step, searchEngine: 'naver' }, secrets);
+        try {
+          await browser.act({ ...step, searchEngine: 'naver' }, secrets);
+        } catch (error) {
+          if (!(error instanceof ServiceError)) throw error;
+          const recoverable = [
+            'stale_observation',
+            'unsupported_url',
+            'browser_navigation_timeout',
+            'browser_navigation_failed',
+          ].includes(error.code);
+          if (!rejected(error.code, o.url) || !recoverable) break;
+        }
       }
     })
     .catch((error) => {

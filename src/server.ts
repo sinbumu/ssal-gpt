@@ -60,6 +60,12 @@ import { SelectionSchema, SELECTION_PRESETS, selection, evaluateCandidate } from
 import { preparationReasons } from './workflow.js';
 import { connectionSummary, checkConnections, saveConnection } from './connections.js';
 import {
+  entryLifecycle,
+  manageEntry,
+  retryEntry,
+  reportManualCompletion,
+} from './entry-lifecycle.js';
+import {
   report,
   reportCsv,
   QualitySchema,
@@ -293,6 +299,7 @@ export async function createApp(options: {
             assessment: evaluateCandidate(store, event),
             preparationReasons: preparationReasons(store, event),
             submissionState: store.submission(event.id)?.state,
+            lifecycle: entryLifecycle(store, event),
             sourceEvidence: undefined,
           };
         }),
@@ -565,6 +572,51 @@ export async function createApp(options: {
       await (options.externalOpen || openExternalBrowser)(url.toString());
       return send(response, 200, { ok: true, mode: 'manual', sharedSession: false });
     }
+    const lifecycleMatch = url.pathname.match(
+      /^\/api\/events\/([a-f0-9-]+)\/(manage|retry|manual-complete)$/,
+    );
+    if (method === 'POST' && lifecycleMatch) {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_organizing_job');
+      const event = store.event(lifecycleMatch[1]!);
+      if (!event) throw new ServiceError('event_not_found', 404);
+      const action = lifecycleMatch[2];
+      if (action === 'retry') {
+        const input = z
+          .object({ provider: ProviderSchema, context: z.string().trim().max(2000).optional() })
+          .strict()
+          .parse(data);
+        await auth.bearer(input.provider);
+        if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+        const job = retryEntry(
+          store,
+          store.event(event.id)!,
+          input.provider,
+          browser.engine,
+          input.context,
+        );
+        runner.start(job.id);
+        return send(response, 201, { id: job.id });
+      }
+      if (action === 'manage') {
+        const input = z
+          .object({
+            mode: z.enum(['active', 'dropped', 'manual']),
+            note: z.string().trim().max(1000).optional(),
+            confirmedNoParticipation: z.boolean().optional(),
+          })
+          .strict()
+          .parse(data);
+        manageEntry(store, event, input.mode, input.note, input.confirmedNoParticipation);
+      } else {
+        const input = z
+          .object({ confirmed: z.literal(true), evidence: z.string().trim().min(10).max(2000) })
+          .strict()
+          .parse(data);
+        reportManualCompletion(store, event, input.evidence);
+      }
+      return send(response, 200, { ok: true });
+    }
     const reviewMatch = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/review$/);
     if (method === 'POST' && reviewMatch) {
       const id = reviewMatch[1]!;
@@ -597,6 +649,10 @@ export async function createApp(options: {
         throw new ServiceError('event_and_route_confirmation_required');
       if (event && (deadlineState(event) !== 'available' || event.blockers.length))
         throw new ServiceError('event_not_eligible');
+      if (event?.management?.mode && event.management.mode !== 'active')
+        throw new ServiceError('entry_management_blocks_automation');
+      if (event?.management?.manualAt && !event.management.manualNotEnteredAt)
+        throw new ServiceError('manual_participation_check_required');
       if (event && evaluateCandidate(store, event).state !== 'eligible')
         throw new ServiceError('event_qualification_review_required');
       const id = randomUUID();
@@ -689,6 +745,25 @@ export async function createApp(options: {
       if (action === 'notes' && method === 'GET')
         return send(response, 200, { notes: store.notes(id) });
       if (method !== 'POST') throw new ServiceError('method_not_allowed', 405);
+      const managed = store.event(job.eventId || job.retryEventId || '');
+      if (
+        managed?.management?.manualAt &&
+        !managed.management.manualNotEnteredAt &&
+        !['archive', 'unarchive', 'hold-note', 'verify-result'].includes(action)
+      )
+        throw new ServiceError('manual_participation_check_required');
+      if (
+        managed?.management?.mode &&
+        managed.management.mode !== 'active' &&
+        !['archive', 'unarchive', 'hold-note', 'verify-result'].includes(action)
+      )
+        throw new ServiceError('entry_management_blocks_automation');
+      if (
+        job.eventId &&
+        store.submission(job.eventId)?.job_id !== job.id &&
+        !['archive', 'unarchive', 'hold-note'].includes(action)
+      )
+        throw new ServiceError('entry_owned_by_another_job');
       if (action === 'task') {
         if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
         if ((job.browserEngine || 'chromium') !== browser.engine)

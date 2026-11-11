@@ -15,6 +15,8 @@ import { discoveryState, excludedSource } from './discovery.js';
 // A failed candidate consumes a switch, not a reset of the failed job's history.
 // Reuse remaining candidates first; otherwise create a separately metered search.
 export function nextWorkflowJob(store: Store, job: Job) {
+  const retryParent = job.parentId ? store.job(job.parentId) : undefined;
+  if (job.kind === 'apply' && retryParent?.retryEventId) return;
   const parent = nextDiscoveryAfterSkip(store, job);
   if (!parent) return prepareDiscoveredEntry(store, job);
   const existing = prepareDiscoveredEntry(store, parent);
@@ -71,10 +73,16 @@ export function nextWorkflowJob(store: Store, job: Job) {
 }
 
 // Shared by discovery stopping and preparation, so an unready saved lead is not success.
-export function preparationReasons(store: Store, e: EventRecord) {
+export function preparationReasons(store: Store, e: EventRecord, retry?: Job) {
   const assessment = evaluateCandidate(store, e);
   const reasons = assessment.state === 'eligible' ? [] : [...assessment.reasons];
-  if (store.submission(e.id))
+  if (e.management?.mode && e.management.mode !== 'active')
+    reasons.push(
+      e.management.mode === 'dropped' ? '드랍한 후보입니다.' : '수동 진행으로 전환한 후보입니다.',
+    );
+  if (e.management?.manualAt && !e.management.manualNotEnteredAt)
+    reasons.push('수동 참여 여부를 직접 확인해야 자동 응모를 요청할 수 있습니다.');
+  if (store.submission(e.id) && !store.retryOwns(e.id, retry))
     reasons.push('이미 시작·완료·결과 미확인인 응모는 중복 실행하지 않습니다.');
   try {
     const tasks = buildTasks(e);
@@ -101,14 +109,14 @@ export function preparationReasons(store: Store, e: EventRecord) {
     reasons.push('참여 페이지의 직접 관찰 근거가 필요합니다.');
   return [...new Set(reasons)];
 }
-export function canPrepareEntry(store: Store, e: EventRecord) {
-  return preparationReasons(store, e).length === 0;
+export function canPrepareEntry(store: Store, e: EventRecord, retry?: Job) {
+  return preparationReasons(store, e, retry).length === 0;
 }
 
 // Re-open a previously observed, unentered candidate before spending another search.
 // Only current-page discovery may record it again and trigger normal preparation.
 export function reuseUnenteredCandidates(store: Store, job: Job, now = Date.now()) {
-  if (!job.prepareOne) return;
+  if (!job.prepareOne || job.retryEventId) return;
   const d = discoveryState(job),
     config = settings(store);
   if (
@@ -162,7 +170,12 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
   }
   const event = store
     .events()
-    .filter((e) => e.jobId === parent.id && canPrepareEntry(store, e))
+    .filter(
+      (e) =>
+        e.jobId === parent.id &&
+        (!parent.retryEventId || e.id === parent.retryEventId) &&
+        canPrepareEntry(store, e, parent),
+    )
     .sort(
       (a, b) =>
         evaluateCandidate(store, b).score - evaluateCandidate(store, a).score ||
@@ -197,6 +210,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     allowedOrigins: [new URL(event.entryUrl).origin],
     approvedTexts: [],
     history: [],
+    userContext: parent.userContext,
     autonomy: createAutonomy(config, new URL(event.entryUrl).origin),
     tasks: buildTasks(event),
   };
@@ -205,7 +219,11 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
   child.autonomy!.entryChannel = event.entryChannel;
   store.db.exec('BEGIN IMMEDIATE');
   try {
-    if (!store.claimSubmission(event.id, child.id)) {
+    if (
+      !(parent.retryEventId
+        ? store.claimRetry(event.id, child.id, parent)
+        : store.claimSubmission(event.id, child.id))
+    ) {
       store.db.exec('ROLLBACK');
       return;
     }

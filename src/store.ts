@@ -33,6 +33,8 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  retryEventId?: string;
+  retryFromJobId?: string;
   readTraces?: ReadTraceSummary[];
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
@@ -92,6 +94,14 @@ export type Job = {
   history: { action: string; reason: string; url: string }[];
 };
 export type EventRecord = Candidate & {
+  management?: {
+    mode: 'active' | 'dropped' | 'manual';
+    at: string;
+    note?: string;
+    retryJobId?: string;
+    manualAt?: string;
+    manualNotEnteredAt?: string;
+  };
   id: string;
   sourceUrl: string;
   foundAt: string;
@@ -106,6 +116,24 @@ export type EventRecord = Candidate & {
   connectionProfile?: string;
   reviews?: { at: string; note: string; previousEntryUrl: string; previousBlockers: string[] }[];
 };
+
+// A new entry may replace only a terminal preparation with no recorded external action.
+export function unattemptedEntry(job: Job | undefined) {
+  return (
+    !!job &&
+    ['stopped', 'failed'].includes(job.status) &&
+    !job.uncertain &&
+    !job.transmitted &&
+    !job.intent &&
+    !job.taskFormStarted &&
+    !job.continuations?.length &&
+    !job.receiptObservations?.length &&
+    !(job.autonomy?.consents || []).some((c) => c.appliedAt) &&
+    !(job.tasks || []).some(
+      (t) => t.attempt || t.proof || ['attempted', 'verified', 'manual_reported'].includes(t.state),
+    )
+  );
+}
 
 export function canonicalUrl(raw: string) {
   const url = new URL(raw);
@@ -261,7 +289,10 @@ export class Store {
       .get(entryKey, campaignKey);
     if (existing) {
       const prior = JSON.parse(existing.data as string) as EventRecord;
-      if (this.submission(prior.id)) return { event: prior, added: false, refreshed: false };
+      if (prior.management?.mode && prior.management.mode !== 'active')
+        return { event: prior, added: false, refreshed: false };
+      if (this.submission(prior.id) && !this.retryOwns(prior.id, this.job(jobId)))
+        return { event: prior, added: false, refreshed: false };
       const ranked = scoreCandidate(candidate);
       const event: EventRecord = {
         ...prior,
@@ -312,6 +343,33 @@ export class Store {
   }
   submission(eventId: string) {
     return this.db.prepare('SELECT * FROM submissions WHERE event_id=?').get(eventId);
+  }
+  saveEvent(event: EventRecord) {
+    this.db.prepare('UPDATE events SET data=? WHERE id=?').run(JSON.stringify(event), event.id);
+  }
+  retryOwns(eventId: string, retry: Job | undefined) {
+    const event = this.event(eventId),
+      row = this.submission(eventId);
+    return (
+      !!retry &&
+      retry.retryEventId === eventId &&
+      event?.management?.mode === 'active' &&
+      (!event.management.manualAt || !!event.management.manualNotEnteredAt) &&
+      event.management.retryJobId === retry.id &&
+      row?.state === 'in_progress' &&
+      row.job_id === retry.retryFromJobId &&
+      unattemptedEntry(this.job(String(row.job_id)))
+    );
+  }
+  claimRetry(eventId: string, jobId: string, retry: Job) {
+    if (!this.retryOwns(eventId, retry)) return false;
+    return (
+      this.db
+        .prepare(
+          "UPDATE submissions SET job_id=?,state='in_progress',evidence=NULL WHERE event_id=? AND job_id=? AND state='in_progress'",
+        )
+        .run(jobId, eventId, retry.retryFromJobId!).changes === 1
+    );
   }
   claimSubmission(eventId: string, jobId: string) {
     const result = this.db

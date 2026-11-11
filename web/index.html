@@ -97,7 +97,11 @@
           /></label>
           <label
             >표시 범위<select id="event-filter">
-              <option value="unfinished">응모 완료 제외 (기본)</option>
+              <option value="unfinished">진행할 기회 (완료·정리한 건 제외)</option>
+              <option value="stopped">중단·오류·보관</option>
+              <option value="manual">수동 진행</option>
+              <option value="dropped">드랍</option>
+              <option value="unknown">제출 결과 미확인</option>
               <option value="eligible">준비 가능한 후보</option>
               <option value="review">확인 필요·제외 후보</option>
               <option value="completed">응모 완료만</option>
@@ -974,5 +978,9 @@
       </main>
     </div>
     <script type="module" src="/app.js"></script>
+    <dialog id="entry-manager" aria-labelledby="entry-manager-title">
+      <div id="entry-manager-content"></div>
+      <form method="dialog"><button>닫기</button></form>
+    </dialog>
   </body>
 </html>

@@ -2,7 +2,7 @@ import { completionMessage } from './completion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { Browser, validateUrl, type Observation } from './browser.js';
 import { type ModelClient, type Step } from './model.js';
-import { Store, type Job, type Approval } from './store.js';
+import { Store, canonicalUrl, type Job, type Approval } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, observedQuote } from './evidence.js';
@@ -179,6 +179,17 @@ export class Runner {
     if (!job || ['completed', 'stopped'].includes(job.status))
       throw new ServiceError('job_not_resumable');
     if (job.archivedAt) throw new ServiceError('restore_archived_job_first');
+    const managedEvent = this.store.event(job.eventId || job.retryEventId || '');
+    if (managedEvent?.management?.manualAt && !managedEvent.management.manualNotEnteredAt)
+      throw new ServiceError('manual_participation_check_required');
+    if (managedEvent?.management?.mode && managedEvent.management.mode !== 'active')
+      throw new ServiceError('entry_management_blocks_automation');
+    if (
+      job.kind === 'apply' &&
+      job.eventId &&
+      this.store.submission(job.eventId)?.job_id !== job.id
+    )
+      throw new ServiceError('entry_owned_by_another_job');
     if ((job.browserEngine || 'chromium') !== this.browser.engine)
       throw new ServiceError('job_browser_profile_mismatch');
     this.browser.setManual(false);
@@ -265,6 +276,7 @@ export class Runner {
     canReplan = false,
   ) {
     signal.throwIfAborted();
+    if (job.retryEventId) throw new ServiceError('retry_source_unavailable');
     const state = discoveryState(job);
     if (job.steps >= job.maxSteps) throw new ServiceError('discovery_decision_limit');
     if (state.switches >= MAX_DISCOVERY_SWITCHES) throw new ServiceError('discovery_switch_limit');
@@ -548,6 +560,7 @@ export class Runner {
           candidateLimit: job.candidateLimit,
           knownEvents: this.store
             .events()
+            .filter((e) => e.id !== job.retryEventId)
             .map((e) => ({
               title: e.title,
               entryUrl: e.entryUrl,
@@ -555,6 +568,13 @@ export class Runner {
             }))
             .slice(0, 100),
           approvedTexts: job.approvedTexts,
+          retryTarget: job.retryEventId
+            ? {
+                entryUrl: this.store.event(job.retryEventId)?.entryUrl,
+                instruction:
+                  'This is an explicit retry of an unattempted stopped entry. Re-read current conditions and record only this exact entry URL. Do not select another event. Existing posts/submissions remain forbidden until separately prepared and authorized.',
+              }
+            : undefined,
           history: job.history,
           memory: job.memory || '',
           observedUrls: job.observedUrls || [],
@@ -695,6 +715,12 @@ export class Runner {
           if (step.action === 'skip_source') {
             rejectSource(job, o.url, step.reason, step.skipCategory === 'restricted');
             job.history.push({ action: 'skip_source', reason: step.reason, url: o.url });
+            if (job.retryEventId) {
+              job.status = 'stopped';
+              job.note = `원문 재확인 후 중단: ${step.reason}`;
+              this.store.saveJob(job);
+              break;
+            }
             const selected = selectedDiscoveryLink(job, o, step.url);
             if (selected) {
               step = {
@@ -883,6 +909,12 @@ export class Runner {
           }
           if (proof?.quote) c.evidenceQuote = proof.quote;
           trace?.finish('accepted', 'candidate_evidence_verified');
+          if (
+            job.retryEventId &&
+            (canonicalUrl(c.entryUrl) !== this.store.event(job.retryEventId)?.entryKey ||
+              !this.store.retryOwns(job.retryEventId, job))
+          )
+            throw new ServiceError('retry_target_changed');
           const recorded = this.store.record(
             c,
             o.url,
@@ -907,11 +939,18 @@ export class Runner {
           const ready = this.store
             .events()
             .filter(
-              (e) => e.jobId === job.id && (!job.prepareOne || canPrepareEntry(this.store, e)),
+              (e) => e.jobId === job.id && (!job.prepareOne || canPrepareEntry(this.store, e, job)),
             );
           if (ready.length >= job.candidateLimit) {
             job.status = 'completed';
             job.note = '설정한 수의 후보를 수집했습니다.';
+            break;
+          }
+          if (job.retryEventId && !canPrepareEntry(this.store, recorded.event, job)) {
+            job.status = 'completed';
+            job.note =
+              '이 이벤트의 조건을 다시 확인했지만 자동 준비할 수 없습니다. 드랍 또는 수동 진행을 선택하세요.';
+            this.store.saveJob(job);
             break;
           }
           if (job.prepareOne && !canPrepareEntry(this.store, recorded.event)) {

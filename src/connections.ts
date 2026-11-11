@@ -169,6 +169,8 @@ export function registerCandidateConnections(store: Store, event: EventRecord, p
 export function connectionSummary(store: Store, profile: string) {
   const needs = store.settings<ConnectionNeed[]>('connectionNeeds', []).filter((n) => {
     const job = n.jobId ? store.job(n.jobId) : undefined;
+    const mode = n.eventId ? store.event(n.eventId)?.management?.mode : undefined;
+    if (mode && mode !== 'active') return false;
     // Hide legacy discovery-only notices without erasing their evidence. A completed
     // collection job can still own an unentered candidate that genuinely needs login.
     if (job?.archivedAt || job?.status === 'stopped') return false;

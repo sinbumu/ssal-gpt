@@ -131,6 +131,23 @@ const userMessages: Record<string, string> = {
     '공식 발표를 자동 확인하지 못했습니다. 당첨·낙첨은 확정하지 않았습니다.',
 };
 export function safeMessage(error: unknown): string {
+  const entryMessages: Record<string, string> = {
+    manual_participation_check_required:
+      '수동 참여 여부가 미확인입니다. 처리 방법 선택에서 외부 참여가 없었는지 직접 확인하거나 수동으로 마무리하세요.',
+    entry_management_unavailable:
+      '실행 중이거나 완료한 응모는 여기서 정리할 수 없습니다. 진행 중 작업을 먼저 일시정지하세요.',
+    entry_retry_unsafe:
+      '새 응모를 안전하게 시작할 수 없는 상태입니다. 기존 작업과 제출 결과를 확인하거나 수동 진행을 선택하세요.',
+    entry_management_blocks_automation:
+      '드랍·수동 진행으로 정리한 후보입니다. 먼저 진행할 기회로 복원하세요.',
+    entry_owned_by_another_job: '이전 실행 기록입니다. 현재 응모에 연결된 작업을 확인하세요.',
+    retry_source_unavailable:
+      '지정한 이벤트 원문을 확인할 수 없어 재도전을 멈췄습니다. 다른 이벤트로 바꾸지 않았습니다.',
+    retry_target_changed:
+      '재도전 대상과 다른 참여 주소가 제안되어 중단했습니다. 기존 응모 기록은 유지합니다.',
+    manual_entry_not_active: '수동 진행 중인 후보에서만 직접 완료를 기록할 수 있습니다.',
+  };
+  if (error instanceof ServiceError && entryMessages[error.code]) return entryMessages[error.code]!;
   if (error instanceof ServiceError && userMessages[error.code]) return userMessages[error.code]!;
   if (error instanceof ServiceError)
     return typeof error.code === 'string' && error.code ? error.code : 'service_error';

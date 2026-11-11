@@ -170,7 +170,7 @@ function renderCompleted() {
         .slice(0, completedLimit)
         .map(
           (e) => `<article class="event-card completed-card">
-    <div class="card-top"><span class="pill">응모 완료</span><small>${esc(e.organizer)}</small></div>
+    <div class="card-top"><span class="pill">${e.verification === 'user_reported' ? '수동 완료 · 사용자 보고' : '응모 완료'}</span><small>${esc(e.organizer)}</small></div>
     <h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>
     <dl><dt>접수 확인</dt><dd>${esc(new Date(e.completedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}</dd>
     <dt>당첨 발표</dt><dd>${esc(e.announcementDate || e.announcementNote || '일정 미확인')}</dd>
@@ -193,15 +193,23 @@ function renderEvents() {
       (e) =>
         filter === 'all' ||
         (filter === 'unfinished'
-          ? e.submissionState !== 'completed'
-          : filter === 'completed'
-            ? e.submissionState === 'completed'
-            : filter === 'eligible'
-              ? !e.submissionState &&
-                e.assessment?.state === 'eligible' &&
-                !e.preparationReasons?.length
-              : !e.submissionState &&
-                (e.assessment?.state !== 'eligible' || !!e.preparationReasons?.length)),
+          ? !e.lifecycle?.hiddenByDefault && e.submissionState !== 'completed'
+          : ['manual', 'dropped', 'unknown'].includes(filter)
+            ? filter === 'unknown'
+              ? e.lifecycle?.unknown && e.submissionState !== 'completed'
+              : e.lifecycle?.status === filter
+            : filter === 'stopped'
+              ? ['stopped', 'failed', 'held'].includes(e.lifecycle?.status)
+              : filter === 'completed'
+                ? e.submissionState === 'completed'
+                : filter === 'eligible'
+                  ? !e.submissionState &&
+                    !e.lifecycle?.hiddenByDefault &&
+                    e.assessment?.state === 'eligible' &&
+                    !e.preparationReasons?.length
+                  : !e.submissionState &&
+                    !e.lifecycle?.hiddenByDefault &&
+                    (e.assessment?.state !== 'eligible' || !!e.preparationReasons?.length)),
     );
   rows.sort(
     $('event-sort').value === 'score'
@@ -223,7 +231,7 @@ function renderEvents() {
             e.blockers.length ||
             e.preparationReasons?.length ||
             e.submissionState;
-          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '진행한 응모' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p><dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${[...new Set([...(e.assessment?.reasons || []), ...(e.preparationReasons || [])])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '이미 시작한 응모' : '응모 준비'}</button></div></article>`;
+          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.lifecycle && e.lifecycle.status !== 'candidate' ? esc(e.lifecycle.label) : e.submissionState === 'completed' ? '응모 완료' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>${e.lifecycle?.reason ? `<p class="entry-reason">${esc(e.lifecycle.reason)}</p>` : ''}<dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${[...new Set([...(e.assessment?.reasons || []), ...(e.preparationReasons || [])])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? esc(e.lifecycle?.label || '기존 작업 확인') : '응모 준비'}</button>${e.lifecycle?.canManage ? `<button data-entry-manage="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>처리 방법 선택</button>` : ''}</div></article>`;
         })
         .join('')
     : '<div class="empty">현재 필터에 맞는 기회가 없습니다.</div>';
@@ -233,6 +241,77 @@ function renderEvents() {
       .map((r) => `<p>${safeLink(r.url, '제외한 출처')} · ${esc(r.reason)}</p>`)
       .join('') || '<p class="hint">저장된 출처 제외 기록이 없습니다.</p>';
 }
+
+document.addEventListener('click', (event) => {
+  const view = event.target.closest('[data-entry-job]');
+  if (view) {
+    $('entry-manager').close();
+    const card = $(`job-${view.dataset.entryJob}`);
+    const details = card?.closest('details');
+    if (details) details.open = true;
+    card?.scrollIntoView({ block: 'start' });
+    return;
+  }
+  const button = event.target.closest('[data-entry-manage]');
+  if (!button) return;
+  const e = state.events.find((e) => e.id === button.dataset.entryManage),
+    l = e.lifecycle;
+  const mode = e.management?.mode || 'active';
+  const restoreControl = l.manualUnconfirmed
+    ? '<details><summary>자율 응모로 돌아가기</summary><p class="hint">수동 참여가 없었는지 확인해야 자동 실행을 다시 요청할 수 있습니다. 기존 제출 기록은 유지됩니다.</p><label class="check"><input type="checkbox" name="confirmedNoParticipation">좋아요·팔로우·댓글·폼 전송 등 외부 참여 동작을 하지 않았음을 직접 확인했습니다.</label><button name="action" value="active">미참여 확인 저장·기회 복원</button></details>'
+    : '<button name="action" value="active">진행할 기회로 복원</button>';
+  $('entry-manager-content').innerHTML = `<h2 id="entry-manager-title">${esc(e.title)}</h2>
+    <p><strong>${esc(l.label)}</strong> · ${esc(l.reason)}</p>
+    ${l.unknown ? '<p class="warning-text">제출했을 수 있습니다. 재응모하지 말고 접수 내역을 확인하세요. 드랍해도 중복 방지 기록은 유지됩니다.</p>' : ''}
+    ${l.jobId ? `<p><button data-entry-job="${esc(l.jobId)}">기존 작업·결과 확인</button></p>` : ''}
+    <form data-entry-resolution="${esc(e.id)}">
+      <label>추가 답변·처리 메모 (선택)<textarea name="context" maxlength="2000" placeholder="이전 중단 사유를 해결할 답변이나 변경 사항을 적어주세요. 실제 경험은 본인이 알려주세요."></textarea></label>
+      ${mode === 'active' ? `<div class="inline"><button name="action" value="dropped">드랍 · 목록에서 정리</button><button name="action" value="manual">수동 진행으로 전환</button></div>${l.manualUnconfirmed ? restoreControl : ''}` : `${mode === 'manual' ? '<button name="action" value="dropped">드랍 · 목록에서 정리</button>' : ''}${restoreControl}`}
+      ${l.canRetry ? '<p class="hint">기존 기록과 사용량은 보존합니다. 현재 원문을 다시 확인하고, 참여 가능하면 저장된 위임으로 준비합니다. 필요한 게시·제출 승인은 확인함에서 받습니다.</p><button name="action" value="retry">원문 재확인 후 자율 재도전</button>' : e.submissionState && mode === 'active' ? `<p class="hint">${esc(l.retryBlockedReason)}</p>` : ''}
+    </form>
+    ${mode === 'manual' ? `<section><h3>직접 참여</h3><p>기존 완료 과제와 접수 내역을 확인하고 남은 과제만 진행하세요. 일반 브라우저 로그인은 앱과 공유되지 않습니다.</p><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul><button data-external="${esc(e.entryUrl)}">참여 페이지를 일반 브라우저에서 열기</button><form data-entry-complete="${esc(e.id)}"><label>확인한 완료 근거<textarea name="evidence" required minlength="10" maxlength="2000" placeholder="직접 확인한 접수 문구·본인 댓글·완료 시각 등을 적어주세요."></textarea></label><label class="check"><input type="checkbox" name="confirmed" required>필수 과제를 모두 완료했고 접수 또는 참여 내역을 직접 확인했습니다.</label><button type="submit">수동 완료로 기록</button><p class="hint">완료 목록에 ‘사용자 완료 보고’로 표시합니다. 앱이 검증한 결과로 표시하지 않습니다.</p></form></section>` : ''}`;
+  $('entry-manager').showModal();
+});
+document.addEventListener('submit', (event) => {
+  if (!event.target.matches('[data-entry-resolution],[data-entry-complete]')) return;
+  void guard(async (event) => {
+    const form = event.target,
+      values = new FormData(form);
+    const id = form.dataset.entryResolution || form.dataset.entryComplete;
+    if (form.dataset.entryComplete) {
+      await api(`/api/events/${id}/manual-complete`, {
+        confirmed: values.has('confirmed'),
+        evidence: values.get('evidence'),
+      });
+      toast('사용자 완료 보고를 기록했습니다. 완료한 응모에서 확인하세요.');
+    } else {
+      const action = event.submitter.value;
+      if (action === 'retry') {
+        await api(`/api/events/${id}/retry`, {
+          provider: requireChoice(),
+          context: values.get('context'),
+        });
+        location.hash = 'attention';
+        toast('이 이벤트의 원문부터 다시 확인합니다. 필요한 승인은 확인함에 표시됩니다.');
+      } else {
+        await api(`/api/events/${id}/manage`, {
+          mode: action,
+          confirmedNoParticipation: values.has('confirmedNoParticipation'),
+          note: String(values.get('context')).slice(0, 1000),
+        });
+        if (action === 'manual') $('event-filter').value = 'manual';
+        toast(
+          action === 'dropped'
+            ? '드랍했습니다. 드랍 필터에서 복원할 수 있습니다.'
+            : action === 'manual'
+              ? '수동 진행 목록으로 옮겼습니다. 처리 방법 선택에서 직접 참여·완료 기록을 이어가세요.'
+              : '기회를 복원했습니다. 자동으로 재시작하지 않습니다.',
+        );
+      }
+    }
+    $('entry-manager').close();
+  })(event);
+});
 
 function renderConsents(rows = []) {
   if (!rows.length) return '';

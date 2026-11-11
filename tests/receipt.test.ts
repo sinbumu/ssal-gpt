@@ -43,3 +43,19 @@ test('receipt proof is bound to the exact submission, time and origin; old or ne
   );
   assert.equal(completionMessage('제출 완료', '예시: 제출 완료'), false);
 });
+test('participation acknowledgements allow spacing but reject instructions, errors and prior entries', () => {
+  for (const text of ['이벤트에 참여 되었습니다.', '이벤트에 참여되었습니다.', '참여가 됐습니다.'])
+    assert.equal(completionMessage(text, text), true, text);
+  for (const text of [
+    '이벤트에 참여 되지 않았습니다.',
+    '이벤트에 참여되지 않았습니다.',
+    '이미 이벤트에 참여하셨습니다.',
+    '이미 참여 되었습니다.',
+    '예시: 이벤트에 참여 되었습니다.',
+    '동의하면 이벤트에 참여 되었습니다.',
+    '이벤트에 참여 되었습니다. 처리 오류가 발생했습니다.',
+    '참여해 주셔서 감사합니다.',
+  ])
+    assert.equal(completionMessage(text, text), false, text);
+  assert.equal(completionMessage('참여 되었습니다.', '이미 참여 되었습니다.'), false);
+});

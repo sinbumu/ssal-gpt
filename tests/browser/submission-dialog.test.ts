@@ -58,7 +58,7 @@ for (const scenario of [
           const message =
             scenario === 'validation'
               ? '응모가 완료되지 않았습니다. 인증문자 오류입니다.'
-              : '응모가 완료되었습니다. ' + config.profile.name;
+              : '이벤트에 참여 되었습니다. ' + config.profile.name;
           const call =
             scenario === 'before-post'
               ? ''

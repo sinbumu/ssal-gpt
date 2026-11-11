@@ -78,7 +78,7 @@ for (const scenario of [
         const body = new URLSearchParams();
         for (const input of document.querySelectorAll('input:not([type=checkbox])')) body.set(input.name, input.value);
         ${scenario === 'accepted-sync' ? "const xhr = new XMLHttpRequest(); xhr.open('POST', '/demo/save', false); xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); xhr.send(body.toString());" : `await fetch('/demo/save', {method:'POST', body: ${scenario === 'unrelated-post' ? "new URLSearchParams({tracking: 'unrelated'})" : 'body'}});`}
-        alert('응모가 완료되었습니다.'); location.reload();
+        alert('${scenario === 'accepted-sync' ? '이벤트에 참여 되었습니다.' : '응모가 완료되었습니다.'}'); location.reload();
       }</script>`;
     try {
       await app.browser.open();

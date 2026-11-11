@@ -1,3 +1,4 @@
+import { setTimeout as wait } from 'node:timers/promises';
 import type { Browser } from './browser.js';
 import { ServiceError } from './auth.js';
 import type { EventRecord, Store } from './store.js';
@@ -203,7 +204,13 @@ export async function checkConnections(store: Store, browser: Browser, ids: stri
     try {
       const result = await browser.inReadOnlyTab(async () => {
         await browser.navigate(site.url);
-        return browser.connectionStatus();
+        let status = await browser.connectionStatus();
+        const until = Date.now() + 3000;
+        while (status.state === 'unknown' && status.service !== 'other' && Date.now() < until) {
+          await wait(250);
+          status = await browser.connectionStatus();
+        }
+        return status;
       });
       // Redirects to a different provider never prove that the requested site's session exists.
       const actual = result.service;

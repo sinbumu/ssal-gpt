@@ -259,6 +259,19 @@ test('announcement evidence separates original channels, legacy estimates and un
       }).basis,
       'unknown',
     );
+    const unrelated = winnerNotice({
+      sourceEvidence: [
+        {
+          ...f.e.sourceEvidence![0],
+          text: '스토리 공유 시 가산점. 홈페이지에서 이벤트 참여. 당첨자는 개별 DM 안내.',
+        },
+      ],
+    });
+    assert.deepEqual(unrelated.channels, ['instagram_dm']);
+    const story = winnerNotice({
+      sourceEvidence: [{ ...f.e.sourceEvidence![0], text: '당첨자 발표: 스토리 및 개별 DM 안내' }],
+    });
+    assert.deepEqual(story.channels, ['instagram_dm', 'story']);
     assert.equal(winnerNotice({}).basis, 'unknown');
   } finally {
     f.close();

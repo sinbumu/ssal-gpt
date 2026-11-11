@@ -36,8 +36,14 @@ const patterns: [WinnerNotice['channels'][number], RegExp][] = [
   ['sms', /문자|SMS|MMS/i],
   ['phone', /전화(?:로|\s*연락|\s*안내|\s*통보)/],
   ['post_comment', /댓글.{0,15}발표|발표.{0,15}댓글/],
-  ['story', /스토리|story/i],
-  ['site_notice', /홈페이지|공지사항|사이트.{0,15}발표|게시판/],
+  [
+    'story',
+    /(?:스토리|story)(?:에서|를 통해|에|로)?\s*(?:당첨자\s*)?(?:발표|안내)|(?:당첨자|발표)[^.!?\n]{0,15}(?:스토리|story)(?!\s*공유)/i,
+  ],
+  [
+    'site_notice',
+    /(?:홈페이지|공지사항|사이트|게시판)(?:에서|를 통해|에|로)?\s*(?:당첨자\s*)?(?:발표|안내|공지)|(?:당첨자|발표)[^.!?\n]{0,15}(?:홈페이지|공지사항|사이트|게시판)/,
+  ],
 ];
 function channels(text: string, sourceUrl?: string) {
   const instagram =
@@ -70,15 +76,16 @@ export function winnerNotice(event: {
   }
   // Recover only announcement-related original lines, never infer delivery from a collected phone field.
   for (const source of event.sourceEvidence || []) {
-    const lines = source.text.split(/\n/).filter((line) => /당첨|발표|선정/.test(line));
+    const lines = source.text.split(/[\n.!?]+/).filter((line) => /당첨|발표|선정/.test(line));
     for (const line of lines) {
-      const found = channels(line, source.url);
+      const quote = line.trim().slice(0, 800);
+      const found = channels(quote, source.url);
       if (found.length)
         return {
           channels: found,
           basis: 'explicit',
           sourceUrl: source.url,
-          quote: line.slice(0, 800),
+          quote,
           reason: '저장된 원문의 당첨 발표 안내에서 확인했습니다.',
         };
     }

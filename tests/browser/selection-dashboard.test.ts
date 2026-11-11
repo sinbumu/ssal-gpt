@@ -143,7 +143,10 @@ test('batched connection checks preserve waiting form and profile isolation and 
     await app.browser.context!.route('https://www.naver.com/**', (r) =>
       r.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: '<p>private@example.invalid</p><a href="/logout">로그아웃</a>',
+        body: `<p>private@example.invalid</p><script>setTimeout(() => {
+          const link = document.createElement('a');link.href='/logout';link.textContent='로그아웃';
+          document.body.append(link);
+        }, 200)</script>`,
       }),
     );
     await app.browser.context!.route('https://www.instagram.com/**', (r) =>

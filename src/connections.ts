@@ -64,6 +64,7 @@ export type ConnectionRecord = {
   message: string;
 };
 export type ConnectionNeed = {
+  kind?: 'login' | 'registration';
   siteId: string;
   url: string;
   profile: string;
@@ -101,6 +102,7 @@ export function requireConnection(
   reason: string,
   jobId?: string,
   eventId?: string,
+  kind: 'login' | 'registration' = 'login',
 ) {
   const site = siteFor(url);
   if (!site || site.id === 'moaform') return;
@@ -114,10 +116,12 @@ export function requireConnection(
             n.siteId === site.id &&
             n.profile === profile &&
             n.jobId === jobId &&
-            n.eventId === eventId
+            n.eventId === eventId &&
+            (n.kind || 'login') === kind
           ),
       ),
       {
+        kind,
         siteId: site.id,
         url: site.url,
         profile,
@@ -136,6 +140,20 @@ export function connectionReady(store: Store, siteId: string, profile: string, n
   return !!r && r.state === 'signed_in_visible' && now - r.checkedAt < 24 * 60 * 60_000;
 }
 export function registerCandidateConnections(store: Store, event: EventRecord, profile: string) {
+  const registration = event.entryNeeds?.registration;
+  if (
+    registration?.required &&
+    event.sourceEvidence?.some((s) => observedQuote(s.text, registration.quote))
+  )
+    requireConnection(
+      store,
+      event.entryUrl,
+      profile,
+      `직접 가입 후 참여 자격 재확인: ${registration.quote}`,
+      event.jobId,
+      event.id,
+      'registration',
+    );
   for (const need of event.entryNeeds?.logins || []) {
     if (
       event.sourceEvidence?.some((s) => observedQuote(s.text, need.quote)) &&
@@ -160,8 +178,14 @@ export function connectionSummary(store: Store, profile: string) {
           store.job(n.jobId)?.kind !== 'apply' ||
           store.job(n.jobId)?.status !== 'stopped'),
     );
-  const policy = store.settings<{ mode?: string; newConnections?: string }>('selectionPolicy', {});
-  const ask = (policy.newConnections || (policy.mode === 'strict' ? 'skip' : 'ask')) === 'ask';
+  const policy = store.settings<{ mode?: string; newConnections?: string; registrations?: string }>(
+    'selectionPolicy',
+    {},
+  );
+  const ask = (n: ConnectionNeed) =>
+    n.kind === 'registration'
+      ? (policy.registrations || (policy.mode === 'broad' ? 'ask' : 'skip')) === 'ask'
+      : (policy.newConnections || (policy.mode === 'strict' ? 'skip' : 'ask')) === 'ask';
   const records = store
     .settings<ConnectionRecord[]>('siteConnections', [])
     .filter((r) => r.profile === profile);
@@ -178,10 +202,10 @@ export function connectionSummary(store: Store, profile: string) {
     ...site,
     ...records.find((r) => r.siteId === site.id),
     profile,
-    skippedNeeds: ask ? 0 : needs.filter((n) => n.siteId === site.id).length,
+    skippedNeeds: needs.filter((n) => !ask(n) && n.siteId === site.id).length,
     requiredBy: needs
       .filter(
-        (n) => (ask || (!!n.eventId && !!store.submission(n.eventId))) && n.siteId === site.id,
+        (n) => (ask(n) || (!!n.eventId && !!store.submission(n.eventId))) && n.siteId === site.id,
       )
       .map((n) => ({
         ...n,

@@ -141,6 +141,24 @@ test('personal response and registration scope uses source evidence and preserve
       }).state,
       'review',
     );
+    registerCandidateConnections(
+      f.store,
+      {
+        ...f.e,
+        entryNeeds: { registration: { required: true, quote: '신규 회원가입 필수' }, logins: [] },
+      },
+      'chromium',
+    );
+    assert.match(
+      connectionSummary(f.store, 'chromium').find((s) => s.id === 'instagram')!.requiredBy[0]
+        .reason,
+      /직접 가입/,
+    );
+    f.store.setSettings('selectionPolicy', { registrations: 'skip' });
+    assert.equal(
+      connectionSummary(f.store, 'chromium').find((s) => s.id === 'instagram')!.requiredBy.length,
+      0,
+    );
     const job = { id: 'draft', kind: 'apply', tasks: [], uncertain: false } as unknown as Job;
     f.store.setSettings('selectionPolicy', { personalResponses: 'skip' });
     assert.throws(

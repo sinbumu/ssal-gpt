@@ -184,7 +184,7 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       reject(
         p.registrations === 'skip'
           ? '새 가입 필요 후보 제외 설정'
-          : '새 가입은 연결 확인함에서 직접 완료 필요',
+          : '새 가입·참여 자격은 직접 완료 후 원문 재확인 필요',
         p.registrations === 'ask',
       );
   }

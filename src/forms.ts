@@ -242,6 +242,10 @@ export async function inspectForm(page: Page) {
           group.some((e) => e.required || e.getAttribute('aria-required') === 'true') ||
           fieldset?.getAttribute('aria-required') === 'true' ||
           (moa && !!fieldset?.querySelector('.wf-icon-required')) ||
+          (linkedConsent?.element === el &&
+            /동의를\s*거부할\s*경우[\s\S]{0,120}(?:이용|참여|응모)[\s\S]{0,60}(?:없|불가|제한)/.test(
+              linkedConsent.text,
+            )) ||
           /답변\s*필수/.test(questionLabel),
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
         options,

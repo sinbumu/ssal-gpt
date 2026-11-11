@@ -22,7 +22,7 @@ test('native shipping form links adjacent consent, separates field labels and ph
   const app = await createApp({ dir, port: 0, headless: true });
   let posts = 0;
   const html = `<h1>가상 배송 경품 퀴즈</h1><p>공개 퀴즈: 1 더하기 1</p>
-    <dl><dt>개인정보 수집 및 이용 동의</dt><dd>가상 기관은 이름, 연락처, 이메일, 주소를 경품 발송 목적으로 수집하고 2년 보관합니다.</dd></dl>
+    <dl><dt>개인정보 수집 및 이용 동의</dt><dd>가상 기관은 이름, 연락처, 이메일, 주소를 경품 발송 목적으로 수집하고 2년 보관합니다. 동의를 거부할 경우 이벤트 참여 서비스를 이용하실 수 없습니다.</dd></dl>
     <p><label for="agree">개인정보 수집 및 이용에 동의합니다</label><input type="checkbox" id="agree"></p>
     <form method="post" action="/demo/receipt"><fieldset><legend>퀴즈</legend>
       <label for="answer">정답</label><input id="answer" name="answer">
@@ -59,7 +59,7 @@ test('native shipping form links adjacent consent, separates field labels and ph
       policy: {
         ...syntheticSettings.policy,
         finalSubmit: 'review',
-        consent: { ...syntheticSettings.policy.consent, mode: 'manual' },
+        consent: { ...syntheticSettings.policy.consent, mode: 'adaptive', declineOptional: true },
       },
     });
     const config = settings(app.store);
@@ -140,6 +140,7 @@ test('native shipping form links adjacent consent, separates field labels and ph
       inbox.items.some((q) => /인증문자/.test(q.label) && q.category === 'fact' && !q.recommended),
     );
     assert.ok(inbox.items.some((q) => /동의/.test(q.label) && q.description?.includes('2년')));
+    assert.equal(inbox.items.find((q) => /동의/.test(q.label))?.required, true);
     assert.equal(posts, 0);
     // The API uses app.runner; install the same synthetic decision provider.
     (app.runner as any).model = model;

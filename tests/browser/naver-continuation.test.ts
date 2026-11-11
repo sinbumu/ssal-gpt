@@ -18,7 +18,8 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
     const dir = mkdtempSync(join(tmpdir(), 'ssal-naver-next-'));
     const app = await createApp({ dir, port: 0, headless: true });
     app.scheduler.stop();
-    let posts = 0;
+    let posts = 0,
+      delayedFirstPage = false;
     const config = {
       ...syntheticSettings,
       policy: {
@@ -74,7 +75,7 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
         else
           await r.fulfill({
             contentType: 'text/html; charset=utf-8',
-            body: `<title>고정 가상 폼</title><main>${first}</main><script>let name='';const main=document.querySelector('main');document.addEventListener('click',async e=>{if(e.target.id==='nsv_page_control_next'){name=document.querySelector('[name=name]').value;main.innerHTML=${JSON.stringify(second)}}if(e.target.id==='nsv_page_control_submit'){await fetch(${JSON.stringify(target)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{questionId:1,value:name},{questionId:2,value:document.querySelector('[name=phone]').value},{questionId:3,value:'yes'}],taToken:'private-token'})});main.innerHTML='<p>답변이 제출되었습니다.</p>'}})</script>`,
+            body: `<title>고정 가상 폼</title><main>${delayedFirstPage ? '' : first}</main><script>let name='';const main=document.querySelector('main');${delayedFirstPage ? `setTimeout(()=>{main.innerHTML=${JSON.stringify(first)}},250);` : ''}document.addEventListener('click',async e=>{if(e.target.id==='nsv_page_control_next'){name=document.querySelector('[name=name]').value;main.innerHTML=${JSON.stringify(second)}}if(e.target.id==='nsv_page_control_submit'){await fetch(${JSON.stringify(target)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{questionId:1,value:name},{questionId:2,value:document.querySelector('[name=phone]').value},{questionId:3,value:'yes'}],taToken:'private-token'})});main.innerHTML='<p>답변이 제출되었습니다.</p>'}})</script>`,
           });
       });
     }
@@ -126,6 +127,7 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
         };
         captureReceipt(j, await app.browser.observe(true));
         if (scenario === 'restart') {
+          delayedFirstPage = true;
           await app.browser.close();
           await app.browser.open();
           await route();

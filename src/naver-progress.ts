@@ -158,7 +158,14 @@ export async function restoreNaverDraft(store: Store, browser: Browser, job: Job
     return false;
   const before = job.intent!.beforeText;
   if (page.url() === 'about:blank') await browser.navigate(job.intent!.url);
-  const { view } = await inspectForm(browser.page!);
+  // SPA navigation can finish before its questions arrive. Observe a bounded
+  // load interval; never reload or click to force the form to become ready.
+  let { view } = await inspectForm(browser.page!);
+  for (let wait = 0; wait < 10 && (!view.questions.length || !view.buttons.length); wait++) {
+    if (browser.page!.url() !== job.intent!.url) return false;
+    await browser.page!.waitForTimeout(500);
+    view = (await inspectForm(browser.page!)).view;
+  }
   if (
     view.url !== job.intent!.url ||
     !view.questions.length ||

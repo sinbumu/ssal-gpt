@@ -132,6 +132,7 @@ export function reuseDiscoveryRejections(job: Job, pastJobs: Job[], now = Date.n
         p.id !== job.id &&
         p.kind === 'discover' &&
         p.goal === job.goal &&
+        p.selectionKey === job.selectionKey &&
         p.prepareOne?.revision === job.prepareOne?.revision &&
         p.browserEngine === job.browserEngine &&
         Date.parse(p.updatedAt) <= Date.parse(job.createdAt) &&

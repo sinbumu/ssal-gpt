@@ -8,7 +8,7 @@ import {
   type Job,
   type Store,
 } from './store.js';
-import { evaluateCandidate, nextDiscoveryAfterSkip } from './selection.js';
+import { evaluateCandidate, nextDiscoveryAfterSkip, selection } from './selection.js';
 import { buildTasks, taskPermission } from './tasks.js';
 import { discoveryState, excludedSource } from './discovery.js';
 
@@ -71,30 +71,38 @@ export function nextWorkflowJob(store: Store, job: Job) {
 }
 
 // Shared by discovery stopping and preparation, so an unready saved lead is not success.
-export function canPrepareEntry(store: Store, e: EventRecord) {
+export function preparationReasons(store: Store, e: EventRecord) {
+  const assessment = evaluateCandidate(store, e);
+  const reasons = assessment.state === 'eligible' ? [] : [...assessment.reasons];
+  if (store.submission(e.id))
+    reasons.push('이미 시작·완료·결과 미확인인 응모는 중복 실행하지 않습니다.');
   try {
     const tasks = buildTasks(e);
     if (tasks?.some((t) => t.kind !== 'form' && (t.kind === 'manual' || !taskPermission(store, t))))
-      return false;
+      reasons.push('필수 과제의 자동 실행 경로 또는 사용자 위임 확인 필요');
   } catch {
-    return false;
+    reasons.push('필수 과제의 대상·순서·원문 확인 필요');
   }
   const url = new URL(e.entryUrl);
-  return (
-    !store.submission(e.id) &&
+  if (!(
     url.protocol === 'https:' &&
     ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
       (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
       (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname)) ||
       (url.hostname === 'docs.google.com' && /^\/forms\//.test(url.pathname)) ||
-      !!e.tasks?.length) &&
-    deadlineState(e) === 'available' &&
-    !e.blockers.length &&
-    evaluateCandidate(store, e).state === 'eligible' &&
-    !/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')) &&
-    (!/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) || !!e.tasks?.length) &&
-    e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl))
-  );
+      !!e.tasks?.length)
+  ))
+    reasons.push('자동 준비를 검증한 참여 경로가 아닙니다.');
+  if (/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')))
+    reasons.push('구매·방문·친구 태그·구독·리그램 필수 과제는 자동 준비 범위 밖입니다.');
+  if (/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) && !e.tasks?.length)
+    reasons.push('SNS 필수 과제를 구조화하지 못했습니다.');
+  if (!e.sourceEvidence?.some((s) => canonicalUrl(s.url) === canonicalUrl(e.entryUrl)))
+    reasons.push('참여 페이지의 직접 관찰 근거가 필요합니다.');
+  return [...new Set(reasons)];
+}
+export function canPrepareEntry(store: Store, e: EventRecord) {
+  return preparationReasons(store, e).length === 0;
 }
 
 // Re-open a previously observed, unentered candidate before spending another search.
@@ -180,7 +188,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     updatedAt: now,
     eventId: event.id,
     candidateLimit: 1,
-    maxSteps: 60,
+    maxSteps: selection(store).maxCalls,
     steps: 0,
     inputTokens: 0,
     outputTokens: 0,

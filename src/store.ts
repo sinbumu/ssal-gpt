@@ -10,6 +10,7 @@ import type { SourceEvidence } from './evidence.js';
 import type { EntryTask } from './tasks.js';
 import type { DiscoveryState } from './discovery.js';
 import type { ReadTraceSummary } from './read-trace.js';
+import { winnerNotice } from './notifications.js';
 
 export type JobStatus =
   | 'queued'
@@ -44,6 +45,7 @@ export type Job = {
   taskFormStarted?: boolean;
   parentId?: string;
   scheduleId?: string;
+  selectionKey?: string;
   autonomy?: AutonomyState;
   goal: string;
   provider: ProviderChoice;
@@ -101,6 +103,7 @@ export type EventRecord = Candidate & {
   campaignKey: string;
   sourceEvidence?: SourceEvidence[];
   entryChannel?: string;
+  connectionProfile?: string;
   reviews?: { at: string; note: string; previousEntryUrl: string; previousBlockers: string[] }[];
 };
 
@@ -242,7 +245,7 @@ export class Store {
     sourceUrl: string,
     jobId: string,
     screenshot: string,
-    context?: Pick<EventRecord, 'sourceEvidence' | 'entryChannel'>,
+    context?: Pick<EventRecord, 'sourceEvidence' | 'entryChannel' | 'connectionProfile'>,
   ) {
     const entryKey = canonicalUrl(candidate.entryUrl);
     const campaignKey = createHash('sha256')
@@ -281,6 +284,7 @@ export class Store {
           },
         ].slice(-10),
       };
+      event.winnerNotice = winnerNotice(event);
       this.db
         .prepare('UPDATE events SET entry_key=?,campaign_key=?,data=? WHERE id=?')
         .run(entryKey, campaignKey, JSON.stringify(event), prior.id);
@@ -300,6 +304,7 @@ export class Store {
       entryKey,
       campaignKey,
     };
+    event.winnerNotice = winnerNotice(event);
     this.db
       .prepare('INSERT INTO events VALUES (?,?,?,?)')
       .run(event.id, entryKey, campaignKey, JSON.stringify(event));
@@ -346,6 +351,7 @@ export class Store {
             completedAt: typeof at === 'number' ? new Date(at).toISOString() : String(at),
             announcementDate: event.announcementDate,
             announcementNote: event.announcementNote,
+            winnerNotice: winnerNotice(event),
             quote: typeof proof.quote === 'string' ? proof.quote : '접수 완료 화면 확인',
             screenshot:
               typeof proof.screenshot === 'string' && /^[a-f0-9-]+\.png$/.test(proof.screenshot)

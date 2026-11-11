@@ -1,11 +1,24 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { ServiceError } from './auth.js';
 import { deadlineState, scoreCandidate, type EventRecord, type Job, type Store } from './store.js';
 import { observedQuote } from './evidence.js';
 import { settings, type Profile } from './autonomy.js';
+import { connectionReady, siteFor } from './connections.js';
 
-export const SelectionSchema = z
+const SelectionFields = z
   .object({
+    mode: z.enum(['strict', 'balanced', 'broad']).default('balanced'),
+    prizeMode: z.enum(['prefer', 'only']).default('prefer'),
+    allowedTasks: z
+      .array(z.enum(['like', 'follow', 'comment', 'form']))
+      .default(['like', 'follow', 'comment', 'form']),
+    personalResponses: z.enum(['skip', 'ask']).default('ask'),
+    newConnections: z.enum(['skip', 'ask']).default('ask'),
+    registrations: z.enum(['skip', 'ask']).default('skip'),
+    discoveryCalls: z.number().int().min(5).max(300).default(40),
+    discoveryTokens: z.number().int().min(1).max(10000000).nullable().default(null),
+    entryTokens: z.number().int().min(1).max(10000000).nullable().default(null),
     facts: z
       .array(z.object({ key: z.string().min(1).max(100), value: z.string().min(1).max(200) }))
       .max(40)
@@ -22,8 +35,71 @@ export const SelectionSchema = z
     switchOnBurden: z.boolean().default(true),
   })
   .strict();
+export const SELECTION_PRESETS = {
+  strict: {
+    mode: 'strict',
+    prizeMode: 'only',
+    allowedTasks: ['like', 'follow', 'comment'],
+    personalResponses: 'skip',
+    newConnections: 'skip',
+    registrations: 'skip',
+    maxMinutes: 5,
+    maxQuestions: 10,
+    maxCalls: 40,
+    maxSwitches: 2,
+    discoveryCalls: 30,
+    discoveryTokens: 400000,
+    entryTokens: 150000,
+    excludedTypes: ['survey'],
+    switchOnBurden: true,
+  },
+  balanced: {
+    mode: 'balanced',
+    prizeMode: 'prefer',
+    allowedTasks: ['like', 'follow', 'comment', 'form'],
+    personalResponses: 'ask',
+    newConnections: 'ask',
+    registrations: 'skip',
+    maxMinutes: 8,
+    maxQuestions: 40,
+    maxCalls: 60,
+    maxSwitches: 2,
+    discoveryCalls: 40,
+    discoveryTokens: null,
+    entryTokens: null,
+    excludedTypes: [],
+    switchOnBurden: true,
+  },
+  broad: {
+    mode: 'broad',
+    prizeMode: 'prefer',
+    allowedTasks: ['like', 'follow', 'comment', 'form'],
+    personalResponses: 'ask',
+    newConnections: 'ask',
+    registrations: 'ask',
+    maxMinutes: 30,
+    maxQuestions: 100,
+    maxCalls: 120,
+    maxSwitches: 3,
+    discoveryCalls: 60,
+    discoveryTokens: null,
+    entryTokens: null,
+    excludedTypes: [],
+    switchOnBurden: true,
+  },
+} as const;
+export const SelectionSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  const preset = SELECTION_PRESETS[input.mode as keyof typeof SELECTION_PRESETS];
+  return preset ? { ...preset, ...input } : input;
+}, SelectionFields);
 export const selection = (store: Store) =>
   SelectionSchema.parse(store.settings('selectionPolicy', {}));
+export const selectionKey = (store: Store) =>
+  createHash('sha256')
+    .update(JSON.stringify(selection(store)))
+    .digest('hex');
 export function eventType(e: Pick<EventRecord, 'requirements' | 'entryType'>) {
   if (e.entryType) return e.entryType;
   const text = e.requirements.join(' ');
@@ -94,9 +170,61 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       else reject(`자격 불일치: ${condition.key}`);
     }
   }
+  const sourceHas = (quote: string) =>
+    !!quote && !!e.sourceEvidence?.some((s) => observedQuote(s.text, quote));
+  const needs = e.entryNeeds;
+  if (needs?.personalResponse?.required) {
+    if (!sourceHas(needs.personalResponse.quote)) reject('개인 응답 조건의 원문 확인 필요', true);
+    else if (p.personalResponses === 'skip') reject('개인 경험·취향 질문 제외 설정');
+    else reasons.push('개인 응답은 저장된 사실을 사용하고 모르는 내용은 묶음 확인');
+  }
+  if (needs?.registration?.required) {
+    if (!sourceHas(needs.registration.quote)) reject('가입 조건의 원문 확인 필요', true);
+    else
+      reject(
+        p.registrations === 'skip'
+          ? '새 가입 필요 후보 제외 설정'
+          : '새 가입은 연결 확인함에서 직접 완료 필요',
+        p.registrations === 'ask',
+      );
+  }
+  const profile =
+    e.connectionProfile ||
+    store.job(e.jobId)?.browserEngine ||
+    store.settings<{ engine?: string }>('browser', {}).engine ||
+    'chromium';
+  for (const login of needs?.logins || []) {
+    const site = siteFor(login.url);
+    if (!sourceHas(login.quote) || !site) reject('로그인 조건의 원문 확인 필요', true);
+    else if (!connectionReady(store, site.id, profile, now) && site.id !== 'moaform')
+      reject(
+        p.newConnections === 'skip'
+          ? `새 연결 제외 설정: ${site.name}`
+          : `연결 확인 필요: ${site.name}`,
+        p.newConnections === 'ask',
+      );
+  }
+  const formUrl =
+    /^https:\/\/(?:form\.naver\.com\/response\/|(?:answer\.)?moaform\.com\/(?:q|answers)\/|docs\.google\.com\/forms\/)/.test(
+      e.entryUrl,
+    );
+  const requiredTasks = e.tasks?.length
+    ? e.tasks.map((t) => t.kind)
+    : eventType(e) === 'survey' || formUrl
+      ? ['form']
+      : [];
+  for (const kind of requiredTasks)
+    if (!p.allowedTasks.includes(kind as 'like' | 'follow' | 'comment' | 'form'))
+      reject(`허용하지 않은 필수 과제: ${kind}`);
   const preferred = p.preferredPrizes.filter((v) => e.prize.includes(v));
+  if (p.prizeMode === 'only' && !preferred.length) reject('선호 경품만 허용 설정과 불일치');
   if (preferred.length) reasons.push(`선호 경품: ${preferred.join(', ')}`);
+  if (state === 'eligible') reasons.unshift('기간·자격·선정 설정을 통과한 후보');
+  const adjustments = reasons.filter((r) => /설정|허용하지|연결 확인|원문 확인|저장하지/.test(r));
   return {
+    adjustments,
+    mode: p.mode,
+    priority: ['응모 성공', '토큰 절감', '시간'],
     state,
     reasons,
     type: eventType(e),
@@ -178,4 +306,18 @@ export function switchableFailure(store: Store, job: Job, error: unknown) {
     return false;
   job.switchReason = `전송 전 실행 경로 실패: ${error.code}`;
   return true;
+}
+
+export function enforcePersonalResponsePolicy(store: Store, job: Job) {
+  if (job.autonomy?.synthetic || selection(store).personalResponses !== 'skip') return;
+  const reason = '추가 개인 응답이 필요한 후보를 제외하도록 설정했습니다.';
+  if (
+    !job.transmitted &&
+    !job.uncertain &&
+    !job.tasks?.some(
+      (t) => t.approval || t.attempt || ['verified', 'manual_reported'].includes(t.state),
+    )
+  )
+    job.switchReason = reason;
+  throw new ServiceError('personal_response_policy_stop');
 }

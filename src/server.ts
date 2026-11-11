@@ -56,7 +56,9 @@ import {
   taskPermission,
   instagramBrowser,
 } from './tasks.js';
-import { SelectionSchema, selection, evaluateCandidate } from './selection.js';
+import { SelectionSchema, SELECTION_PRESETS, selection, evaluateCandidate } from './selection.js';
+import { preparationReasons } from './workflow.js';
+import { connectionSummary, checkConnections, saveConnection } from './connections.js';
 import {
   report,
   reportCsv,
@@ -289,6 +291,7 @@ export async function createApp(options: {
             scoreReasons: ranked.reasons,
             deadlineState: deadlineState(event),
             assessment: evaluateCandidate(store, event),
+            preparationReasons: preparationReasons(store, event),
             submissionState: store.submission(event.id)?.state,
             sourceEvidence: undefined,
           };
@@ -299,6 +302,14 @@ export async function createApp(options: {
         operations: operations(store),
         schedules: schedules(store),
         selectionPolicy: selection(store),
+        selectionPresets: SELECTION_PRESETS,
+        connections: connectionSummary(store, browser.profileKey()),
+        sourceExclusions: store
+          .jobs()
+          .flatMap((j) =>
+            (j.discovery?.rejected || []).map((r) => ({ ...r, jobId: j.id, at: j.updatedAt })),
+          )
+          .slice(0, 200),
         instagramBrowser: { ...instagramBrowser(store), platformPermission: 'not_verified' },
         taskPermissions: store.settings('taskPermissions', []),
         usage: usage(store),
@@ -332,7 +343,11 @@ export async function createApp(options: {
         : send(response, 200, value);
     }
     if (method === 'POST' && url.pathname === '/api/selection-policy') {
-      store.setSettings('selectionPolicy', SelectionSchema.parse(data));
+      if (runner.isBusy()) throw new ServiceError('pause_before_changing_delegation');
+      const parsed = SelectionSchema.parse(data);
+      if (parsed.prizeMode === 'only' && !parsed.preferredPrizes.length)
+        throw new ServiceError('preferred_prizes_required');
+      store.setSettings('selectionPolicy', parsed);
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/quality') {
@@ -521,10 +536,29 @@ export async function createApp(options: {
         manualNavigation = false;
       }
     }
+    if (method === 'POST' && url.pathname === '/api/connections/check') {
+      if (runner.isBusy() || manualNavigation)
+        throw new ServiceError('pause_before_manual_control');
+      const { ids } = z
+        .object({ ids: z.array(z.string().max(300)).min(1).max(10) })
+        .strict()
+        .parse(data);
+      if (browser.engine === 'connected')
+        throw new ServiceError('connected_browser_extra_tab_not_granted');
+      manualNavigation = true;
+      store.setSettings('operations', { ...operations(store), queueEnabled: false });
+      try {
+        return send(response, 200, { results: await checkConnections(store, browser, ids) });
+      } finally {
+        manualNavigation = false;
+      }
+    }
     if (method === 'POST' && url.pathname === '/api/browser/check') {
       if (runner.isBusy() || manualNavigation)
         throw new ServiceError('pause_before_manual_control');
-      return send(response, 200, await browser.connectionStatus());
+      const result = await browser.connectionStatus();
+      saveConnection(store, browser.profileKey(), result, browser.page?.url());
+      return send(response, 200, result);
     }
     if (method === 'POST' && url.pathname === '/api/browser/external') {
       const url = await validateUrl(z.string().url().parse(data.url));

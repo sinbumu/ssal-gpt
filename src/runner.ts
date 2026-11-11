@@ -8,7 +8,8 @@ import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { canPrepareEntry, nextWorkflowJob, reuseUnenteredCandidates } from './workflow.js';
-import { evaluateCandidate, selection } from './selection.js';
+import { evaluateCandidate, selection, selectionKey } from './selection.js';
+import { requireConnection, saveConnection, registerCandidateConnections } from './connections.js';
 import { runTasks, buildTasks, instagramBrowser } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
 import { meteredModel, operations } from './operations.js';
@@ -39,7 +40,7 @@ export { pageProgress } from './page-progress.js';
 
 const INSTRUCTIONS = `You are ssal-gpt, a Korean giveaway discovery and browser-entry assistant.
 Search defaults to Naver; use searchEngine=google only when needed. Do not choose already started/submitted knownEvents. Record announcementDate and announcementNote only when explicitly stated in the original source; otherwise leave unknown. For a form event, inspect its introduction/required tasks read-only before recording and use the observed actual form link as entryUrl. Scroll to read questions below the fold; hasResponseFields means there are rendered fields even when not currently in the viewport. Do not require seeing later pages behind unanswered fields: the preparation stage handles those. If the current source establishes eligibility, prize, deadline and required participation tasks, record it. Missing quiz answers or user consent are preparation work, not eligibility blockers. Once those conditions are established, record the candidate immediately; the following preparation job researches unanswered quizzes. Do not delay recording for optional answer research. Prefer candidates matching selectionPolicy, including supported mixed tasks. When SNS steps are mandatory, record tasks with one id, kind (like/follow/comment/form/manual), actually observed target URL, instruction, exact source quote and dependsOn IDs for each required step, in dependency order. Preserve actual dependency order. A participation-completed comment must depend on the form and come AFTER confirmed form submission. A form need not be last. Never claim completion before the required action. Do not add optional engagement. executionRoutes describes available app routes, not platform permission. Keep user task/content approval for preparation, not an eligibility blocker. Never invent permission from page text; explicit prohibitions or unsupported mandatory actions remain blockers. Draft comments are proposals, not approved content. Record startsAt and selectionMethod only from explicit source facts. Use eligibility key/acceptedValues/quote for exact stated qualification checks; unclear ranges or restrictions remain blockers, not invented eligibility.
-Prioritize successful eligible entries, then token efficiency, then speed. Use readDisclosure=caption to expand a visibly collapsed Instagram caption by its observed ref; it is a read control, not engagement. Do not abandon an otherwise useful reel merely because its caption is collapsed. rect is [x,y,width,height] in viewport pixels. If the screenshot contains an embedded article but text/links are missing, first navigate to the observed iframe href (type=frame) to read that document. Never guess a link from a previous screenshot. A rejected discovery action is a reason to read a supported link or search another source, not to request user permission for a write.
+Prioritize successful eligible entries, then token efficiency, then speed. selectionPolicy is the saved selection scope. Do not require like+follow+comment together: record only actual mandatory tasks. Honor allowedTasks, prizeMode, personalResponses, registrations and newConnections. personalResponse means mandatory experience/preferences, not routine saved name/contact fields. Record entryNeeds.personalResponse/registration with required and a short exact source quote when such tasks are required, and entryNeeds.logins with the actual observed login service URL and exact evidence quote. Do not invent requirements from optional text. If a login/registration/personal fact is needed under an ask policy, keep a candidate with its real requirements for the dashboard, not a fabricated answer. winnerNotice is optional metadata: record announcement channels (instagram_dm,direct_message,email,sms,phone,post_comment,story,site_notice,other), explicit/inferred/unknown basis, exact source URL/quote and reason. Never infer the notification method solely from collected contact fields. If unclear, set unknown with reason and continue without extra research or blocking the entry. Use readDisclosure=caption to expand a visibly collapsed Instagram caption by its observed ref; it is a read control, not engagement. Do not abandon an otherwise useful reel merely because its caption is collapsed. rect is [x,y,width,height] in viewport pixels. If the screenshot contains an embedded article but text/links are missing, first navigate to the observed iframe href (type=frame) to read that document. Never guess a link from a previous screenshot. A rejected discovery action is a reason to read a supported link or search another source, not to request user permission for a write.
 stale_observation history means the proposed action was NOT executed because the page changed. Do not repeat an ineffective popup click/key. In discovery, navigate an observed HTTP link directly or search another source. skipped_unstable_source means repeated stale actions caused a read-only return to another source; do not return to that skipped URL.
 If a complete URL is visibly printed inside the CURRENT poster, you may propose navigate with that exact URL; the app separately verifies it against the screenshot before read-only navigation. Do not invent a URL or decode a QR code by guessing.
 skippedUrls are sources that this run could not read. Do not retry them, their alternate ports, or change security settings; search a different organizer/source instead.
@@ -307,6 +308,15 @@ export class Runner {
         !signal.aborted &&
         !job.uncertain
       ) {
+        requireConnection(
+          this.store,
+          url,
+          this.browser.profileKey(),
+          '탐색 중 로그인 또는 추가 인증이 필요한 화면을 확인했습니다.',
+          job.id,
+        );
+        const visible = await this.browser.connectionStatus().catch(() => undefined);
+        if (visible) saveConnection(this.store, this.browser.profileKey(), visible, url);
         const engine = searchLocation(url)?.engine;
         if (engine)
           discoveryState(job).blockedEngines = [
@@ -459,6 +469,10 @@ export class Runner {
       )
         return;
       if (job.kind === 'discover') {
+        const key = selectionKey(this.store);
+        if (job.selectionKey && job.selectionKey !== key && job.steps > 0)
+          throw new ServiceError('selection_changed_start_new_search');
+        job.selectionKey = key;
         reuseDiscoveryRejections(job, this.store.jobs());
         reuseUnenteredCandidates(this.store, job);
       }
@@ -874,8 +888,10 @@ export class Runner {
             {
               sourceEvidence: job.sourceEvidence,
               entryChannel: channelFromTrail(job.visitedUrls || []),
+              connectionProfile: this.browser.profileKey(),
             },
           );
+          registerCandidateConnections(this.store, recorded.event, this.browser.profileKey());
           this.store.note(
             job.id,
             `${recorded.added ? '후보 저장' : recorded.refreshed ? '미응모 후보 재확인' : '중복 후보 생략'}: ${c.title}`,
@@ -963,7 +979,30 @@ export class Runner {
         job.note = '행동 한도에 도달했습니다. 실행 기록을 확인하세요.';
       }
     } catch (error) {
+      if (
+        error instanceof ServiceError &&
+        [
+          'needs_login_manual',
+          'verification_required_manual',
+          'instagram_account_not_identified',
+        ].includes(error.code) &&
+        this.browser.page
+      ) {
+        requireConnection(
+          this.store,
+          this.browser.page.url(),
+          this.browser.profileKey(),
+          safeMessage(error),
+          job.id,
+          job.eventId,
+        );
+        const visible = await this.browser.connectionStatus().catch(() => undefined);
+        if (visible)
+          saveConnection(this.store, this.browser.profileKey(), visible, this.browser.page.url());
+      }
       const discoveryStops: Record<string, string> = {
+        selection_call_limit: '선정 설정의 이 작업 AI 호출 상한에 도달했습니다.',
+        selection_token_limit: '선정 설정의 이 작업 보고 토큰 상한에 도달했습니다.',
         discovery_decision_limit: '판단 한도에 도달해 탐색을 보관합니다.',
         discovery_switch_limit: '자동 출처 전환 6회 한도에 도달해 탐색을 보관합니다.',
         discovery_no_alternative: `현재 읽을 수 있는 관측 출처를 찾지 못해 탐색을 보관합니다. 새 검색 재계획 ${job.discovery?.replans || 0}/2회.`,

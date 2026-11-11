@@ -1,3 +1,4 @@
+import { selectionKey } from '../../src/selection.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -229,6 +230,7 @@ test('a prior rejected carousel redirect is skipped and an observed next page is
       });
     });
     const prior = job(source);
+    prior.selectionKey = selectionKey(app.store);
     prior.status = 'completed';
     prior.prepareOne = { revision: 'same', expires: Date.now() + 10000 };
     rejectSource(prior, post, '친구 태그 필수');

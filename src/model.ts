@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Auth, ServiceError, type ProviderChoice } from './auth.js';
 import { AnswerPlanSchema } from './autonomy.js';
 import { TaskSpecSchema } from './tasks.js';
+import { WinnerNoticeSchema } from './notifications.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -16,6 +17,17 @@ export const CandidateSchema = z.object({
   evidenceQuote: z.string().min(1).max(2000),
   evidenceKind: z.enum(['text', 'image']),
   effortMinutes: z.number().min(1).max(300),
+  winnerNotice: WinnerNoticeSchema.optional(),
+  entryNeeds: z
+    .object({
+      personalResponse: z.object({ required: z.boolean(), quote: z.string().max(800) }).optional(),
+      registration: z.object({ required: z.boolean(), quote: z.string().max(800) }).optional(),
+      logins: z
+        .array(z.object({ url: z.string().url(), quote: z.string().min(1).max(800) }))
+        .max(10)
+        .default([]),
+    })
+    .optional(),
   announcementDate: z.string().date().nullable().optional(),
   announcementNote: z.string().max(500).optional(),
   startsAt: z.string().datetime({ offset: true }).nullable().optional(),

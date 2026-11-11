@@ -1,5 +1,5 @@
 import { loadAttachment } from './attachments.js';
-import { assessBurden, switchableFailure } from './selection.js';
+import { assessBurden, switchableFailure, enforcePersonalResponsePolicy } from './selection.js';
 import { completionMessage } from './completion.js';
 import { randomUUID } from 'node:crypto';
 import type { Browser } from './browser.js';
@@ -358,6 +358,8 @@ export async function runAutonomous(
             );
             continue;
           }
+          if (inbox.some((q) => ['fact', 'preference', 'evaluation'].includes(q.category)))
+            enforcePersonalResponsePolicy(store, job);
           state.inbox = {
             id: randomUUID(),
             fingerprint: view.fingerprint,
@@ -499,7 +501,9 @@ export async function runAutonomous(
     }
   } catch (error) {
     if (
-      (error instanceof ServiceError && error.code === 'candidate_burden_exceeded') ||
+      (error instanceof ServiceError &&
+        (error.code === 'candidate_burden_exceeded' ||
+          (error.code === 'personal_response_policy_stop' && job.switchReason))) ||
       (!signal.aborted && switchableFailure(store, job, error))
     ) {
       job.status = 'stopped';

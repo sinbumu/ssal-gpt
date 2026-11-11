@@ -6,6 +6,7 @@ import type { Job, Store } from './store.js';
 import type { Runner } from './runner.js';
 import { outcomes, queueResultCheck } from './outcomes.js';
 import { settings } from './autonomy.js';
+import { selection } from './selection.js';
 
 export const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -96,6 +97,20 @@ export function meteredModel(store: Store, model: ModelClient, job: Job): ModelC
   return {
     async decide(...args) {
       args[4].throwIfAborted();
+      const policy = selection(store);
+      const scoped = job.kind === 'discover' || job.kind === 'apply';
+      if (scoped) {
+        const total = store.db
+          .prepare(
+            'SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens+output_tokens),0) AS tokens FROM usage WHERE job_id=?',
+          )
+          .get(job.id)!;
+        const callLimit = job.kind === 'discover' ? policy.discoveryCalls : policy.maxCalls;
+        const tokenLimit = job.kind === 'discover' ? policy.discoveryTokens : policy.entryTokens;
+        if (Number(total.calls) >= callLimit) throw new ServiceError('selection_call_limit');
+        if (tokenLimit !== null && Number(total.tokens) >= tokenLimit)
+          throw new ServiceError('selection_token_limit');
+      }
       const reason = budgetReason(store, args[0]);
       if (reason) throw new ServiceError(reason);
       const id = randomUUID(),

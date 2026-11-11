@@ -8,6 +8,7 @@ import { createAutonomy, settings } from './autonomy.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { observedQuote } from './evidence.js';
 import { assessBurden, selection } from './selection.js';
+import { saveConnection, requireConnection } from './connections.js';
 import { prepareCommentDraft, outdatedDraft, type DraftPreparation } from './task-draft.js';
 import {
   instagramTarget,
@@ -276,6 +277,17 @@ export async function runTasks(
       job.screenshot = o.screenshot;
       if (!o.instagram?.ready)
         throw new ServiceError(o.instagram?.reason || 'instagram_target_not_identified');
+      if (!job.autonomy?.synthetic)
+        saveConnection(
+          store,
+          browser.profileKey(),
+          {
+            service: 'instagram',
+            state: 'signed_in_visible',
+            message: '응모 사전 관찰에서 로그인 계정과 과제 대상을 확인했습니다.',
+          },
+          task.url,
+        );
       task.preview = {
         actor: o.instagram.actor!,
         subject: o.instagram.subject!,
@@ -818,6 +830,27 @@ export async function runTasks(
     }
     return false;
   } catch (error) {
+    if (
+      !job.autonomy?.synthetic &&
+      error instanceof ServiceError &&
+      [
+        'needs_login_manual',
+        'verification_required_manual',
+        'instagram_account_not_identified',
+      ].includes(error.code) &&
+      browser.page
+    ) {
+      requireConnection(
+        store,
+        browser.page.url(),
+        browser.profileKey(),
+        safeMessage(error),
+        job.id,
+        job.eventId,
+      );
+      const visible = await browser.connectionStatus().catch(() => undefined);
+      if (visible) saveConnection(store, browser.profileKey(), visible, browser.page.url());
+    }
     if (
       error instanceof ServiceError &&
       error.code === 'instagram_target_unavailable' &&

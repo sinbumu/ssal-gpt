@@ -828,3 +828,57 @@ label.check input {
   gap: 6px;
   margin-bottom: 16px;
 }
+
+.list-tools {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+}
+.list-controls {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0 28px;
+}
+.connection-card {
+  border: 1px solid var(--line, #ddd);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 10px 0;
+}
+.connection-card p {
+  margin: 8px 0;
+}
+.connection-inbox article {
+  padding: 12px 0;
+  border-bottom: 1px solid #ddd;
+}
+.candidate-reasons {
+  font-size: 13px;
+  padding: 12px;
+  background: #f5f7f4;
+  border-radius: 8px;
+  margin: 12px 0;
+}
+.candidate-reasons ul {
+  padding-left: 18px;
+  margin: 8px 0;
+}
+.notification-note {
+  margin: 14px 0;
+  padding: 12px;
+  background: #f4f7ff;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.priority-line {
+  font-weight: 650;
+  color: #256044;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 650px) {
+  .list-tools {
+    grid-template-columns: 1fr;
+  }
+}

@@ -136,6 +136,24 @@ function renderFormReview(snapshot, fallbackUrl) {
     .join('');
   return `${sections || '<p class="hint">저장된 입력 미리보기가 없습니다. 현재 브라우저 화면을 확인해 주세요.</p>'}<details class="review-raw"><summary>원본 데이터 보기 (JSON)</summary><pre>${esc(JSON.stringify(snapshot ?? [], null, 2))}</pre></details>`;
 }
+let eventLimit = 20,
+  completedLimit = 20;
+function notificationHtml(n) {
+  const labels = {
+    instagram_dm: 'Instagram DM · 응모한 계정',
+    direct_message: '개별 메시지 · 계정/서비스는 원문 확인',
+    email: '이메일 · 응모 시 등록한 주소',
+    sms: '문자 · 응모 시 등록한 번호',
+    phone: '전화',
+    post_comment: '원문 게시물 댓글',
+    story: '주최자 스토리',
+    site_notice: '홈페이지·공지사항',
+    other: '기타 안내',
+  };
+  if (!n || n.basis === 'unknown' || !n.channels?.length)
+    return `<p class="hint">연락 경로 미확인 · ${esc(n?.reason || '기존 기록에 연락 수단이 없습니다.')}</p>`;
+  return `<div class="notification-note"><strong>${n.basis === 'explicit' ? '원문에서 확인한 연락·발표 경로' : '예상 연락·발표 경로'}</strong><p>${n.channels.map((c) => esc(labels[c] || c)).join(' · ')}</p><details><summary>연락 안내 근거</summary><p>${esc(n.reason)}</p>${n.quote ? `<blockquote>${esc(n.quote)}</blockquote>` : ''}${n.sourceUrl ? safeLink(n.sourceUrl, '원문 확인') : ''}</details></div>`;
+}
 function renderCompleted() {
   const entries = state.completedEntries || [];
   const query = $('completed-search').value.trim().toLocaleLowerCase();
@@ -143,8 +161,13 @@ function renderCompleted() {
   const shown = entries.filter((e) =>
     `${e.title} ${e.organizer} ${e.prize}`.toLocaleLowerCase().includes(query),
   );
+  $('completed-list-count').textContent =
+    `검색 결과 ${shown.length}건 중 ${Math.min(shown.length, completedLimit)}건 표시`;
+  $('completed-more').hidden = shown.length <= completedLimit;
+  $('completed-collapse').hidden = completedLimit <= 20;
   $('completed-entries').innerHTML = shown.length
     ? shown
+        .slice(0, completedLimit)
         .map(
           (e) => `<article class="event-card completed-card">
     <div class="card-top"><span class="pill">응모 완료</span><small>${esc(e.organizer)}</small></div>
@@ -152,7 +175,7 @@ function renderCompleted() {
     <dl><dt>접수 확인</dt><dd>${esc(new Date(e.completedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}</dd>
     <dt>당첨 발표</dt><dd>${esc(e.announcementDate || e.announcementNote || '일정 미확인')}</dd>
     <dt>당첨 결과</dt><dd>${esc(outcomeLabel(e.eventId))}</dd></dl>
-    <details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
+    ${notificationHtml(e.winnerNotice)}<details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
     <p class="hint">${e.verification === 'user_reported' ? '사용자 완료 보고 · 앱 접수 검증 없음' : e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
     ${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
@@ -160,6 +183,57 @@ function renderCompleted() {
         .join('')
     : `<div class="empty">${query ? '검색 결과가 없습니다.' : '완료한 응모가 여기에 모입니다.'}</div>`;
 }
+function renderEvents() {
+  if (!state) return;
+  const filter = $('event-filter').value,
+    query = $('event-search').value.trim().toLocaleLowerCase();
+  const rows = state.events
+    .filter((e) => `${e.title} ${e.organizer} ${e.prize}`.toLocaleLowerCase().includes(query))
+    .filter(
+      (e) =>
+        filter === 'all' ||
+        (filter === 'unfinished'
+          ? e.submissionState !== 'completed'
+          : filter === 'completed'
+            ? e.submissionState === 'completed'
+            : filter === 'eligible'
+              ? !e.submissionState &&
+                e.assessment?.state === 'eligible' &&
+                !e.preparationReasons?.length
+              : !e.submissionState &&
+                (e.assessment?.state !== 'eligible' || !!e.preparationReasons?.length)),
+    );
+  rows.sort(
+    $('event-sort').value === 'score'
+      ? (a, b) => (b.assessment?.score ?? b.score) - (a.assessment?.score ?? a.score)
+      : (a, b) => b.foundAt.localeCompare(a.foundAt),
+  );
+  $('event-list-count').textContent =
+    `전체 ${state.events.length}건 · 필터 결과 ${rows.length}건 중 ${Math.min(rows.length, eventLimit)}건 표시`;
+  $('events-more').hidden = rows.length <= eventLimit;
+  $('events-collapse').hidden = eventLimit <= 20;
+  $('events').innerHTML = rows.length
+    ? rows
+        .slice(0, eventLimit)
+        .map((e) => {
+          const ended = e.deadlineState === 'ended';
+          const blocked =
+            (e.assessment && e.assessment.state !== 'eligible') ||
+            e.deadlineState !== 'available' ||
+            e.blockers.length ||
+            e.preparationReasons?.length ||
+            e.submissionState;
+          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '진행한 응모' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p><dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${[...new Set([...(e.assessment?.reasons || []), ...(e.preparationReasons || [])])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '이미 시작한 응모' : '응모 준비'}</button></div></article>`;
+        })
+        .join('')
+    : '<div class="empty">현재 필터에 맞는 기회가 없습니다.</div>';
+  $('source-exclusions').innerHTML =
+    (state.sourceExclusions || [])
+      .slice(0, 20)
+      .map((r) => `<p>${safeLink(r.url, '제외한 출처')} · ${esc(r.reason)}</p>`)
+      .join('') || '<p class="hint">저장된 출처 제외 기록이 없습니다.</p>';
+}
+
 function renderConsents(rows = []) {
   if (!rows.length) return '';
   const names = {
@@ -294,20 +368,7 @@ function render() {
   if (contentKey === rendered) return;
   rendered = contentKey;
   renderCompleted();
-  $('events').innerHTML = state.events.length
-    ? [...state.events]
-        .sort((a, b) => b.score - a.score)
-        .map((e) => {
-          const ended = e.deadlineState === 'ended';
-          const blocked =
-            (e.assessment && e.assessment.state !== 'eligible') ||
-            e.deadlineState !== 'available' ||
-            e.blockers.length ||
-            e.submissionState;
-          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '진행한 응모' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p><dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><p class="hint">${(e.assessment?.reasons || []).map(esc).join(' · ')}</p><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? '이미 시작한 응모' : '응모 준비'}</button></div></article>`;
-        })
-        .join('')
-    : '<div class="empty">아직 모아둔 기회가 없어요.<br><small>AI를 연결한 뒤 첫 탐색을 시작해 보세요.</small></div>';
+  renderEvents();
   if (
     state.jobs.some(
       (j) =>
@@ -679,7 +740,31 @@ document.addEventListener('submit', (event) => {
   if (event.target.matches('[data-event-review],[data-job-context]')) void handleContextForm(event);
 });
 
-$('completed-search').addEventListener('input', renderCompleted);
+$('completed-search').addEventListener('input', () => {
+  completedLimit = 20;
+  renderCompleted();
+});
+for (const id of ['event-filter', 'event-sort', 'event-search'])
+  $(id).addEventListener(id === 'event-search' ? 'input' : 'change', () => {
+    eventLimit = 20;
+    renderEvents();
+  });
+$('events-more').onclick = () => {
+  eventLimit += 20;
+  renderEvents();
+};
+$('events-collapse').onclick = () => {
+  eventLimit = 20;
+  renderEvents();
+};
+$('completed-more').onclick = () => {
+  completedLimit += 20;
+  renderCompleted();
+};
+$('completed-collapse').onclick = () => {
+  completedLimit = 20;
+  renderCompleted();
+};
 
 let operationsLoaded = false;
 function renderOperations() {
@@ -904,7 +989,68 @@ $('journey-demo').onclick = guard(async () => {
 });
 
 let selectionLoaded = false;
+function fillSelection(p) {
+  const f = $('selection-policy-form').elements;
+  for (const k of [
+    'mode',
+    'prizeMode',
+    'personalResponses',
+    'newConnections',
+    'registrations',
+    'discoveryCalls',
+    'discoveryTokens',
+    'entryTokens',
+    'maxMinutes',
+    'maxQuestions',
+    'maxCalls',
+    'maxSwitches',
+  ])
+    if (k in p) f[k].value = p[k] ?? '';
+  if (p.allowedTasks)
+    for (const el of $('selection-policy-form').querySelectorAll('[name=allowedTasks]'))
+      el.checked = p.allowedTasks.includes(el.value);
+  if (p.excludedTypes)
+    for (const o of f.excludedTypes.options) o.selected = p.excludedTypes.includes(o.value);
+  if ('switchOnBurden' in p) f.switchOnBurden.checked = p.switchOnBurden;
+}
+$('selection-policy-form').elements.mode.onchange = () =>
+  fillSelection(state.selectionPresets[$('selection-policy-form').elements.mode.value]);
+function renderConnections() {
+  const labels = {
+    unknown: '미확인',
+    signed_in_visible: '로그인 확인',
+    login_required: '로그인 필요',
+    blocked: '브라우저 로그인 거부',
+    closed: '브라우저 닫힘',
+    not_required: '로그인 불필요',
+  };
+  const rows = state.connections || [];
+  $('site-connections').innerHTML = rows
+    .map(
+      (c) =>
+        `<article class="connection-card"><div class="card-top"><strong>${esc(c.name)}</strong><span class="pill">${esc(c.stale ? '재확인 필요' : labels[c.state] || '미확인')}</span></div><p class="hint">${esc(c.note)}</p><p>마지막 확인: ${c.checkedAt ? esc(new Date(c.checkedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : '아직 확인하지 않음'}</p>${c.message ? `<p class="hint">${esc(c.message)}</p>` : ''}<div class="inline">${c.state !== 'not_required' ? `<button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>열기 · 직접 로그인</button><button data-check-site="${esc(c.id)}" ${state.busy || state.browser?.engine === 'connected' ? 'disabled' : ''}>상태 확인</button>` : ''}</div></article>`,
+    )
+    .join('');
+  const needed = rows.filter((c) => c.requiredBy.length);
+  $('connection-attention').innerHTML = needed.length
+    ? `<section class="panel connection-inbox"><h3>필요한 연결 · ${needed.length}개 사이트</h3><p>후보별 연결 요구를 모았습니다. 로그인은 직접 진행하고 상태를 재확인하세요. 확인 후 새 후보는 수집한 기회에서 응모 준비를, 진행 중 작업은 현재 화면에서 재개를 선택하세요.</p>${needed
+        .map(
+          (c) =>
+            `<article><strong>${esc(c.name)}</strong><ul>${c.requiredBy
+              .slice(0, 10)
+              .map((n) => `<li>${esc(n.title)} · ${esc(n.reason)}</li>`)
+              .join(
+                '',
+              )}</ul><button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>${esc(c.name)} 열기 · 로그인</button></article>`,
+        )
+        .join(
+          '',
+        )}<button id="needed-connections-check" ${state.busy || state.browser?.engine === 'connected' ? 'disabled' : ''}>필요한 연결 상태 함께 재확인</button></section>`
+    : '';
+  $('connections-check').disabled = state.busy || state.browser?.engine === 'connected';
+}
 function renderSelection() {
+  renderConnections();
   if (state.instagramBrowser && renderedInstagramRevision !== state.instagramBrowser.revision) {
     $('instagram-browser-enabled').checked = state.instagramBrowser.enabled;
     renderedInstagramRevision = state.instagramBrowser.revision;
@@ -918,6 +1064,7 @@ function renderSelection() {
   if (!selectionLoaded && state.selectionPolicy) {
     const f = $('selection-policy-form'),
       p = state.selectionPolicy;
+    fillSelection(p);
     f.elements.facts.value = p.facts.map((v) => `${v.key}=${v.value}`).join('\n');
     f.elements.preferredPrizes.value = p.preferredPrizes.join(', ');
     for (const option of f.elements.excludedTypes.options)
@@ -1018,6 +1165,17 @@ $('selection-policy-form').onsubmit = guard(async () => {
     });
   await api('/api/selection-policy', {
     facts,
+    mode: f.mode.value,
+    prizeMode: f.prizeMode.value,
+    personalResponses: f.personalResponses.value,
+    newConnections: f.newConnections.value,
+    registrations: f.registrations.value,
+    allowedTasks: [
+      ...$('selection-policy-form').querySelectorAll('[name=allowedTasks]:checked'),
+    ].map((el) => el.value),
+    discoveryCalls: +f.discoveryCalls.value,
+    discoveryTokens: f.discoveryTokens.value ? +f.discoveryTokens.value : null,
+    entryTokens: f.entryTokens.value ? +f.entryTokens.value : null,
     preferredPrizes: f.preferredPrizes.value
       .split(',')
       .map((v) => v.trim())
@@ -1029,6 +1187,8 @@ $('selection-policy-form').onsubmit = guard(async () => {
     maxSwitches: +f.maxSwitches.value,
     switchOnBurden: f.switchOnBurden.checked,
   });
+  selectionLoaded = false;
+  await refresh();
   toast('기회 선택 기준을 저장했습니다.');
 });
 $('instagram-browser-form').onsubmit = guard(async () => {
@@ -1101,4 +1261,35 @@ document.addEventListener('click', (event) => {
       await api('/api/task-permission/revoke', { taskUrl: button.dataset.revokePermission });
       toast('이 경로의 자동 실행 허용 근거를 철회했습니다.');
     })(event);
+});
+
+$('connections-check').onclick = guard(async () => {
+  await api('/api/connections/check', {
+    ids: (state.connections || [])
+      .filter((c) => ['instagram', 'naver', 'google'].includes(c.id))
+      .map((c) => c.id),
+  });
+  await refresh();
+  toast('로그인 상태 확인 결과를 저장했습니다.');
+});
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-check-site],#needed-connections-check');
+  if (!button) return;
+  void guard(async () => {
+    button.disabled = true;
+    try {
+      await api('/api/connections/check', {
+        ids: button.dataset.checkSite
+          ? [button.dataset.checkSite]
+          : state.connections
+              .filter((c) => c.requiredBy.length)
+              .slice(0, 10)
+              .map((c) => c.id),
+      });
+      await refresh();
+      toast('연결 상태를 다시 확인했습니다.');
+    } finally {
+      button.disabled = false;
+    }
+  })();
 });

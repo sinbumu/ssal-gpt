@@ -9,7 +9,7 @@ import { ServiceError, safeMessage } from './auth.js';
 import { researchQuestion } from './research.js';
 import { createHash } from 'node:crypto';
 import { beginReadTrace, readDecision } from './read-trace.js';
-import { selection } from './selection.js';
+import { selection, enforcePersonalResponsePolicy } from './selection.js';
 
 export const DRAFT_VERSION = 5;
 type QuizAttempt = {
@@ -251,6 +251,7 @@ export async function prepareCommentDraft(
           return true;
         }
         if (step.action === 'needs_user') {
+          enforcePersonalResponsePolicy(store, job);
           preparation.failureKind = 'personal_fact';
           trace.finish('accepted', 'model_needs_user');
           return unavailable(step.reason);

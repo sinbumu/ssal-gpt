@@ -133,6 +133,7 @@ export class Browser {
   private readOnlyMode = false;
   private readOnlyBlocks = 0;
   private external?: ConnectedBrowser;
+  private connectionKey = randomUUID();
   private pendingExternal?: ConnectedBrowser;
   private externalTabs = new Map<string, Page>();
   private externalRoute?: (route: Route) => Promise<void>;
@@ -205,9 +206,13 @@ export class Browser {
       else this.readOnlyPages.delete(this.page);
     }
   }
+  profileKey() {
+    return this.engine === 'connected' ? `connected:${this.connectionKey}` : this.engine;
+  }
   info() {
     return {
       engine: this.engine,
+      profileKey: this.profileKey(),
       open: !!this.context,
       manual: this.manual,
       profile:
@@ -258,6 +263,25 @@ export class Browser {
         signIn: controls.some((label) =>
           /^(?:(?:NAVER|네이버)\s*)?(로그인|sign in|log in)$/i.test(label),
         ),
+        instagramProfile: [...document.querySelectorAll<HTMLAnchorElement>('a[href]')].some((a) => {
+          const label =
+            (a.innerText || '') +
+            ' ' +
+            (a.getAttribute('aria-label') || '') +
+            ' ' +
+            (a.querySelector('img')?.alt || '');
+          return (
+            !!a.getClientRects().length &&
+            /profile|프로필/i.test(label) &&
+            /^\/[a-zA-Z0-9._]+\/?$/.test(a.getAttribute('href') || '') &&
+            !/accounts|explore|direct|reels/.test(a.getAttribute('href') || '')
+          );
+        }),
+        googleAccount: [...document.querySelectorAll<HTMLElement>('[aria-label]')].some(
+          (el) =>
+            !!el.getClientRects().length &&
+            /^(Google 계정|Google Account):/.test(el.getAttribute('aria-label') || ''),
+        ),
         password: [...document.querySelectorAll('input[type=password]')].some(
           (el) => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden',
         ),
@@ -270,12 +294,18 @@ export class Browser {
         message:
           '사이트가 이 브라우저의 로그인을 거부했습니다. 일반 브라우저의 직접 참여 경로를 이용할 수 있습니다.',
       };
-    if (signals.signOut)
+    if (
+      signals.signOut ||
+      (!signals.password &&
+        !signals.signIn &&
+        ((service === 'instagram' && signals.instagramProfile) ||
+          (service === 'google' && signals.googleAccount)))
+    )
       return {
         state: 'signed_in_visible',
         service,
         message:
-          '현재 화면에 로그아웃 버튼이 보여 로그인 상태로 판단합니다. 종료 후 다시 열어 재확인하세요.',
+          '현재 화면의 계정 전용 표시로 로그인 상태를 확인했습니다. 마지막 관측 결과이며 세션 만료 시 다시 확인합니다.',
       };
     if (signals.signIn || signals.password)
       return {
@@ -1074,6 +1104,7 @@ export class Browser {
     this.pendingExternal = undefined;
     this.externalTabs.clear();
     this.engine = 'connected';
+    this.connectionKey = randomUUID();
     this.context = selected.context();
     this.externalPage = selected;
     this.attach(selected);

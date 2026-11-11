@@ -49,6 +49,14 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  selection_changed_start_new_search:
+    '선정 설정이 바뀌었습니다. 이전 제외 사유를 적용하지 않도록 새 탐색을 시작해 주세요.',
+  personal_response_policy_stop:
+    '추가 개인 응답 제외 설정에 따라 멈췄습니다. 이미 승인·실행한 과제가 있으면 자동으로 다른 후보를 시작하지 않습니다.',
+  selection_call_limit: '선정 설정의 이 작업 AI 호출 상한에 도달했습니다. 운영 탭에서 확인하세요.',
+  selection_token_limit:
+    '선정 설정의 이 작업 보고 토큰 상한에 도달했습니다. 운영 탭에서 확인하세요.',
+  preferred_prizes_required: '선호 경품만 허용하려면 경품 키워드를 하나 이상 입력해 주세요.',
   inbox_not_available:
     '현재 이 확인함에 답변할 수 없습니다. 갱신된 작업 상태를 확인해 주세요. 중지·완료된 작업은 실행 기록에 보관됩니다.',
   instagram_preview_required:

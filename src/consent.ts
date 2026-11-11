@@ -209,19 +209,25 @@ export function decideConsent(
       .some((v) => identity(v) === identity(recipient))
   )
     return blocked('선택한 주최자나 명시적으로 허용한 수신자가 아닙니다.');
-  const durations = [...s.retention.matchAll(/(\d+)\s*(일|개월|개\s*월|월|년)/g)];
+  const durations = [...s.retention.matchAll(/(\d+)\s*(일|주(?:\s*일)?|개월|개\s*월|월|년)/g)];
   // Reject ambiguous retention and alternatives instead of taking the shortest duration.
   if (durations.length !== 1 || /또는|까지|별도|법령|연장|이상|약\s*\d/.test(s.retention))
     return ask('보관 기간의 상한을 명확히 확인할 수 없습니다.');
   if (
-    !/^(?:(?:당첨자?\s*(?:발표|선정)|이벤트\s*(?:종료|마감)|경품\s*(?:발송|제공)|동의\s*(?:시점|일)|수집일|응모일|참여일)\s*(?:후|부터)\s*)?\d+\s*(?:일|개월|개\s*월|월|년)\s*(?:간\s*)?(?:(?:보관|보유)\s*)?(?:후\s*(?:파기|폐기|삭제))?$/.test(
+    !/^(?:(?:당첨자?\s*(?:발표|선정)|이벤트\s*(?:종료|마감)|경품\s*(?:발송|제공)|동의\s*(?:시점|일)|수집일|응모일|참여일)\s*(?:후|부터)\s*)?\d+\s*(?:일|주(?:\s*일)?|개월|개\s*월|월|년)\s*(?:간\s*)?(?:(?:보관|보유)\s*)?(?:후\s*(?:파기|폐기|삭제))?$/.test(
       s.retention,
     )
   )
     return ask('보관 안내에 추가 조건이 있어 직접 확인이 필요합니다.');
   const retentionDays =
     Number(durations[0]![1]) *
-    (durations[0]![2] === '일' ? 1 : durations[0]![2] === '년' ? 366 : 31);
+    (durations[0]![2] === '일'
+      ? 1
+      : durations[0]![2]!.startsWith('주')
+        ? 7
+        : durations[0]![2] === '년'
+          ? 366
+          : 31);
   if (retentionDays > policy.maxRetentionDays)
     return blocked(`보관 기간이 허용한 ${policy.maxRetentionDays}일을 초과합니다.`);
   if (policy.mode === 'adaptive') {

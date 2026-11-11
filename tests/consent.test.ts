@@ -201,3 +201,41 @@ test('an absent HTML required attribute never makes a consent optional', () => {
   assert.equal(decideConsent(q, s).decision, 'ask');
   assert.equal(decideConsent({ ...q, label: '선택 마케팅 동의' }, s).decision, 'decline');
 });
+
+test('explicit week retention respects day limits and preserves manual, adaptive and ambiguity checks', () => {
+  const s = setup('routine');
+  for (const period of ['1주일', '1주', '1 주일', '1 주 일']) {
+    const q = consentQ(
+      notice('전화번호', '이벤트 진행 및 당첨자 안내', `당첨자 발표 후 ${period} 보관`),
+    );
+    assert.equal(decideConsent(q, s).decision, 'accept');
+    assert.equal(decideConsent(q, s).retentionDays, 7);
+    assert.equal(decideConsent(q, setup('manual')).decision, 'ask');
+    const adaptive = setup('adaptive');
+    assert.equal(decideConsent(q, adaptive).decision, 'ask');
+    assert.equal(
+      decideConsent(q, adaptive, {
+        risk: 'low',
+        noticeQuote: q.description!,
+        reason: '명시된 일주일 조건',
+      }).decision,
+      'accept',
+    );
+    s.policy.consent.maxRetentionDays = 6;
+    assert.equal(decideConsent(q, s).decision, 'ask');
+    s.policy.consent.maxRetentionDays = 31;
+  }
+  assert.equal(
+    decideConsent(consentQ(notice('전화번호', undefined, '4주 보관')), s).retentionDays,
+    28,
+  );
+  for (const period of [
+    '5주 보관',
+    '1주일 이상',
+    '약 1주일',
+    '1주일 또는 1년',
+    '1주일, 추후 연장',
+    '다음 주까지',
+  ])
+    assert.equal(decideConsent(consentQ(notice('전화번호', undefined, period)), s).decision, 'ask');
+});

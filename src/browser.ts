@@ -187,7 +187,8 @@ export class Browser {
     }
     this.jobPages.set(id, this.page!);
     this.invalidate();
-    await this.page!.bringToFront();
+    // Automatic job switches must not request foreground focus. Explicit
+    // dashboard open/connect actions may bring the selected page forward.
   }
   releaseCompletedJob(id: string) {
     this.jobPages.delete(id);
@@ -354,7 +355,6 @@ export class Browser {
       this.readOnlyMode = previousReadOnly;
       this.attach(original);
       this.ownerJobId = owner;
-      await original.bringToFront().catch(() => {});
     }
   }
   async evidenceImage(name: string) {

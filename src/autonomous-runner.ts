@@ -17,7 +17,7 @@ import {
   type InboxItem,
 } from './autonomy.js';
 import { advanceForm, applyAnswers, formValuesHash, inspectForm } from './forms.js';
-import { captureReceipt, verifyReceipt } from './receipt.js';
+import { captureReceipt, verifyReceipt, watchSubmissionDialogs } from './receipt.js';
 import { researchQuestion } from './research.js';
 import { moaPageMarker, verifyFormContinuation } from './form-progress.js';
 import { pageProgress } from './page-progress.js';
@@ -41,6 +41,7 @@ export async function runAutonomous(
   const state = job.autonomy!;
   const started = Date.now();
   let formLoadWaits = 0;
+  let submissionDialogs: ReturnType<typeof watchSubmissionDialogs> | undefined;
   const assertScope = () => {
     if (
       !state.policy.enabled ||
@@ -81,6 +82,8 @@ export async function runAutonomous(
     browser.ownerJobId = job.id;
     while (job.steps < job.maxSteps) {
       signal.throwIfAborted();
+      // A scoped acknowledgement can arrive just before the site redirects.
+      if (job.uncertain && (await verifyReceipt(store, browser, model, job, signal, false))) return;
       assertScope();
       if (Date.now() - started > 15 * 60_000) throw new ServiceError('session_time_limit');
       try {
@@ -459,7 +462,12 @@ export async function runAutonomous(
         };
         store.saveJob(job);
         if (job.eventId) store.markSubmission(job.eventId, 'unknown');
+        if (!intermediate) {
+          submissionDialogs?.close();
+          submissionDialogs = watchSubmissionDialogs(store, browser, job, button.action);
+        }
         await advanceForm(browser.page!, view, button.id, signal);
+        await submissionDialogs?.settle(signal);
         delete state.plan;
         delete state.finalApproval;
         job.history.push({
@@ -547,6 +555,7 @@ export async function runAutonomous(
     job.note = safeMessage(error);
     store.note(job.id, job.note);
   } finally {
+    submissionDialogs?.close();
     job.activeMs = (job.activeMs || 0) + Date.now() - started;
     store.saveJob(job);
   }

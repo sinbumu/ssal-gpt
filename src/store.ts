@@ -87,6 +87,14 @@ export type Job = {
   searchEngine?: 'google' | 'naver';
   discovery?: DiscoveryState;
   receiptObservations?: (SourceEvidence & { intentHash: string })[];
+  receiptDialogs?: {
+    text: string;
+    url: string;
+    responseUrl: string;
+    responseAt: number;
+    observedAt: number;
+    intentHash: string;
+  }[];
   userContext?: string;
   memory?: string;
   observedUrls?: string[];
@@ -128,6 +136,7 @@ export function unattemptedEntry(job: Job | undefined) {
     !job.taskFormStarted &&
     !job.continuations?.length &&
     !job.receiptObservations?.length &&
+    !job.receiptDialogs?.length &&
     !(job.autonomy?.consents || []).some((c) => c.appliedAt) &&
     !(job.tasks || []).some(
       (t) => t.attempt || t.proof || ['attempted', 'verified', 'manual_reported'].includes(t.state),
@@ -443,6 +452,7 @@ export class Store {
         };
         delete job.intent;
         delete job.receiptObservations;
+        delete job.receiptDialogs;
       }
       const remaining = job.tasks?.some((t) => !['verified', 'manual_reported'].includes(t.state));
       if (remaining) {

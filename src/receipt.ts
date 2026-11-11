@@ -4,6 +4,98 @@ import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
 import type { ModelClient } from './model.js';
 import { collectEvidence, type SourceEvidence } from './evidence.js';
+import type { Dialog, Response } from 'playwright';
+import { maskPrivateText } from './private-text.js';
+
+// Record a native alert only after the exact approved form destination returned
+// a successful POST response. Reading a dialog never accepts a confirm/prompt.
+export function watchSubmissionDialogs(
+  store: Store,
+  browser: Browser,
+  job: Job,
+  destination: string,
+) {
+  const page = browser.page!;
+  const intentHash = hash(job.intent);
+  const origin = new URL(job.intent!.url).origin;
+  let responseAt = 0;
+  let dialogSeen = false;
+  let wake: (() => void) | undefined;
+  const response = (r: Response) => {
+    if (
+      browser.ownerJobId === job.id &&
+      job.uncertain &&
+      hash(job.intent) === intentHash &&
+      r.request().method() === 'POST' &&
+      r.request().isNavigationRequest() &&
+      r.url() === destination &&
+      new URL(r.url()).origin === origin &&
+      r.status() >= 200 &&
+      r.status() < 300
+    )
+      responseAt = Date.now();
+  };
+  const dialog = (d: Dialog) => {
+    if (
+      d.type() !== 'alert' ||
+      d.page() !== page ||
+      browser.ownerJobId !== job.id ||
+      !job.uncertain ||
+      job.intent?.kind !== 'submission' ||
+      hash(job.intent) !== intentHash ||
+      !responseAt ||
+      new URL(page.url()).origin !== origin ||
+      page.frames().some((f) => {
+        const url = f.url();
+        return !['about:blank', 'about:srcdoc', ''].includes(url) && new URL(url).origin !== origin;
+      })
+    )
+      return;
+    const secrets = [
+      ...Object.values(job.autonomy?.profile || {}),
+      ...(job.autonomy?.privateAnswers || []),
+    ];
+    job.receiptDialogs = [
+      ...(job.receiptDialogs || []),
+      {
+        text: maskPrivateText(d.message(), secrets).slice(0, 3000),
+        url: job.intent.url,
+        responseUrl: destination,
+        responseAt,
+        observedAt: Date.now(),
+        intentHash,
+      },
+    ].slice(-3);
+    store.saveJob(job);
+    dialogSeen = true;
+    wake?.();
+  };
+  page.on('response', response);
+  page.on('dialog', dialog);
+  return {
+    async settle(signal: AbortSignal) {
+      signal.throwIfAborted();
+      if (dialogSeen) return;
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', finish);
+          wake = undefined;
+          resolve();
+        };
+        const timer = setTimeout(finish, 2500);
+        wake = finish;
+        signal.addEventListener('abort', finish, { once: true });
+      });
+      signal.throwIfAborted();
+    },
+    close() {
+      page.off('response', response);
+      page.off('dialog', dialog);
+      wake?.();
+    },
+  };
+}
 
 export function captureReceipt(job: Job, o: Observation) {
   if (!job.uncertain || job.intent?.kind !== 'submission') return;
@@ -45,6 +137,33 @@ export async function verifyReceipt(
   signal: AbortSignal,
   semantic = false,
 ) {
+  // A later validation/error alert supersedes an earlier positive alert.
+  for (const evidence of (job.receiptDialogs || [])
+    .filter((e) => e.intentHash === hash(job.intent))
+    .slice(-1)) {
+    if (
+      !job.uncertain ||
+      job.intent?.kind !== 'submission' ||
+      !job.intent.at ||
+      evidence.intentHash !== hash(job.intent) ||
+      evidence.responseAt < job.intent.at ||
+      evidence.observedAt < evidence.responseAt ||
+      new URL(evidence.url).origin !== new URL(job.intent.url).origin ||
+      new URL(evidence.responseUrl).origin !== new URL(job.intent.url).origin ||
+      !completionMessage(evidence.text, evidence.text) ||
+      /이미\s*(?:참여|응모)|예시|오류|실패|않|not\b|failed|example|already/i.test(evidence.text) ||
+      job.intent.beforeText.includes(evidence.text)
+    )
+      continue;
+    if ((job.kind === 'demo' || job.autonomy?.synthetic) && !store.receipt(job.id)) return false;
+    store.complete(job, {
+      quote: evidence.text,
+      url: evidence.url,
+      observedAt: evidence.observedAt,
+      verification: 'autonomous_native_alert',
+    });
+    return true;
+  }
   for (const evidence of [...(job.receiptObservations || [])].reverse()) {
     if (!freshReceipt(job, evidence, evidence.text)) continue;
     let quote = evidence.text

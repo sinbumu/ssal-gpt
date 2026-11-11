@@ -79,6 +79,10 @@ test('completion cannot be fabricated by quoting only the positive fragment of a
   assert.equal(completionMessage('제출 완료', '제출 완료되지 않았습니다.'), false);
   assert.equal(completionMessage('접수번호', '접수번호 오류가 발생했습니다.'), false);
   assert.equal(completionMessage('submission complete', 'submission complete: failed'), false);
+  assert.equal(completionMessage('응모되었습니다.', '응모되었습니다.'), true);
+  assert.equal(completionMessage('등록이 되었습니다.', '등록이 되었습니다.'), true);
+  assert.equal(completionMessage('접수되지 않았습니다.', '접수되지 않았습니다.'), false);
+  assert.equal(completionMessage('응모 완료', '동의하면 응모 완료'), false);
   assert.equal(
     completionMessage('설문이 완료되었습니다.', '설문이 완료되었습니다.\n감사합니다.'),
     true,

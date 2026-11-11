@@ -49,6 +49,8 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  form_origin_outside_grant:
+    '위임한 사이트와 다른 출처로 이동해 멈췄습니다. 제출 후라면 완료 증거 없이 재제출하지 않습니다.',
   selection_changed_start_new_search:
     '선정 설정이 바뀌었습니다. 이전 제외 사유를 적용하지 않도록 새 탐색을 시작해 주세요.',
   personal_response_policy_stop:

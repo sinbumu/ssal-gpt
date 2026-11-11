@@ -179,7 +179,7 @@ function renderCompleted() {
     <dt>당첨 발표</dt><dd>${esc(e.announcementDate || e.announcementNote || '일정 미확인')}</dd>
     <dt>당첨 결과</dt><dd>${esc(outcomeLabel(e.eventId))}</dd></dl>
     ${notificationHtml(e.winnerNotice)}<details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
-    <p class="hint">${e.verification === 'user_reported' ? '사용자 완료 보고 · 앱 접수 검증 없음' : e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
+    <p class="hint">${e.verification === 'user_reported' ? '사용자 완료 보고 · 앱 접수 검증 없음' : e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_native_alert' ? '제출 응답과 연결된 접수 완료 알림 확인' : e.verification === 'autonomous_semantic_receipt' ? '앱이 완료 화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
     ${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
         )

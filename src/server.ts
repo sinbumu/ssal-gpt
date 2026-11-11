@@ -18,6 +18,7 @@ import {
   saveAnswer,
   syntheticSettings,
   validateAnswer,
+  verificationQuestion,
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
 import {
@@ -842,6 +843,7 @@ export async function createApp(options: {
           state?.inbox?.items.filter(
             (q) =>
               q.category === 'knowledge' &&
+              !verificationQuestion(q) &&
               !/이름|연락처|이메일|동의|약관|경험|회원|직업|생년/.test(q.label),
           ) || [];
         if (
@@ -901,7 +903,12 @@ export async function createApp(options: {
               state.overrides[q.kind === 'file' ? q.id : q.signature] = answer!;
               if (q.kind === 'text')
                 state.privateAnswers = [...new Set([...(state.privateAnswers || []), ...answer!])];
-              if (data.remember === true && !state.synthetic && q.kind !== 'file')
+              if (
+                data.remember === true &&
+                !state.synthetic &&
+                q.kind !== 'file' &&
+                !verificationQuestion(q)
+              )
                 saveAnswer(store, {
                   signature: q.signature,
                   question: q.label,

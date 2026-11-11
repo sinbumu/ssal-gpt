@@ -46,6 +46,7 @@ export async function inspectForm(page: Page) {
             .trim() ||
           [...(el.labels || [])].map((l) => l.textContent?.trim()).join(' ') ||
           el.getAttribute('placeholder') ||
+          el.getAttribute('title') ||
           el.name
         );
       },
@@ -62,6 +63,22 @@ export async function inspectForm(page: Page) {
       custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'rank' | 'picker';
     }[] = [];
     const forms = [...document.forms];
+    // Some native forms place their sole consent immediately before the form.
+    // Only bind this explicit adjacent pair, never arbitrary outside controls.
+    const precedingConsent = forms.length === 1 ? forms[0]!.previousElementSibling : null;
+    const standalone = precedingConsent?.querySelector<HTMLInputElement>('input[type=checkbox]');
+    const notice = precedingConsent?.previousElementSibling;
+    const linkedConsent =
+      standalone &&
+      !standalone.form &&
+      helpers.visible(standalone) &&
+      precedingConsent!.querySelectorAll('input,textarea,select,button').length === 1 &&
+      /동의|consent|agree/i.test(helpers.label(standalone)) &&
+      notice instanceof HTMLElement &&
+      helpers.visible(notice) &&
+      /개인정보|personal information/i.test(notice.innerText)
+        ? { element: standalone, text: notice.innerText.slice(0, 3000), form: 0 }
+        : undefined;
     const lists = [...document.querySelectorAll('[role=listbox],[role=list],ol,ul')];
     for (let index = 0; index < lists.length; index++) {
       const list = lists[index]!;
@@ -131,7 +148,7 @@ export async function inspectForm(page: Page) {
       if (
         seen.has(index) ||
         el.disabled ||
-        ['hidden', 'submit', 'button', 'reset', 'password'].includes(el.type)
+        ['hidden', 'submit', 'image', 'button', 'reset', 'password'].includes(el.type)
       )
         continue;
       if (!helpers.visible(el) && ![...(el.labels || [])].some(helpers.visible)) continue;
@@ -169,6 +186,11 @@ export async function inspectForm(page: Page) {
         ?.querySelector('legend,h1,h2,h3,h4,[role=heading],.js-question-content')
         ?.textContent?.trim();
       const questionLabel = (
+        (kind === 'text' &&
+        fieldset?.matches('fieldset') &&
+        fieldset.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1
+          ? helpers.label(el)
+          : '') ||
         heading ||
         (group.length > 1 ? fieldset?.getAttribute('aria-label') : '') ||
         helpers.label(el) ||
@@ -186,6 +208,13 @@ export async function inspectForm(page: Page) {
         label: questionLabel,
         description: [
           describedBy,
+          el.getAttribute('title') || '',
+          linkedConsent?.element === el ? linkedConsent.text : '',
+          linkedConsent &&
+          el.form === forms[linkedConsent.form] &&
+          /주소|배송|우편번호|address|postal/i.test(questionLabel)
+            ? linkedConsent.text.match(/경품\s*(?:배송|발송)/)?.[0] || ''
+            : '',
           el.type === 'file'
             ? `허용 파일: ${el.getAttribute('accept') || '형식 안내 없음'}; ${(el as HTMLInputElement).multiple ? '복수 파일 입력' : '단일 파일 입력'}`
             : '',
@@ -196,7 +225,12 @@ export async function inspectForm(page: Page) {
               ]
                 .filter(Boolean)
                 .join('\n')
-            : fieldset instanceof HTMLElement
+            : fieldset instanceof HTMLElement &&
+                !(
+                  kind === 'text' &&
+                  fieldset.matches('fieldset') &&
+                  fieldset.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1
+                )
               ? fieldset.innerText
               : '',
         ]
@@ -212,7 +246,7 @@ export async function inspectForm(page: Page) {
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
         options,
         indices,
-        form: forms.indexOf(el.form!),
+        form: linkedConsent?.element === el ? linkedConsent.form : forms.indexOf(el.form!),
       });
     }
     // ARIA choice groups, including grids, bind by visible labels and checked state.
@@ -341,13 +375,13 @@ export async function inspectForm(page: Page) {
     }
     const buttons = [
       ...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
-        'button,input[type=submit],[role=button]',
+        'button,input[type=submit],input[type=image],[role=button]',
       ),
     ]
       .map((b, index) => ({
         index,
-        label: (b.textContent || b.value || '').trim(),
-        action: b.formAction || b.form?.action || location.href,
+        label: (b.textContent || b.value || b.getAttribute('alt') || '').trim(),
+        action: b.hasAttribute('formaction') ? b.formAction : b.form?.action || location.href,
         form: forms.indexOf(b.form!),
         visible: helpers.visible(b),
         disabled: b.disabled,
@@ -357,7 +391,8 @@ export async function inspectForm(page: Page) {
         (b) =>
           b.visible &&
           !b.disabled &&
-          (b.type === 'submit' || /^(다음|next|continue|제출|응모하기|submit)$/i.test(b.label)),
+          (['submit', 'image'].includes(b.type) ||
+            /^(다음|next|continue|제출|응모하기|submit)$/i.test(b.label)),
       );
     return { groups, buttons, forms: forms.map((f) => ({ action: f.action, method: f.method })) };
   });
@@ -732,7 +767,7 @@ export async function advanceForm(
   const button = expected.buttons.find((b) => b.id === buttonId);
   if (!button) throw new ServiceError('unobserved_form_button');
   const locator = page
-    .locator('button,input[type=submit],[role=button]')
+    .locator('button,input[type=submit],input[type=image],[role=button]')
     .nth(Number(buttonId.slice(1)));
   const valid = await locator.evaluate(
     (el) => !(el as HTMLButtonElement).form || (el as HTMLButtonElement).form!.checkValidity(),

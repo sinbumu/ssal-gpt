@@ -32,6 +32,34 @@ const plan: AnswerPlan = {
   answer: ['예'],
   reason: 'test',
 };
+test('verification codes require an explicit current-job answer, ignoring plans and memories', () => {
+  const field = q('인증문자', 'text');
+  const state = createAutonomy(syntheticSettings, 'https://example.invalid');
+  const proposed = {
+    ...plan,
+    category: 'knowledge' as const,
+    answer: ['model-code'],
+    evidenceQuote: 'visible code',
+  };
+  state.reused = { [field.signature]: ['old-code'] };
+  const saved = [
+    {
+      id: 'old',
+      signature: field.signature,
+      origin: state.origin,
+      question: field.label,
+      kind: 'text',
+      category: 'knowledge',
+      answer: ['saved-code'],
+      at: '',
+    },
+  ] as SavedAnswer[];
+  assert.equal(resolveAnswer(field, proposed, state, saved, 'visible code').answer, undefined);
+  state.overrides[field.signature] = ['human-code'];
+  assert.deepEqual(resolveAnswer(field, proposed, state, saved, 'visible code').answer, [
+    'human-code',
+  ]);
+});
 test('completion cannot be fabricated by quoting only the positive fragment of a failure', () => {
   assert.equal(
     completionMessage(

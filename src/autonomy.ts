@@ -233,7 +233,8 @@ function shippingField(q: Question, questions: Question[]) {
   if (/(?:상세주소|동[·/\s]?호수).*(?:포함|까지)|전체주소/.test(label)) return 'full';
   const otherDetail = questions.some(
     (other) =>
-      other.id !== q.id && /상세\s*주소|동[·/\s]?호수|address\s*line\s*2/i.test(other.label),
+      other.id !== q.id &&
+      /(?:상세|나머지)\s*주소|동[·/\s]?호수|address\s*line\s*2/i.test(other.label),
   );
   const otherBase = questions.some(
     (other) =>
@@ -242,7 +243,7 @@ function shippingField(q: Question, questions: Question[]) {
   if (otherBase && /상세주소|동[·/\s]?호수/i.test(label)) return 'shippingAddressDetail';
   if (/배송|수령|받[을으].*주소|shipping|delivery/i.test(label))
     return otherDetail ? 'shippingAddress' : 'full';
-  if (/상세주소|동[·/\s]?호수|addressline2|apartment|suite/i.test(label))
+  if (/상세주소|나머지주소|동[·/\s]?호수|addressline2|apartment|suite/i.test(label))
     return 'shippingAddressDetail';
   if (/기본주소|도로명주소|지번주소|addressline1/i.test(label)) return 'shippingAddress';
   if (/배송|경품.*(?:발송|수령)|shipping|delivery/i.test(q.description || ''))
@@ -251,6 +252,11 @@ function shippingField(q: Question, questions: Question[]) {
 }
 export function consentQuestion(q: Question) {
   return /동의|약관|마케팅|consent|agree|marketing/i.test(q.label);
+}
+export function verificationQuestion(q: Question) {
+  return /인증\s*문자|보안\s*문자|자동\s*(?:기입|입력)\s*방지|captcha|verification code/i.test(
+    `${q.label}\n${q.description || ''}`,
+  );
 }
 export function validateAnswer(q: Question, answer: string[]): string[] | undefined {
   if (q.kind === 'file')
@@ -292,6 +298,11 @@ export function resolveAnswer(
     if (consent) recordConsent(state, q, consent, 'user');
     return { answer, source: 'user', consent };
   }
+  if (verificationQuestion(q))
+    return {
+      source:
+        '인증문자는 현재 브라우저에서 본인이 확인해 입력해야 합니다. 자동 추론하거나 재사용하지 않습니다.',
+    };
   // Consent has its own grant; recommendations and saved answers cannot grant it.
   if (isConsent) {
     const consent = decideConsent(q, state, plan?.consentAssessment);
@@ -328,7 +339,16 @@ export function resolveAnswer(
     if (key === 'phone' && q.kind === 'text') {
       const digits = value.replace(/[\s-]/g, '');
       if (/^01\d\d{7,8}$/.test(digits)) {
-        if (
+        const part = hint.match(
+          /(?:첫\s*번째|첫째|두\s*번째|둘째|세\s*번째|셋째|마지막)\s*([34])자리/,
+        );
+        if (part) {
+          const parts = digits.match(/^(01\d)(\d{3,4})(\d{4})$/)!;
+          const index = /첫/.test(part[0]) ? 1 : /두|둘/.test(part[0]) ? 2 : 3;
+          if (parts[index]!.length !== Number(part[1]))
+            return { source: '전화번호 구간의 길이를 확인해야 합니다.' };
+          value = parts[index]!;
+        } else if (
           /하이픈.{0,12}(?:제외|없이|빼)|-\s*없이|(?:숫자|번호)만|digits only|without hyphens/i.test(
             hint,
           )

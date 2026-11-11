@@ -107,7 +107,7 @@ test('batch plans traverse changed layouts, conditional fields and receipts with
       assert.equal(result.autonomy!.metrics.inboxBatches, 0);
       assert.equal(result.autonomy!.metrics.recoveries, 1);
       assert.ok(result.autonomy!.metrics.reused >= 2);
-      assert.equal(result.steps, 7);
+      assert.equal(result.steps, 6); // Clear receipt is classified without another model call.
       assert.equal(demoState(app.store, job.id).posts, 5);
       assert.ok(app.store.receipt(job.id));
       assert.throws(() => runner.start(job.id), /job_not_resumable/);
@@ -279,7 +279,7 @@ test('dashboard groups unknown facts, accepts one answer batch, preserves focus,
     const done = app.store.job(job.id)!;
     assert.equal(done.status, 'completed');
     assert.equal(done.autonomy!.metrics.inboxBatches, 1);
-    assert.equal(done.steps, 7);
+    assert.equal(done.steps, 6); // Receipt rules avoid a model call.
     assert.equal(demoState(app.store, job.id).posts, 5);
     assert.equal(
       app.store.settings('answers', []).length,

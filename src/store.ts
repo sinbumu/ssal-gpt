@@ -11,6 +11,7 @@ import type { EntryTask } from './tasks.js';
 import type { DiscoveryState } from './discovery.js';
 import type { ReadTraceSummary } from './read-trace.js';
 import { winnerNotice } from './notifications.js';
+import type { SubmissionResponse, ReceiptCheck } from './submission-response.js';
 
 export type JobStatus =
   | 'queued'
@@ -95,6 +96,10 @@ export type Job = {
     observedAt: number;
     intentHash: string;
   }[];
+  receiptResponses?: SubmissionResponse[];
+  receiptCapture?: { intentHash: string; requests: number; settled: boolean };
+  receiptCheck?: ReceiptCheck;
+  receiptAiAttempts?: { intentHash: string; count: number };
   userContext?: string;
   memory?: string;
   observedUrls?: string[];
@@ -137,6 +142,7 @@ export function unattemptedEntry(job: Job | undefined) {
     !job.continuations?.length &&
     !job.receiptObservations?.length &&
     !job.receiptDialogs?.length &&
+    !job.receiptResponses?.length &&
     !(job.autonomy?.consents || []).some((c) => c.appliedAt) &&
     !(job.tasks || []).some(
       (t) => t.attempt || t.proof || ['attempted', 'verified', 'manual_reported'].includes(t.state),
@@ -427,6 +433,7 @@ export class Store {
             verification:
               typeof proof.verification === 'string' ? proof.verification : 'visible_receipt',
             consents: job.autonomy?.consents || [],
+            receiptCheck: proof.receiptCheck as ReceiptCheck | undefined,
           },
         ];
       })
@@ -453,6 +460,8 @@ export class Store {
         delete job.intent;
         delete job.receiptObservations;
         delete job.receiptDialogs;
+        delete job.receiptResponses;
+        delete job.receiptCapture;
       }
       const remaining = job.tasks?.some((t) => !['verified', 'manual_reported'].includes(t.state));
       if (remaining) {

@@ -130,6 +130,10 @@ export async function verifyFormContinuation(
   job.uncertain = false;
   delete job.intent;
   delete job.receiptObservations;
+  delete job.receiptResponses;
+  delete job.receiptCapture;
+  delete job.receiptCheck;
+  delete job.receiptAiAttempts;
   if (job.autonomy) {
     delete job.autonomy.plan;
     delete job.autonomy.finalApproval;

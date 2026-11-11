@@ -12,6 +12,8 @@ import type { Job } from '../../src/store.js';
 for (const scenario of [
   'accepted',
   'accepted-sync',
+  'accepted-response',
+  'accepted-durable',
   'unrelated-post',
   'decline',
   'unmarked-decline',
@@ -77,24 +79,65 @@ for (const scenario of [
       <script>async function sendEntry() {
         const body = new URLSearchParams();
         for (const input of document.querySelectorAll('input:not([type=checkbox])')) body.set(input.name, input.value);
-        ${scenario === 'accepted-sync' ? "const xhr = new XMLHttpRequest(); xhr.open('POST', '/demo/save', false); xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); xhr.send(body.toString());" : `await fetch('/demo/save', {method:'POST', body: ${scenario === 'unrelated-post' ? "new URLSearchParams({tracking: 'unrelated'})" : 'body'}});`}
-        alert('${scenario === 'accepted-sync' ? '이벤트에 참여 되었습니다.' : '응모가 완료되었습니다.'}'); location.reload();
+        ${scenario === 'accepted-sync' ? "const xhr = new XMLHttpRequest(); xhr.open('POST', '/demo/save', false); xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); xhr.send(body.toString());" : `await (await fetch('/demo/save', {method:'POST', body: ${scenario === 'unrelated-post' ? "new URLSearchParams({tracking: 'unrelated'})" : 'body'}})).json();`}
+        ${['accepted-response', 'accepted-durable'].includes(scenario) ? '' : `alert('${scenario === 'accepted-sync' ? '이벤트에 참여 되었습니다.' : '응모가 완료되었습니다.'}');`} location.reload();
       }</script>`;
+    if (['accepted-response', 'accepted-durable'].includes(scenario)) {
+      const handlers = app.server.listeners('request');
+      app.server.removeAllListeners('request');
+      app.server.on('request', async (req, res) => {
+        if (!req.url?.startsWith('/demo/')) {
+          for (const handler of handlers) handler.call(app.server, req, res);
+          return;
+        }
+        if (req.method === 'POST') {
+          let body = '';
+          for await (const chunk of req) body += chunk;
+          const data = new URLSearchParams(body);
+          assert.equal(data.get('address'), '가상도 예시로 99, 101호');
+          posts++;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({ code: '0000', msg: '이벤트에 참여 되었습니다.', receipt_no: 'R-42' }),
+          );
+        } else {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(html);
+        }
+      });
+    }
     try {
       await app.browser.open();
-      await app.browser.context!.route(app.origin + '/demo/**', async (r) => {
-        if (r.request().method() === 'POST') {
-          posts++;
-          if (scenario.startsWith('accepted')) {
-            const data = new URLSearchParams(r.request().postData()!);
-            assert.equal(data.get('answer1'), '2');
-            assert.equal(data.get('answer2'), '3');
-            assert.equal(data.get('address'), '가상도 예시로 99, 101호');
-            assert.equal(data.get('captcha'), 'human-entered');
-          }
-          await r.fulfill({ contentType: 'application/json', body: '{}' });
-        } else await r.fulfill({ contentType: 'text/html; charset=utf-8', body: html });
-      });
+      if (scenario === 'accepted-durable')
+        app.browser.page!.on('response', (r) => {
+          if (r.request().method() === 'POST')
+            r.body = async () => {
+              throw new Error('synthetic evicted response');
+            };
+        });
+      if (!['accepted-response', 'accepted-durable'].includes(scenario))
+        await app.browser.context!.route(app.origin + '/demo/**', async (r) => {
+          if (r.request().method() === 'POST') {
+            posts++;
+            if (scenario.startsWith('accepted')) {
+              const data = new URLSearchParams(r.request().postData()!);
+              assert.equal(data.get('answer1'), '2');
+              assert.equal(data.get('answer2'), '3');
+              assert.equal(data.get('address'), '가상도 예시로 99, 101호');
+              assert.equal(data.get('captcha'), 'human-entered');
+            }
+            await r.fulfill({
+              contentType: 'application/json',
+              body: ['accepted-response', 'accepted-durable'].includes(scenario)
+                ? JSON.stringify({
+                    code: '0000',
+                    msg: '이벤트에 참여 되었습니다.',
+                    receipt_no: 'R-42',
+                  })
+                : '{}',
+            });
+          } else await r.fulfill({ contentType: 'text/html; charset=utf-8', body: html });
+        });
       app.runner.model.decide = (async (_p: unknown, _i: unknown, ctx: any, image: Buffer) => {
         assert.ok(image.length > 1000);
         assert.ok(!JSON.stringify(ctx).includes('가상도 예시로 99'));
@@ -187,6 +230,11 @@ for (const scenario of [
         current.note,
       );
       assert.equal(posts, 1);
+      if (['accepted-response', 'accepted-durable'].includes(scenario)) {
+        assert.equal(current.receiptCheck?.method, 'rules');
+        assert.equal(current.receiptCheck?.signals[0].receiptNumbers?.[0], 'R-42');
+        assert.equal(current.receiptDialogs?.length || 0, 0);
+      }
       assert.ok(!JSON.stringify(current.receiptDialogs || []).includes('가상도'));
       if (scenario === 'unrelated-post') {
         app.runner.start(j.id);

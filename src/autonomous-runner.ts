@@ -42,7 +42,7 @@ export async function runAutonomous(
   const state = job.autonomy!;
   const started = Date.now();
   let formLoadWaits = 0;
-  let submissionDialogs: ReturnType<typeof watchSubmissionDialogs> | undefined;
+  let submissionDialogs: Awaited<ReturnType<typeof watchSubmissionDialogs>> | undefined;
   const assertScope = () => {
     if (
       !state.policy.enabled ||
@@ -84,7 +84,13 @@ export async function runAutonomous(
     while (job.steps < job.maxSteps) {
       signal.throwIfAborted();
       // A scoped acknowledgement can arrive just before the site redirects.
-      if (job.uncertain && (await verifyReceipt(store, browser, model, job, signal, false))) return;
+      if (
+        job.uncertain &&
+        browser.page &&
+        new URL(browser.page.url()).origin !== state.origin &&
+        (await verifyReceipt(store, browser, model, job, signal, false))
+      )
+        return;
       assertScope();
       if (Date.now() - started > 15 * 60_000) throw new ServiceError('session_time_limit');
       try {
@@ -128,6 +134,14 @@ export async function runAutonomous(
           await verifyFormContinuation(store, browser, model, job, o, view, signal);
         }
         store.saveJob(job);
+        if (job.uncertain && job.intent?.kind === 'submission') {
+          if (await verifyReceipt(store, browser, model, job, signal, true)) return;
+          job.status = 'submission_unknown';
+          record(
+            job.receiptCheck?.reason || '접수 결과를 확정하지 못했습니다. 재제출하지 않습니다.',
+          );
+          break;
+        }
         if (
           !job.uncertain &&
           !view.questions.length &&
@@ -465,16 +479,12 @@ export async function runAutonomous(
         if (job.eventId) store.markSubmission(job.eventId, 'unknown');
         if (!intermediate) {
           submissionDialogs?.close();
-          submissionDialogs = watchSubmissionDialogs(
+          submissionDialogs = await watchSubmissionDialogs(
             store,
             browser,
             job,
             button.action,
-            button.form === -1
-              ? view.questions
-                  .filter((q) => q.kind === 'text')
-                  .flatMap((q) => answers.get(q.id) || [])
-              : undefined,
+            view.questions.filter((q) => q.kind === 'text').flatMap((q) => answers.get(q.id) || []),
           );
         }
         await advanceForm(browser.page!, view, button.id, signal);

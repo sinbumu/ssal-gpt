@@ -476,7 +476,7 @@ test('runtime discovers excess questions and switches to another candidate witho
       jobs.map((j) => j.note).join(' / '),
     );
     assert.equal(posts, 1);
-    assert.equal(calls, 2);
+    assert.equal(calls, 1); // Clear receipt needs no extra model call.
     assert.equal(app.store.job(parent.id)!.prepareOne!.switches, 1);
   } finally {
     await app.close();

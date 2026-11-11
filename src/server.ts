@@ -269,6 +269,9 @@ export async function createApp(options: {
           sourceEvidence: undefined,
           receiptObservations: undefined,
           receiptDialogs: undefined,
+          receiptResponses: undefined,
+          receiptCapture: undefined,
+          receiptAiAttempts: undefined,
           autonomy: job.autonomy
             ? {
                 ...job.autonomy,

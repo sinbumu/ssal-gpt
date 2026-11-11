@@ -5,8 +5,19 @@ export const ConsentPolicySchema = z
   .object({
     mode: z.enum(['manual', 'routine', 'adaptive']).default('manual'),
     fields: z
-      .array(z.enum(['name', 'email', 'phone', 'region', 'occupation', 'ageRange']))
-      .max(6)
+      .array(
+        z.enum([
+          'name',
+          'email',
+          'phone',
+          'region',
+          'occupation',
+          'ageRange',
+          'shippingAddress',
+          'postalCode',
+        ]),
+      )
+      .max(8)
       .default(['name', 'email', 'phone']),
     extraFields: z
       .array(z.enum(['nickname', 'interest', 'entryChannel']))
@@ -56,6 +67,9 @@ const fieldNames: Record<string, RegExp> = {
   name: /성명|성함|이름/gi,
   email: /이메일(?:주소)?|전자우편(?:주소)?|e-?mail/gi,
   phone: /휴대(?:전화|폰)(?:번호)?|전화번호|연락처/gi,
+  shippingAddress:
+    /(?:(?:배송지|수령지|거주지|배송|수령|도로명|지번|상세|기본)?주소|배송지|수령지)/gi,
+  postalCode: /우편번호/gi,
   region: /거주지역|거주지(?:역)?|지역/gi,
   occupation: /직업/gi,
   ageRange: /연령대|나이대/gi,
@@ -157,6 +171,11 @@ export function decideConsent(
   ]);
   if (fields.some((key) => !allowed.has(key)))
     return blocked('설정에서 허용하지 않은 정보 항목입니다.');
+  if (
+    fields.some((key) => ['shippingAddress', 'postalCode'].includes(key)) &&
+    !/배송|경품.*발송|물품.*발송/.test(s.purpose)
+  )
+    return blocked('배송 주소 수집의 경품 배송·발송 목적을 확인할 수 없습니다.');
   if (
     policy.mode === 'routine' &&
     fields.some((key) => !state.profile[key as keyof typeof state.profile])

@@ -12,6 +12,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { writeFile } from 'node:fs/promises';
 import { privateDirectory } from './config.js';
+import { maskPrivateText } from './private-text.js';
 import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
@@ -766,11 +767,8 @@ export class Browser {
       }
       return lines.join('\n').slice(0, 18000);
     }, fullPage);
-    for (const value of secrets.filter((v) => v.length >= 2))
-      text = text.split(value).join('[저장된 정보]');
-    for (const element of elements)
-      for (const value of secrets.filter((v) => v.length >= 2))
-        element.label = element.label.split(value).join('[저장된 정보]');
+    text = maskPrivateText(text, secrets);
+    for (const element of elements) element.label = maskPrivateText(element.label, secrets);
     if (fullPage && (await page.evaluate(() => document.documentElement.scrollHeight)) > 12000)
       throw new ServiceError('form_page_too_large');
     const image = await page.screenshot({

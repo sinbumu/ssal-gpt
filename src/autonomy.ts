@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './store.js';
 import { searchPage, observedQuote, type SourceEvidence } from './evidence.js';
+import { maskPrivateText } from './private-text.js';
 import {
   ConsentPolicySchema,
   ConsentAssessmentSchema,
@@ -18,6 +19,13 @@ export const ProfileSchema = z
     email: z.string().max(200).default(''),
     phone: z.string().max(80).default(''),
     region: z.string().max(100).default(''),
+    shippingAddress: z.string().trim().max(300).default(''),
+    shippingAddressDetail: z.string().trim().max(200).default(''),
+    postalCode: z
+      .string()
+      .trim()
+      .regex(/^(?:\d{5})?$/, '우편번호는 비워두거나 5자리 숫자로 입력하세요.')
+      .default(''),
     occupation: z.string().max(100).default(''),
     ageRange: z.string().max(100).default(''),
   })
@@ -186,7 +194,7 @@ export const syntheticSettings: Settings = {
     consent: { mode: 'routine' },
   }),
 };
-const personal: Record<keyof Profile, RegExp> = {
+const personal = {
   name: /성명|성함|이름|\bname\b/i,
   email: /이메일|전자우편|\be-?mail\b/i,
   phone: /연락처|전화|휴대|\bphone\b|\bmobile\b/i,
@@ -201,7 +209,45 @@ export function personalKey(q: Question) {
     )
   )
     return undefined;
-  return (Object.keys(personal) as (keyof Profile)[]).find((k) => personal[k].test(q.label));
+  return (Object.keys(personal) as (keyof typeof personal)[]).find((k) =>
+    personal[k].test(q.label),
+  );
+}
+
+function shippingField(q: Question, questions: Question[]) {
+  const label = q.label.replace(/\s+/g, ''),
+    hint = `${q.label}\n${q.description || ''}`;
+  if (/이메일|전자우편|e-?mail|웹|홈페이지|website|url/i.test(label)) return;
+  if (!/주소|배송지|수령지|우편번호|address|postal|zip.?code/i.test(label)) return;
+  if (
+    q.kind !== 'text' ||
+    /친구|타인|회사|직장|사업장|행사장|매장|추천인|보호자|예시|설명|의견|friend|company|office|example/i.test(
+      hint,
+    )
+  )
+    return 'review';
+  if (/시[·/\s]?도|시[·/\s]?군|군[·/\s]?구|읍[·/\s]?면|지역.*(?:만|까지)/.test(hint))
+    return 'review';
+  if (/우편번호/.test(label) && /주소/.test(label)) return 'review';
+  if (/우편번호|postal|zip.?code/i.test(label)) return 'postalCode';
+  if (/(?:상세주소|동[·/\s]?호수).*(?:포함|까지)|전체주소/.test(label)) return 'full';
+  const otherDetail = questions.some(
+    (other) =>
+      other.id !== q.id && /상세\s*주소|동[·/\s]?호수|address\s*line\s*2/i.test(other.label),
+  );
+  const otherBase = questions.some(
+    (other) =>
+      other.id !== q.id && /기본\s*주소|도로명\s*주소|address\s*line\s*1/i.test(other.label),
+  );
+  if (otherBase && /상세주소|동[·/\s]?호수/i.test(label)) return 'shippingAddressDetail';
+  if (/배송|수령|받[을으].*주소|shipping|delivery/i.test(label))
+    return otherDetail ? 'shippingAddress' : 'full';
+  if (/상세주소|동[·/\s]?호수|addressline2|apartment|suite/i.test(label))
+    return 'shippingAddressDetail';
+  if (/기본주소|도로명주소|지번주소|addressline1/i.test(label)) return 'shippingAddress';
+  if (/배송|경품.*(?:발송|수령)|shipping|delivery/i.test(q.description || ''))
+    return otherDetail ? 'shippingAddress' : 'full';
+  return 'review';
 }
 export function consentQuestion(q: Question) {
   return /동의|약관|마케팅|consent|agree|marketing/i.test(q.label);
@@ -229,6 +275,7 @@ export function resolveAnswer(
   state: AutonomyState,
   saved: SavedAnswer[],
   text: string,
+  questions: Question[] = [],
 ): { answer?: string[]; source: string; recommendation?: string[]; consent?: ConsentDecision } {
   const isConsent = consentQuestion(q) || plan?.category === 'consent';
   const override = state.overrides[q.signature];
@@ -257,6 +304,21 @@ export function resolveAnswer(
   }
   if (state.reused?.[q.signature])
     return { answer: validateAnswer(q, state.reused[q.signature]!), source: 'job_memory' };
+  const shipping = shippingField(q, questions);
+  if (shipping) {
+    if (shipping === 'review')
+      return {
+        source: '주소의 용도·입력 범위를 확인해야 합니다. 배송 주소를 임의로 사용하지 않습니다.',
+      };
+    const value =
+      shipping === 'full'
+        ? [state.profile.shippingAddress, state.profile.shippingAddressDetail]
+            .filter(Boolean)
+            .join(', ')
+        : state.profile[shipping];
+    const hasBase = shipping !== 'full' || !!state.profile.shippingAddress;
+    return { answer: value && hasBase ? validateAnswer(q, [value]) : undefined, source: 'profile' };
+  }
   const key = personalKey(q);
   if (key) {
     let value = state.profile[key];
@@ -350,17 +412,11 @@ export function resolveAnswer(
   return { source: 'answer_required' };
 }
 export function redact(text: string, profile: Profile) {
-  for (const value of Object.values(profile).filter((v) => v.length >= 2))
-    text = text.split(value).join('[저장된 정보]');
-  return text;
+  return maskPrivateText(text, Object.values(profile));
 }
 export function redactContext(value: unknown, secrets: string[]): unknown {
   if (typeof value === 'string') {
-    for (const secret of secrets.filter((s) => s.length >= 2)) {
-      value = (value as string).split(secret).join('[저장된 정보]');
-      value = (value as string).split(encodeURIComponent(secret)).join('[저장된 정보]');
-    }
-    return value;
+    return maskPrivateText(value, secrets);
   }
   if (Array.isArray(value)) return value.map((item) => redactContext(item, secrets));
   if (value && typeof value === 'object')

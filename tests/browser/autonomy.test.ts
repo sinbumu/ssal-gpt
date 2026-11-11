@@ -12,6 +12,7 @@ import type { Job } from '../../src/store.js';
 import {
   createAutonomy,
   syntheticSettings,
+  settings,
   type AnswerPlan,
   type Question,
 } from '../../src/autonomy.js';
@@ -152,6 +153,91 @@ test('rendered required hints format profile phones locally and mask their echoe
       .evaluate((el) => (el.textContent = '숫자만 입력'));
     assert.notEqual((await inspectForm(app.browser.page!)).view.fingerprint, previous);
   } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard saves separate shipping fields and native combined or split address forms fill locally with private echoes masked', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-shipping-'));
+  const app = await createApp({ dir, port: 0, headless: true }),
+    ui = await chromium.launch();
+  app.scheduler.stop();
+  app.store.setSettings('autonomy', syntheticSettings);
+  const base = '가상도 예시시 테스트로 10',
+    detail = '101호';
+  try {
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    const form = page.locator('#autonomy-form');
+    await form.locator('[name=name]').waitFor();
+    await page.waitForFunction(
+      () => (document.querySelector('[name=name]') as HTMLInputElement)?.value === '테스트 참가자',
+    );
+    await form.locator('[name=region]').fill('가상도');
+    await form.locator('[name=shippingAddress]').fill(base);
+    await form.locator('[name=shippingAddressDetail]').fill(detail);
+    await form.locator('[name=postalCode]').fill('01234');
+    const response = page.waitForResponse(app.origin + '/api/autonomy');
+    await form.locator('button[type=submit]').click();
+    assert.equal((await response).status(), 200);
+    assert.equal(settings(app.store).profile.shippingAddress, base);
+    assert.equal(settings(app.store).profile.region, '가상도');
+    assert.ok(
+      !settings(app.store).policy.consent.fields.includes('shippingAddress'),
+      'saving an address does not expand consent',
+    );
+    await page.reload();
+    await page.waitForFunction(
+      () => (document.querySelector('[name=postalCode]') as HTMLInputElement)?.value === '01234',
+    );
+    assert.equal(await form.locator('[name=shippingAddressDetail]').inputValue(), detail);
+    for (const split of [true, false]) {
+      const job = makeJob(app.origin);
+      job.autonomy = createAutonomy(settings(app.store), app.origin, true);
+      job.autonomy.policy.finalSubmit = 'review';
+      await app.browser.navigate(job.startUrl);
+      await app.browser.page!.setContent(`<form>
+        <label>거주지역<input name="region" required></label>
+        <label>배송 주소<input name="base" required></label>
+        ${split ? '<label>상세 주소<input name="detail" required></label>' : ''}
+        <label>우편번호<input name="zip" required></label>
+        <button type="submit">제출</button></form><output></output>
+        <script>document.querySelector('form').oninput=()=>document.querySelector('output').textContent=[...document.querySelectorAll('input')].map(e=>e.value).join('\\n').replaceAll(' ','\\n')</script>`);
+      job.currentUrl = job.startUrl;
+      app.browser.ownerJobId = job.id;
+      app.store.saveJob(job);
+      const driver = syntheticModel(),
+        original = driver.decide;
+      driver.decide = async (...args) => {
+        const context = JSON.stringify(args[2]);
+        for (const part of ['예시시', '테스트로', detail, '01234'])
+          assert.ok(!context.includes(part));
+        return original(...args);
+      };
+      const runner = new Runner(app.store, app.browser, driver, app.origin);
+      runner.start(job.id);
+      await runner.finished();
+      const result = app.store.job(job.id)!;
+      assert.equal(result.autonomy!.inbox?.final, true, result.note);
+      assert.equal(await app.browser.page!.locator('[name=region]').inputValue(), '가상도');
+      assert.equal(
+        await app.browser.page!.locator('[name=base]').inputValue(),
+        split ? base : `${base}, ${detail}`,
+      );
+      if (split)
+        assert.equal(await app.browser.page!.locator('[name=detail]').inputValue(), detail);
+      assert.equal(await app.browser.page!.locator('[name=zip]').inputValue(), '01234');
+      const observed = await app.browser.observe(true, [
+        ...Object.values(result.autonomy!.profile),
+        ...(result.autonomy!.privateAnswers || []),
+      ]);
+      for (const part of ['예시시', '테스트로', detail, '01234'])
+        assert.ok(!observed.text.includes(part));
+      assert.equal(result.uncertain, false, 'no submission before final review');
+    }
+  } finally {
+    await ui.close();
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   }

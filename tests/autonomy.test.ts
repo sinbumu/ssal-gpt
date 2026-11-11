@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completionMessage } from '../src/completion.js';
-import { redactContext } from '../src/autonomy.js';
+import { redact, redactContext, ProfileSchema } from '../src/autonomy.js';
 import {
   createAutonomy,
   syntheticSettings,
@@ -149,6 +149,78 @@ test('phone formatting follows the field hint without changing profile or invent
   );
   a.profile.phone = '+82 10 0000 0000';
   assert.deepEqual(resolveAnswer(question, undefined, a, [], '').answer, ['+82 10 0000 0000']);
+});
+
+test('shipping profile separates region, base, detail and postal code; ambiguous or other-party addresses stay unanswered', () => {
+  const a = createAutonomy(syntheticSettings, 'https://example.org');
+  a.profile = ProfileSchema.parse({
+    region: '가상도',
+    shippingAddress: '가상도 예시시 테스트로 10',
+    shippingAddressDetail: '101호',
+  });
+  const base = { ...q('배송 주소', 'text'), id: 'base' },
+    detail = { ...q('상세 주소', 'text'), id: 'detail' };
+  assert.deepEqual(resolveAnswer(q('거주지역', 'text'), undefined, a, [], '').answer, ['가상도']);
+  assert.deepEqual(resolveAnswer(base, undefined, a, [], '', [base, detail]).answer, [
+    a.profile.shippingAddress,
+  ]);
+  assert.deepEqual(resolveAnswer(detail, undefined, a, [], '', [base, detail]).answer, ['101호']);
+  assert.deepEqual(resolveAnswer(base, undefined, a, [], '').answer, [
+    `${a.profile.shippingAddress}, 101호`,
+  ]);
+  assert.deepEqual(resolveAnswer(q('주소 (상세주소 포함)', 'text'), undefined, a, [], '').answer, [
+    `${a.profile.shippingAddress}, 101호`,
+  ]);
+  assert.equal(
+    resolveAnswer(q('우편번호', 'text'), { ...plan, answer: ['99999'] }, a, [], '').answer,
+    undefined,
+  );
+  for (const label of [
+    '친구 배송주소',
+    '회사 주소',
+    '행사장 주소',
+    '주소',
+    '주소 (시·도까지만)',
+    '배송주소와 우편번호',
+  ])
+    assert.equal(
+      resolveAnswer(
+        q(label, 'text'),
+        { ...plan, answer: ['가짜 주소'] },
+        a,
+        [],
+        '경품 배송용입니다',
+      ).answer,
+      undefined,
+      label,
+    );
+  a.profile.postalCode = '01234';
+  assert.deepEqual(resolveAnswer(q('우편번호', 'text'), undefined, a, [], '').answer, ['01234']);
+  a.profile.email = 'fixture@example.invalid';
+  assert.deepEqual(resolveAnswer(q('이메일 주소', 'text'), undefined, a, [], '').answer, [
+    'fixture@example.invalid',
+  ]);
+  assert.throws(() => ProfileSchema.parse({ postalCode: '123' }));
+});
+
+test('overlapping region and shipping address are masked longest first, including wrapped text and URL echoes', () => {
+  const profile = ProfileSchema.parse({
+    region: '가상도',
+    shippingAddress: '가상도 예시시 테스트로 10',
+    shippingAddressDetail: '101호',
+  });
+  const text = `${profile.shippingAddress}, 101호`;
+  assert.equal(redact(text, profile), '[저장된 정보], [저장된 정보]');
+  const result = JSON.stringify(
+    redactContext(
+      { text: text.replaceAll(' ', '\n'), url: encodeURIComponent(text) },
+      Object.values(profile),
+    ),
+  );
+  for (const word of ['예시시', '테스트로', '101호']) {
+    assert.ok(!result.includes(word));
+    assert.ok(!result.includes(encodeURIComponent(word)));
+  }
 });
 test('semantic preference reuse requires its own delegation and cannot invert a preference', () => {
   const a = createAutonomy(syntheticSettings, 'https://example.org');

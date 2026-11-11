@@ -91,6 +91,9 @@ function reviewRows(fields) {
     email: '이메일',
     phone: '전화번호',
     region: '지역',
+    shippingAddress: '배송 기본 주소',
+    shippingAddressDetail: '배송 상세 주소',
+    postalCode: '우편번호',
     occupation: '직업',
   };
   for (const [index, field] of fields.entries()) {
@@ -622,10 +625,17 @@ void loadProfile().catch((error) => toast(error.message, true));
 $('autonomy-form').onsubmit = guard(async () => {
   const f = new FormData($('autonomy-form'));
   const profile = Object.fromEntries(
-    ['name', 'email', 'phone', 'region', 'occupation', 'ageRange'].map((k) => [
-      k,
-      String(f.get(k) || ''),
-    ]),
+    [
+      'name',
+      'email',
+      'phone',
+      'region',
+      'occupation',
+      'ageRange',
+      'shippingAddress',
+      'shippingAddressDetail',
+      'postalCode',
+    ].map((k) => [k, String(f.get(k) || '')]),
   );
   const policy = {
     enabled: f.has('enabled'),

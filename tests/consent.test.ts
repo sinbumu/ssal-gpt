@@ -36,6 +36,26 @@ const setup = (mode: 'manual' | 'routine' | 'adaptive') => {
   state.policy.consent = ConsentPolicySchema.parse({ mode });
   return state;
 };
+test('shipping consent needs its own field grant, saved values and delivery purpose; region never grants an address', () => {
+  const s = setup('routine');
+  s.profile.shippingAddress = '가상도 예시시 테스트로 10';
+  s.profile.shippingAddressDetail = '101호';
+  s.policy.consent.fields.push('region');
+  const q = consentQ(notice('이름, 배송주소', '이벤트 경품 배송'));
+  assert.equal(decideConsent(q, s).decision, 'ask');
+  s.policy.consent.fields.push('shippingAddress');
+  assert.equal(decideConsent(q, s).decision, 'accept');
+  assert.equal(
+    decideConsent(consentQ(notice('배송주소', '이벤트 참여자 확인')), s).decision,
+    'ask',
+  );
+  s.policy.consent.fields.push('postalCode');
+  const zip = consentQ(notice('배송주소, 우편번호', '이벤트 경품 배송'));
+  assert.equal(decideConsent(zip, s).decision, 'ask');
+  s.profile.postalCode = '01234';
+  assert.equal(decideConsent(zip, s).decision, 'accept');
+  assert.ok(!JSON.stringify(decideConsent(zip, s)).includes('테스트로'));
+});
 test('default consent remains manual, including optional notices and saved positive answers', () => {
   const s = setup('manual');
   const q = { ...consentQ(), required: false };

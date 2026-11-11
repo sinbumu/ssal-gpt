@@ -302,7 +302,7 @@ export async function runAutonomous(
         let consentStop: string | undefined;
         for (const q of view.questions) {
           const plan = step.answers.find((a) => a.questionId === q.id);
-          const resolved = resolveAnswer(q, plan, state, memories(store), o.text);
+          const resolved = resolveAnswer(q, plan, state, memories(store), o.text, view.questions);
           if (
             resolved.consent?.decision === 'skip' ||
             (q.required && resolved.consent?.decision === 'decline')

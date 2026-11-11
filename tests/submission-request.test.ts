@@ -66,6 +66,15 @@ test('nested answer binding excludes tokens, extras, missing answers and oversiz
     'unsupported_body',
   );
   assert.equal(submissionBodyMatch(body, 'application/json', [values[0]]), 'insufficient_values');
+  assert.equal(
+    submissionBodyMatch(body, 'application/json', [values[1]], 'naver-form-answer'),
+    'matched',
+  );
+  assert.equal(
+    submissionBodyMatch(body, 'application/json', ['짧음'], 'naver-form-answer'),
+    'insufficient_values',
+  );
+  assert.equal(submissionBodyMatch(body, 'application/json', [values[1]]), 'insufficient_values');
 });
 test('Naver saved-answer contract separates success, duplicate and rejection without inventing receipt numbers', () => {
   const response = (data: unknown, contract: any = 'naver-form-answer', url = endpoint) =>

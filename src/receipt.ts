@@ -36,8 +36,9 @@ export async function watchSubmissionDialogs(
   const page = browser.page!,
     context = page.context();
   const intentHash = hash(job.intent),
-    origin = new URL(job.intent!.url).origin;
-  const route = (url: string) => submissionRoute(job.intent!.url, url);
+    intentUrl = job.intent!.url,
+    origin = new URL(intentUrl).origin;
+  const route = (url: string) => submissionRoute(intentUrl, url);
   const readers = new Map<Page, Promise<Awaited<ReturnType<typeof durableResponseReader>>>>();
   const makeReader = (p: Page) => {
     if (!readers.has(p))
@@ -346,7 +347,12 @@ export async function watchSubmissionDialogs(
 }
 
 export function captureReceipt(job: Job, o: Observation) {
-  if (!job.uncertain || job.intent?.kind !== 'submission') return;
+  if (
+    !job.uncertain ||
+    (job.intent?.kind !== 'submission' &&
+      !(job.intent?.kind === 'step' && job.intent.providerControl === 'naver-next'))
+  )
+    return;
   const evidence = collectEvidence([], o)[0]!;
   const observations = [
     ...(job.receiptObservations || []),

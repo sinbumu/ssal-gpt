@@ -199,5 +199,5 @@ export const receiptReasons: Record<ReceiptOutcome, string> = {
   existing: '이미 참여했다는 안내입니다. 이번 시도의 신규 접수로 계산하지 않습니다.',
   pending: '서버가 처리 중·대기를 안내했습니다. 접수 완료는 아직 확정하지 않습니다.',
   conflict: '서버 응답·알림·화면의 결과가 서로 충돌합니다. 재제출 없이 확인이 필요합니다.',
-  unconfirmed: '응답을 받았지만 명시적인 접수 완료를 확정하지 못했습니다. 재제출하지 않습니다.',
+  unconfirmed: '명시적인 접수 완료 근거를 확인하지 못했습니다. 재제출하지 않습니다.',
 };

@@ -82,6 +82,7 @@ export type Job = {
     kind?: 'step' | 'submission';
     progress?: { current: number; total: number };
     controlLabel?: string;
+    providerControl?: 'naver-next' | 'naver-submit';
     pageMarker?: { id: string; number: number };
     at?: number;
   };

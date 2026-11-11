@@ -28,7 +28,14 @@ export function submissionBodyMatch(
   contract?: SubmissionContract,
 ): 'matched' | 'insufficient_values' | 'unsupported_body' | 'payload_mismatch' {
   const approved = [...new Set(values.filter((v) => v.trim()))];
-  if (approved.length < 2 || !approved.some((v) => v.length >= 3)) return 'insufficient_values';
+  // A Naver final page may contain only a phone field. The exact survey POST
+  // route already supplies identity; require one substantial exact answer there.
+  if (
+    contract === 'naver-form-answer'
+      ? !approved.length || !approved.some((v) => v.trim().length >= 6)
+      : approved.length < 2 || !approved.some((v) => v.length >= 3)
+  )
+    return 'insufficient_values';
   if (Buffer.byteLength(body) > 65536) return 'unsupported_body';
   const parts: string[] = [];
   try {

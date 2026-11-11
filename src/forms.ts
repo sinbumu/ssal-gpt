@@ -14,7 +14,13 @@ export type FormView = {
   url: string;
   fingerprint: string;
   questions: Question[];
-  buttons: { id: string; label: string; action: string; form: number }[];
+  buttons: {
+    id: string;
+    label: string;
+    action: string;
+    form: number;
+    providerControl?: 'naver-next' | 'naver-submit';
+  }[];
 };
 type Binding = {
   indices: number[];
@@ -427,6 +433,21 @@ export async function inspectForm(page: Page) {
         visible: helpers.visible(b),
         disabled: b.disabled,
         type: b.type,
+        providerControl:
+          location.origin === 'https://form.naver.com' &&
+          /^\/response\/[A-Za-z0-9_-]{5,100}\/?$/.test(location.pathname) &&
+          b instanceof HTMLButtonElement &&
+          b.type === 'button' &&
+          ['nsv_page_control_next', 'nsv_page_control_submit'].includes(b.id) &&
+          document.querySelectorAll('#' + b.id).length === 1 &&
+          ((b.id === 'nsv_page_control_next' &&
+            /^(다음|next)$/i.test(b.textContent?.trim() || '')) ||
+            (b.id === 'nsv_page_control_submit' &&
+              /^(제출|submit)$/i.test(b.textContent?.trim() || '')))
+            ? b.id === 'nsv_page_control_next'
+              ? ('naver-next' as const)
+              : ('naver-submit' as const)
+            : undefined,
       }))
       .filter(
         (b) =>
@@ -479,6 +500,7 @@ export async function inspectForm(page: Page) {
     label: b.label,
     action: b.action,
     form: b.form,
+    providerControl: b.providerControl,
   }));
   const view: FormView = {
     url: page.url(),

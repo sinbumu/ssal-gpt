@@ -21,6 +21,7 @@ import { captureReceipt, verifyReceipt, watchSubmissionDialogs } from './receipt
 import { researchQuestion } from './research.js';
 import { moaPageMarker, verifyFormContinuation } from './form-progress.js';
 import { pageProgress } from './page-progress.js';
+import { verifyNaverContinuation, restoreNaverDraft } from './naver-progress.js';
 import { consentQuestion } from './autonomy.js';
 import { optionalConsent } from './consent.js';
 
@@ -67,18 +68,22 @@ export async function runAutonomous(
     await browser.open();
     if (!job.currentUrl) await browser.navigate(job.startUrl);
     else if (browser.ownerJobId !== job.id || browser.page?.url() === 'about:blank') {
-      // Reopen only an untouched preparation. Never reload a page after input,
-      // intermediate submission or an uncertain external action.
-      if (
-        !job.uncertain &&
-        state.metrics.fields === 0 &&
-        state.metrics.batches === 0 &&
-        state.metrics.recoveries === 0 &&
-        !state.plan &&
-        !job.history.some((h) => h.action === 'form_batch')
-      )
-        await browser.navigate(job.currentUrl);
-      else throw new ServiceError('autonomy_live_page_required');
+      assertScope();
+      const restored = await restoreNaverDraft(store, browser, job);
+      // Apart from a proven no-POST Naver first-Next draft, only untouched
+      // preparation may reopen. Possible external submissions remain locked.
+      if (!restored) {
+        if (
+          !job.uncertain &&
+          state.metrics.fields === 0 &&
+          state.metrics.batches === 0 &&
+          state.metrics.recoveries === 0 &&
+          !state.plan &&
+          !job.history.some((h) => h.action === 'form_batch')
+        )
+          await browser.navigate(job.currentUrl);
+        else throw new ServiceError('autonomy_live_page_required');
+      }
     }
     browser.ownerJobId = job.id;
     while (job.steps < job.maxSteps) {
@@ -131,7 +136,12 @@ export async function runAutonomous(
           }
         }
         if (job.uncertain && view.questions.length) {
-          await verifyFormContinuation(store, browser, model, job, o, view, signal);
+          if (!(await verifyNaverContinuation(store, browser, job, o, view)))
+            await verifyFormContinuation(store, browser, model, job, o, view, signal);
+        }
+        if (!job.uncertain) {
+          submissionDialogs?.close();
+          submissionDialogs = undefined;
         }
         store.saveJob(job);
         if (job.uncertain && job.intent?.kind === 'submission') {
@@ -431,9 +441,10 @@ export async function runAutonomous(
           throw new ServiceError('form_structure_changed');
         const progress = pageProgress(o.text, o.url);
         const intermediate =
-          !!progress &&
-          progress.current < progress.total &&
-          /^(다음(?:\s*(?:문항|페이지))?|next|continue)$/i.test(button.label);
+          button.providerControl === 'naver-next' ||
+          (!!progress &&
+            progress.current < progress.total &&
+            /^(다음(?:\s*(?:문항|페이지))?|next|continue)$/i.test(button.label));
         const approval = hash({
           structure: view.fingerprint,
           values: await formValuesHash(browser.page!),
@@ -472,12 +483,13 @@ export async function runAutonomous(
           beforeText: o.text,
           kind: intermediate ? 'step' : 'submission',
           controlLabel: button.label,
+          providerControl: button.providerControl,
           pageMarker: await moaPageMarker(browser.page!),
           progress: intermediate ? progress : undefined,
         };
         store.saveJob(job);
         if (job.eventId) store.markSubmission(job.eventId, 'unknown');
-        if (!intermediate) {
+        if (!intermediate || button.providerControl === 'naver-next') {
           submissionDialogs?.close();
           submissionDialogs = await watchSubmissionDialogs(
             store,

@@ -11,7 +11,11 @@ import type { EntryTask } from './tasks.js';
 import type { DiscoveryState } from './discovery.js';
 import type { ReadTraceSummary } from './read-trace.js';
 import { winnerNotice } from './notifications.js';
-import type { SubmissionResponse, ReceiptCheck } from './submission-response.js';
+import type {
+  SubmissionResponse,
+  ReceiptCheck,
+  CaptureDiagnostics,
+} from './submission-response.js';
 
 export type JobStatus =
   | 'queued'
@@ -97,7 +101,12 @@ export type Job = {
     intentHash: string;
   }[];
   receiptResponses?: SubmissionResponse[];
-  receiptCapture?: { intentHash: string; requests: number; settled: boolean };
+  receiptCapture?: {
+    intentHash: string;
+    requests: number;
+    settled: boolean;
+    diagnostics?: CaptureDiagnostics;
+  };
   receiptCheck?: ReceiptCheck;
   receiptAiAttempts?: { intentHash: string; count: number };
   userContext?: string;

@@ -4,10 +4,15 @@ import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
 import type { ModelClient } from './model.js';
 import { collectEvidence, type SourceEvidence } from './evidence.js';
-import type { Dialog, Request, Response } from 'playwright';
+import type { Dialog, Request, Response, Page, Frame } from 'playwright';
 import { maskPrivateText } from './private-text.js';
 import { durableResponseReader } from './response-body.js';
 import { randomUUID } from 'node:crypto';
+import {
+  submissionRoute,
+  submissionBodyMatch,
+  type SubmissionContract,
+} from './submission-request.js';
 import {
   responseFields,
   classifyResponse,
@@ -15,10 +20,12 @@ import {
   combineReceiptSignals,
   receiptReasons,
   type ReceiptSignal,
+  type CaptureDiagnostics,
+  type SubmissionResponse,
 } from './submission-response.js';
 
-// Bind native alerts to the approved form POST, or to one same-origin script
-// POST carrying the approved text fields. Never accept a confirm/prompt.
+// Context-level observation includes the first request of a new popup. Ownership,
+// exact provider route and approved answer matching still gate every response.
 export async function watchSubmissionDialogs(
   store: Store,
   browser: Browser,
@@ -26,86 +33,208 @@ export async function watchSubmissionDialogs(
   destination: string,
   ajaxValues?: string[],
 ) {
-  const page = browser.page!;
-  const intentHash = hash(job.intent);
-  const origin = new URL(job.intent!.url).origin;
-  const durable = await durableResponseReader(page, origin);
-  let responseAt = 0;
-  let responseUrl = destination;
-  let open = true;
-  let lastSignal = 0;
-  const pending = new Set<Promise<void>>();
-  job.receiptCapture = { intentHash, requests: 0, settled: false };
+  const page = browser.page!,
+    context = page.context();
+  const intentHash = hash(job.intent),
+    origin = new URL(job.intent!.url).origin;
+  const route = (url: string) => submissionRoute(job.intent!.url, url);
+  const readers = new Map<Page, Promise<Awaited<ReturnType<typeof durableResponseReader>>>>();
+  const makeReader = (p: Page) => {
+    if (!readers.has(p))
+      readers.set(
+        p,
+        durableResponseReader(p, (url) => !!route(url)),
+      );
+    return readers.get(p)!;
+  };
+  await makeReader(page);
+  const existing = new Set(context.pages()),
+    owned = new Set([page]);
+  const diagnostics: CaptureDiagnostics = {
+    observedPosts: 0,
+    matchedRequests: 0,
+    responses: 0,
+    rejected: {},
+    popups: 0,
+    navigations: 0,
+    pageClosed: false,
+  };
+  let open = true,
+    lastSignal = 0,
+    responseAt = 0,
+    responseUrl = destination;
+  let responsePage: Page | undefined;
+  const pending = new Set<Promise<unknown>>();
+  const requests = new Set<Request>();
+  type Binding = { page: Page; contract?: SubmissionContract };
+  const bindings = new Map<Request, Promise<Binding | undefined>>();
+  const values = [...new Set(ajaxValues?.filter((v) => v.trim()) || [])];
   const valid = () =>
     open && job.uncertain && hash(job.intent) === intentHash && browser.ownerJobId === job.id;
-  const bind = (r: Request) => {
-    requests.add(r);
-    job.receiptCapture = { intentHash, requests: requests.size, settled: false };
+  const save = (settled = false) => {
+    if (!valid()) return;
+    diagnostics.matchedRequests = requests.size;
+    job.receiptCapture = { intentHash, requests: requests.size, settled, diagnostics };
     store.saveJob(job);
   };
-  const requests = new Set<Request>();
-  const values = [...new Set(ajaxValues?.filter((v) => v.trim().length > 0) || [])];
-  const request = (r: Request) => {
-    if (
-      r.method() !== 'POST' ||
-      new URL(r.url()).origin !== origin ||
-      browser.ownerJobId !== job.id ||
-      !job.uncertain ||
-      hash(job.intent) !== intentHash
-    )
-      return;
-    if (r.isNavigationRequest() && r.url() === destination) {
-      bind(r);
-      return;
-    }
-    // A script button has no declared form action. Bind only a main-frame
-    // XHR/fetch carrying ALL approved text values, not an unrelated analytics
-    // response or a page's claim that it submitted. Payload stays in memory.
-    if (
-      values.length < 2 ||
-      !values.some((v) => v.length >= 3) ||
-      r.frame() !== page.mainFrame() ||
-      !['xhr', 'fetch'].includes(r.resourceType())
-    )
-      return;
-    const body = r.postData() || '';
-    let parts: string[] = [];
-    try {
-      if (r.headers()['content-type']?.includes('application/json')) {
-        const parsed = JSON.parse(body);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-          parts = Object.values(parsed).filter((v): v is string => typeof v === 'string');
-      } else if (r.headers()['content-type']?.includes('application/x-www-form-urlencoded'))
-        parts = [...new URLSearchParams(body).values()];
-    } catch {
-      return;
-    }
-    if (values.every((v) => parts.some((part) => part.includes(v)))) bind(r);
+  const reject = (reason: string) => {
+    diagnostics.rejected[reason] = (diagnostics.rejected[reason] || 0) + 1;
+    save();
   };
-  let dialogSeen = false;
+  const track = (task: Promise<unknown>) => {
+    const safe = task.catch(() => {
+      if (valid()) reject('observation_error');
+    });
+    pending.add(safe);
+    void safe.finally(() => pending.delete(safe));
+  };
+  const listeners = new Map<Page, { nav: (frame: Frame) => void; closed: () => void }>();
+  const attach = (p: Page) => {
+    if (listeners.has(p)) return;
+    const nav = (frame: Frame) => {
+      if (valid() && frame === p.mainFrame()) {
+        diagnostics.navigations++;
+        save();
+      }
+    };
+    const closed = () => {
+      if (open) {
+        diagnostics.pageClosed = true;
+        save();
+      }
+    };
+    p.on('framenavigated', nav);
+    p.on('close', closed);
+    listeners.set(p, { nav, closed });
+  };
+  attach(page);
+  const isOwned = async (p: Page) => {
+    if (owned.has(p)) return true;
+    if (existing.has(p) || (await p.opener()) !== page) return false;
+    if (!valid()) return false;
+    if (!owned.has(p)) {
+      owned.add(p);
+      diagnostics.popups++;
+      attach(p);
+      void makeReader(p);
+      save();
+    }
+    return true;
+  };
+  const newPage = (p: Page) => {
+    track(isOwned(p));
+  };
+  const requestPage = async (r: Request, native: boolean): Promise<Page | undefined> => {
+    if (r.serviceWorker()) {
+      reject('service_worker');
+      return;
+    }
+    try {
+      const f = r.frame(),
+        p = f.page();
+      if (f !== p.mainFrame() && !(native && p === page)) {
+        reject('subframe');
+        return;
+      }
+      if (await isOwned(p)) return p;
+      reject('unrelated_tab');
+      return;
+    } catch {
+      // The first target=_blank navigation can precede its Playwright Frame.
+      // Require a newly-created direct child, exact native action URL and answers.
+      if (
+        r.isNavigationRequest() &&
+        r.url() === destination &&
+        submissionBodyMatch(r.postData() || '', r.headers()['content-type'] || '', values) ===
+          'matched'
+      ) {
+        const until = Date.now() + 300;
+        do {
+          const candidates: Page[] = [];
+          for (const p of context.pages())
+            if (p !== page && p.url() === r.url() && (await isOwned(p))) candidates.push(p);
+          if (candidates.length === 1) return candidates[0];
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } while (valid() && Date.now() < until);
+      }
+      reject('frame_unavailable');
+      return;
+    }
+  };
+  const bindRequest = async (r: Request): Promise<Binding | undefined> => {
+    const targetRoute = route(r.url());
+    if (!targetRoute) {
+      reject('unrecognized_destination');
+      return;
+    }
+    const native =
+      targetRoute === 'same-origin' && r.isNavigationRequest() && r.url() === destination;
+    // An approved native form may target its own named iframe. Script requests
+    // in child frames still cannot become submission evidence.
+    const p = await requestPage(r, native);
+    if (!p || !valid()) return;
+    if (!native && !['xhr', 'fetch'].includes(r.resourceType())) {
+      reject('unsupported_request_type');
+      return;
+    }
+    const contract = targetRoute === 'naver-form-answer' ? targetRoute : undefined;
+    if (!native || p !== page) {
+      const match = submissionBodyMatch(
+        r.postData() || '',
+        r.headers()['content-type'] || '',
+        values,
+        contract,
+      );
+      if (match !== 'matched') {
+        reject(match);
+        return;
+      }
+    }
+    requests.add(r);
+    save();
+    return { page: p, contract };
+  };
+  const request = (r: Request) => {
+    if (r.method() !== 'POST' || !valid()) return;
+    diagnostics.observedPosts++;
+    if (bindings.size >= 32) {
+      reject('request_limit');
+      return;
+    }
+    const task = bindRequest(r);
+    bindings.set(r, task);
+    track(task);
+  };
   const response = (r: Response) => {
-    if (
-      valid() &&
-      requests.has(r.request()) &&
-      new URL(r.url()).origin === origin &&
-      requests.size <= 3
-    ) {
-      const url = new URL(r.url());
-      url.search = '';
-      url.hash = '';
-      const evidence = {
-        id: randomUUID(),
-        intentHash,
-        url: url.href,
-        status: r.status(),
-        at: Date.now(),
-        fields: [] as ReturnType<typeof responseFields>,
-        bodyState: 'reading' as import('./submission-response.js').SubmissionResponse['bodyState'],
-        bodyHash: undefined as string | undefined,
-      };
-      job.receiptResponses = [...(job.receiptResponses || []), evidence].slice(-3);
-      store.saveJob(job);
-      const task = (async () => {
+    const binding = bindings.get(r.request());
+    if (!binding) return;
+    const arrivedAt = Date.now();
+    track(
+      (async () => {
+        const bound = await binding;
+        if (!bound || !valid() || requests.size > 3 || !route(r.url())) return;
+        if (requests.size === 1 && r.status() >= 200 && r.status() < 300) {
+          responseAt = arrivedAt;
+          responseUrl = r.url();
+          responsePage = bound.page;
+        }
+        const url = new URL(r.url());
+        url.search = '';
+        url.hash = '';
+        const evidence: SubmissionResponse = {
+          id: randomUUID(),
+          intentHash,
+          url: url.href,
+          status: r.status(),
+          at: arrivedAt,
+          fields: [],
+          bodyState: 'reading',
+          contract: bound.contract,
+        };
+        diagnostics.responses++;
+        job.receiptResponses = [...(job.receiptResponses || []), evidence].slice(-3);
+        lastSignal = Date.now();
+        save();
         try {
           const headers = r.headers();
           if (Number(headers['content-length'] || 0) > 65536) evidence.bodyState = 'too_large';
@@ -113,7 +242,7 @@ export async function watchSubmissionDialogs(
             evidence.bodyState = 'unsupported';
           else {
             const body = await r.body().catch(async () => {
-              const buffered = await durable.read(r.request());
+              const buffered = await (await makeReader(bound.page)).read(r.request());
               if (!buffered) throw new Error('receipt_body_unavailable');
               return buffered;
             });
@@ -138,87 +267,80 @@ export async function watchSubmissionDialogs(
         }
         if (valid()) {
           lastSignal = Date.now();
-          store.saveJob(job);
+          save();
         }
-      })();
-      pending.add(task);
-      void task.finally(() => pending.delete(task));
-      lastSignal = Date.now();
-    }
-    if (
-      browser.ownerJobId === job.id &&
-      job.uncertain &&
-      hash(job.intent) === intentHash &&
-      requests.has(r.request()) &&
-      requests.size === 1 &&
-      new URL(r.url()).origin === origin &&
-      r.status() >= 200 &&
-      r.status() < 300
-    ) {
-      responseAt = Date.now();
-      responseUrl = r.url();
-    }
+      })(),
+    );
   };
   const dialog = (d: Dialog) => {
-    if (
-      d.type() !== 'alert' ||
-      d.page() !== page ||
-      browser.ownerJobId !== job.id ||
-      !job.uncertain ||
-      job.intent?.kind !== 'submission' ||
-      hash(job.intent) !== intentHash ||
-      !responseAt ||
-      requests.size !== 1 ||
-      new URL(page.url()).origin !== origin ||
-      page.frames().some((f) => {
-        const url = f.url();
-        return !['about:blank', 'about:srcdoc', ''].includes(url) && new URL(url).origin !== origin;
-      })
-    )
-      return;
-    const secrets = [
-      ...Object.values(job.autonomy?.profile || {}),
-      ...(job.autonomy?.privateAnswers || []),
-    ];
-    job.receiptDialogs = [
-      ...(job.receiptDialogs || []),
-      {
-        text: maskPrivateText(d.message(), secrets).slice(0, 3000),
-        url: job.intent.url,
-        responseUrl,
-        responseAt,
-        observedAt: Date.now(),
-        intentHash,
-      },
-    ].slice(-3);
-    store.saveJob(job);
-    dialogSeen = true;
-    lastSignal = Date.now();
+    const dialogPage = d.page();
+    if (d.type() !== 'alert' || !valid() || !dialogPage || !owned.has(dialogPage)) return;
+    const dialogUrl = dialogPage.url(),
+      frames = dialogPage.frames().map((f) => f.url()),
+      observedAt = Date.now(),
+      message = d.message();
+    track(
+      (async () => {
+        await Promise.allSettled([...bindings.values()]);
+        if (
+          !valid() ||
+          dialogPage !== responsePage ||
+          !responseAt ||
+          requests.size !== 1 ||
+          new URL(dialogUrl).origin !== origin ||
+          frames.some((u) => {
+            return !['about:blank', 'about:srcdoc', ''].includes(u) && new URL(u).origin !== origin;
+          })
+        )
+          return;
+        const secrets = [
+          ...Object.values(job.autonomy?.profile || {}),
+          ...(job.autonomy?.privateAnswers || []),
+        ];
+        job.receiptDialogs = [
+          ...(job.receiptDialogs || []),
+          {
+            text: maskPrivateText(message, secrets).slice(0, 3000),
+            url: job.intent!.url,
+            responseUrl,
+            responseAt,
+            observedAt,
+            intentHash,
+          },
+        ].slice(-3);
+        lastSignal = Date.now();
+        save();
+      })(),
+    );
   };
-  page.on('request', request);
-  page.on('response', response);
-  page.on('dialog', dialog);
+  save();
+  context.on('page', newPage);
+  context.on('request', request);
+  context.on('response', response);
+  context.on('dialog', dialog);
   return {
     async settle(signal: AbortSignal) {
-      signal.throwIfAborted();
       const until = Date.now() + 3000;
       while (Date.now() < until) {
         signal.throwIfAborted();
-        if ((dialogSeen || lastSignal) && !pending.size && Date.now() - lastSignal >= 250) break;
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        if (lastSignal && !pending.size && Date.now() - lastSignal >= 250) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      if (valid()) {
-        job.receiptCapture = { intentHash, requests: requests.size, settled: pending.size === 0 };
-        store.saveJob(job);
-      }
+      save(pending.size === 0);
       signal.throwIfAborted();
     },
     close() {
-      durable.close();
-      page.off('response', response);
-      page.off('request', request);
-      page.off('dialog', dialog);
       open = false;
+      context.off('page', newPage);
+      context.off('request', request);
+      context.off('response', response);
+      context.off('dialog', dialog);
+      for (const [p, l] of listeners) {
+        p.off('framenavigated', l.nav);
+        p.off('close', l.closed);
+      }
+      for (const reader of readers.values()) void reader.then((r) => r.close());
+      bindings.clear();
     },
   };
 }
@@ -268,7 +390,10 @@ export async function verifyReceipt(
     origin = new URL(job.intent.url).origin;
   const network = (job.receiptResponses || []).filter(
     (e) =>
-      e.intentHash === intentHash && e.at >= job.intent!.at! && new URL(e.url).origin === origin,
+      e.intentHash === intentHash &&
+      e.at >= job.intent!.at! &&
+      !!submissionRoute(job.intent!.url, e.url) &&
+      (!e.contract || submissionRoute(job.intent!.url, e.url) === e.contract),
   );
   const alerts = (job.receiptDialogs || []).filter(
     (e) =>
@@ -276,7 +401,7 @@ export async function verifyReceipt(
       e.responseAt >= job.intent!.at! &&
       e.observedAt >= e.responseAt &&
       new URL(e.url).origin === origin &&
-      new URL(e.responseUrl).origin === origin &&
+      !!submissionRoute(job.intent!.url, e.responseUrl) &&
       !job.intent!.beforeText.includes(e.text),
   );
   const alert = alerts.at(-1);
@@ -320,6 +445,7 @@ export async function verifyReceipt(
     reason: receiptReasons[outcome],
     at: Date.now(),
     signals: signals.slice(0, 20),
+    capture: capture?.diagnostics ? structuredClone(capture.diagnostics) : undefined,
   };
   const finish = (quote: string, verification: string, observedAt: number, screenshot?: string) => {
     if ((job.kind === 'demo' || job.autonomy?.synthetic) && !store.receipt(job.id)) return false;
@@ -339,9 +465,13 @@ export async function verifyReceipt(
     if (response) {
       const s = classifyResponse(response);
       return finish(
-        s.message || `접수번호: ${s.receiptNumbers!.join(', ')}`,
+        s.message ||
+          (s.receiptNumbers?.length
+            ? `접수번호: ${s.receiptNumbers.join(', ')}`
+            : '네이버 폼의 이번 답변 저장 응답에서 success=true를 확인했습니다.'),
         'autonomous_response_receipt',
         response.at,
+        screen?.screenshot,
       );
     }
     if (alert && receiptTextOutcome(alert.text) === 'accepted')

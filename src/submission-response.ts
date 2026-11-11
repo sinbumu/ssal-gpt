@@ -1,5 +1,6 @@
 import { completionMessage } from './completion.js';
 import { maskPrivateText } from './private-text.js';
+import type { SubmissionContract } from './submission-request.js';
 
 export type ReceiptField = {
   kind: 'code' | 'message' | 'receipt' | 'success' | 'status' | 'error';
@@ -15,6 +16,16 @@ export type SubmissionResponse = {
   fields: ReceiptField[];
   bodyHash?: string;
   bodyState: 'reading' | 'parsed' | 'unsupported' | 'too_large' | 'unavailable';
+  contract?: SubmissionContract;
+};
+export type CaptureDiagnostics = {
+  observedPosts: number;
+  matchedRequests: number;
+  responses: number;
+  rejected: Record<string, number>;
+  popups: number;
+  navigations: number;
+  pageClosed: boolean;
 };
 export type ReceiptOutcome =
   'accepted' | 'rejected' | 'existing' | 'pending' | 'conflict' | 'unconfirmed';
@@ -25,6 +36,9 @@ export type ReceiptSignal = {
   status?: number;
   codes?: string[];
   receiptNumbers?: string[];
+  flags?: string[];
+  contract?: SubmissionContract;
+  bodyState?: SubmissionResponse['bodyState'];
 };
 export type ReceiptCheck = {
   intentHash: string;
@@ -34,6 +48,7 @@ export type ReceiptCheck = {
   reason: string;
   at: number;
   signals: ReceiptSignal[];
+  capture?: CaptureDiagnostics;
 };
 
 const keyKind = (key: string): ReceiptField['kind'] | undefined => {
@@ -115,7 +130,15 @@ export function classifyResponse(r: SubmissionResponse): ReceiptSignal {
     .filter((f) => ['status', 'success', 'code'].includes(f.kind))
     .map((f) => f.value.toLowerCase());
   const outcomes = messages.map(receiptTextOutcome);
+  const naverContract =
+    r.contract === 'naver-form-answer' &&
+    /^https:\/\/survey-api\.naver\.com\/api\/form\/surveys\/[A-Za-z0-9_-]{5,100}\/answers$/.test(
+      r.url,
+    );
+  const contractSuccess =
+    naverContract && r.fields.some((f) => f.key === 'success' && f.value === 'true');
   const positive =
+    contractSuccess ||
     outcomes.includes('accepted') ||
     (receiptNumbers.length > 0 &&
       (r.status === 201 ||
@@ -128,6 +151,7 @@ export function classifyResponse(r: SubmissionResponse): ReceiptSignal {
     outcomes.includes('rejected') ||
     r.fields.some((f) => f.kind === 'error' && !/^(?:false|0|null|none|)$/i.test(f.value.trim()));
   const existing =
+    (naverContract && r.fields.some((f) => f.key === 'error' && f.value === 'DUPLICATED')) ||
     outcomes.includes('existing') ||
     states.some((v) => /^(?:duplicate|already_submitted|already_participated)$/.test(v));
   const pending =
@@ -153,6 +177,11 @@ export function classifyResponse(r: SubmissionResponse): ReceiptSignal {
     status: r.status,
     codes,
     receiptNumbers,
+    flags: r.fields
+      .filter((f) => f.kind === 'success' || f.kind === 'status')
+      .map((f) => `${f.key}=${f.value}`),
+    contract: naverContract ? 'naver-form-answer' : undefined,
+    bodyState: r.bodyState,
   };
 }
 

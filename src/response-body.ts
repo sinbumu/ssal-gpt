@@ -3,7 +3,7 @@ import { hash } from './autonomy.js';
 
 // Passive, bounded Chromium buffer: a reload can evict Playwright's response
 // body before it is read. Never intercept, modify or replay the request.
-export async function durableResponseReader(page: Page, origin: string) {
+export async function durableResponseReader(page: Page, accepts: (url: string) => boolean) {
   let client: CDPSession | undefined;
   const candidates = new Map<string, { key: string; finished: boolean }>();
   const key = (url: string, body: string) => hash({ url, body });
@@ -15,7 +15,7 @@ export async function durableResponseReader(page: Page, origin: string) {
         !open ||
         e.request.method !== 'POST' ||
         !e.request.postData ||
-        new URL(e.request.url).origin !== origin ||
+        !accepts(e.request.url) ||
         candidates.size >= 8
       )
         return;

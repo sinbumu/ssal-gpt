@@ -307,6 +307,22 @@ export class Runner {
     noteDiscoveryDestination(job, route.url, this.browser.page!.url());
     this.store.saveJob(job);
   }
+  private async recoverDiscovery(job: Job, route: DiscoveryRoute | undefined, signal: AbortSignal) {
+    const state = discoveryState(job);
+    const failedUrl = this.browser.page?.url();
+    const readable = [job.currentUrl, ...(job.visitedUrls || []).toReversed()].find((raw) => {
+      if (!raw || !/^https?:/.test(raw) || raw === failedUrl || excludedSource(job, raw))
+        return false;
+      const engine = searchLocation(raw)?.engine;
+      return !engine || !state.blockedEngines.includes(engine);
+    });
+    if (!route && readable && state.blockedEngines.length < 2) {
+      await this.redirectDiscovery(job, undefined, signal, true);
+      // Use a fresh observation of a previously read public page, never the
+      // blocked destination. Replanning consumes the existing decision budget.
+      await this.browser.navigate(readable);
+    } else await this.redirectDiscovery(job, route, signal);
+  }
   private async snapshot(job: Job, signal: AbortSignal): Promise<Observation> {
     let o: Observation;
     try {
@@ -333,16 +349,7 @@ export class Runner {
           '로그인 또는 추가 인증이 필요한 출처입니다. 인증을 우회하지 않고 제외합니다.',
         );
         const route = nextDiscoveryRoute(job, undefined, engine);
-        const readable = [job.currentUrl, ...(job.visitedUrls || []).toReversed()].find((raw) => {
-          if (!raw || raw === url || excludedSource(job, raw)) return false;
-          const priorEngine = searchLocation(raw)?.engine;
-          return !priorEngine || !discoveryState(job).blockedEngines.includes(priorEngine);
-        });
-        if (!route && readable && discoveryState(job).blockedEngines.length < 2) {
-          await this.redirectDiscovery(job, undefined, signal, true);
-          // Replanning sees a previously read public page, never the challenge or login screen.
-          await this.browser.navigate(readable);
-        } else await this.redirectDiscovery(job, route, signal);
+        await this.recoverDiscovery(job, route, signal);
         return this.snapshot(job, signal);
       } else throw error;
     }
@@ -1012,7 +1019,7 @@ export class Runner {
             // A rejected URL may leave the previous readable list intact. Keep
             // that observation path rather than discarding its remaining links.
             if (this.browser.page?.url() !== o.url || !/^https?:/.test(o.url))
-              await this.redirectDiscovery(job, nextDiscoveryRoute(job), signal);
+              await this.recoverDiscovery(job, nextDiscoveryRoute(job), signal);
           }
         }
       }

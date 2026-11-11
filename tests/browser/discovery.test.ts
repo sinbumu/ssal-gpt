@@ -57,6 +57,9 @@ async function fixture(
   try {
     await app.browser.open();
     await app.browser.page!.context().route('**/*', async (r) => {
+      // Let the production read-only guard reject writes, including navigation
+      // attempted by a page script. Synthetic GET fixtures must not mask it.
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(r.request().method())) return r.fallback();
       if (r.request().resourceType() !== 'document') return r.abort();
       const url = r.request().url();
       visits.push(url);
@@ -635,3 +638,93 @@ test('search challenge with no fresh links replans from the last readable page w
       searchUrl(newQuery),
     ]);
   }));
+
+test('a blocked read with no fresh links replans from a fresh public observation without permitting the POST', async () => {
+  for (const limit of ['none', 'decisions', 'replans', 'switches', 'engines'] as const)
+    await fixture(async (app, visits) => {
+      const first = searchUrl('기존 설문 경품'),
+        next = searchUrl('공공기관 새 퀴즈'),
+        blocked = `${app.origin}/demo/blocked-read`,
+        write = `${app.origin}/demo/write`;
+      await app.browser.context!.route('https://search.naver.com/**', (r) => {
+        visits.push(r.request().url());
+        return r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body:
+            r.request().url() === first
+              ? `<h1>공개 검색 결과</h1><a href="${blocked}">설문 이벤트 원문</a>`
+              : '<h1>새 공개 검색 결과</h1>',
+        });
+      });
+      await app.browser.context!.route('**/demo/blocked-read', (r) => {
+        visits.push(r.request().url());
+        return r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: `<h1>공개 안내</h1><iframe name="target"></iframe>
+            <form method="post" action="${write}" target="target"></form>
+            <script>document.querySelector('form').submit()</script>`,
+        });
+      });
+      const failures: string[] = [];
+      app.browser.context!.on('requestfailed', (request) => {
+        if (request.url() === write) failures.push(request.failure()?.errorText || '');
+      });
+      const j = job(first);
+      j.maxSteps = limit === 'decisions' ? 1 : 10;
+      discoveryState(j).blockedEngines = limit === 'engines' ? ['google', 'naver'] : ['google'];
+      discoveryState(j).replans = limit === 'replans' ? 2 : 0;
+      discoveryState(j).switches = limit === 'switches' ? 6 : 0;
+      let calls = 0;
+      let beforeRead: string | undefined;
+      const runner = new Runner(
+        app.store,
+        app.browser,
+        model((ctx) => {
+          calls++;
+          if (calls === 1) {
+            beforeRead = ctx.observation.id;
+            return { action: 'navigate', url: blocked };
+          }
+          assert.equal(limit, 'none', 'an exhausted limit must stop before another AI call');
+          if (calls === 2) {
+            assert.equal(ctx.observation.url, first);
+            assert.notEqual(ctx.observation.id, beforeRead, 'fallback re-observes the public page');
+            assert.equal(ctx.discovery.needsFreshSearch, true);
+            assert.ok(ctx.skippedUrls.includes(blocked));
+            return { action: 'search', searchEngine: 'naver', text: '공공기관 새 퀴즈' };
+          }
+          assert.equal(ctx.observation.url, next);
+          return { action: 'done' };
+        }),
+        app.origin,
+      );
+      app.store.saveJob(j);
+      runner.start(j.id);
+      await runner.finished();
+      const result = app.store.job(j.id)!;
+      assert.equal(result.maxSteps, j.maxSteps);
+      assert.equal(result.uncertain, false);
+      assert.deepEqual(app.store.settings('connectionNeeds', []), []);
+      assert.ok(result.readTraces?.some((t) => t.reason === 'read_only_request_blocked'));
+      assert.deepEqual(failures, ['net::ERR_BLOCKED_BY_CLIENT']);
+      assert.equal(visits.includes(write), false, 'no POST reaches the synthetic destination');
+      assert.equal(
+        visits.filter((url) => url === blocked).length,
+        1,
+        'blocked source is not retried',
+      );
+      if (limit === 'none') {
+        assert.equal(result.status, 'completed', result.note);
+        assert.equal(calls, 3);
+        assert.equal(result.discovery!.replans, 1);
+        assert.equal(result.discovery!.needsFreshSearch, false);
+        assert.deepEqual(visits, [first, blocked, first, next]);
+      } else {
+        assert.equal(result.status, 'paused', result.note);
+        assert.equal(calls, 1);
+        assert.equal(result.discovery!.replans, limit === 'replans' ? 2 : 0);
+        assert.equal(result.discovery!.needsFreshSearch, false);
+        assert.deepEqual(visits, [first, blocked]);
+      }
+    });
+});

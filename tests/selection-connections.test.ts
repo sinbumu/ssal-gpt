@@ -375,3 +375,58 @@ test('changed selection settings do not reuse exclusions from a different scope'
   reuseDiscoveryRejections(fresh, [prior]);
   assert.deepEqual(fresh.discovery?.reusedRejections, []);
 });
+
+test('discovery-only authentication notices are not required event connections and obsolete jobs disappear', () => {
+  const f = fixture();
+  try {
+    const j = {
+      id: 'search-blocked',
+      kind: 'discover',
+      status: 'paused',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      goal: '가상 검색',
+      provider: { kind: 'api', model: 'fixture' },
+      note: '',
+      history: [],
+      steps: 1,
+      maxSteps: 10,
+      candidateLimit: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      uncertain: false,
+      allowedOrigins: [],
+      approvedTexts: [],
+    } as Job;
+    f.store.saveJob(j);
+    requireConnection(f.store, 'https://www.google.com/sorry/index', 'chromium', '탐색 인증', j.id);
+    assert.equal(
+      connectionSummary(f.store, 'chromium').find((c) => c.id === 'google')!.requiredBy.length,
+      0,
+    );
+    // A genuinely selected form still needs its user connection, even after collection finishes.
+    j.status = 'completed';
+    f.store.saveJob(j);
+    requireConnection(
+      f.store,
+      'https://docs.google.com/forms/d/fixture/viewform',
+      'chromium',
+      '선택한 폼 로그인',
+      j.id,
+      f.e.id,
+    );
+    assert.equal(
+      connectionSummary(f.store, 'chromium').find((c) => c.id === 'google')!.requiredBy.length,
+      1,
+    );
+    j.archivedAt = new Date().toISOString();
+    f.store.saveJob(j);
+    assert.equal(
+      connectionSummary(f.store, 'chromium').find((c) => c.id === 'google')!.requiredBy.length,
+      0,
+    );
+    assert.equal(f.store.settings<any[]>('connectionNeeds', []).length, 2, 'keep evidence records');
+  } finally {
+    f.close();
+  }
+});

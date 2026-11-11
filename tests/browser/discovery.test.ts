@@ -330,6 +330,8 @@ test('search challenge is left untouched and switches engine without showing cha
     assert.equal(app.store.job(j.id)!.status, 'completed');
     assert.equal(visits.length, 2);
     assert.equal(app.store.job(j.id)!.discovery!.rejected.length, 1);
+    assert.deepEqual(app.store.settings('connectionNeeds', []), []);
+    assert.deepEqual(app.store.settings('siteConnections', []), []);
   }));
 test('exhausted persisted source budget pauses without approval, submission or extending maxSteps', async () =>
   fixture(async (app, visits) => {
@@ -581,4 +583,55 @@ test('a model-selected next source uses the normal read failure recovery instead
     assert.equal(result.approval, undefined);
     assert.equal(visits.includes(blocked), false);
     assert.ok(visits.includes(`${app.origin}/demo/event`));
+  }));
+
+test('search challenge with no fresh links replans from the last readable page without requesting login', async () =>
+  fixture(async (app, visits) => {
+    const oldQuery = '오늘 커피',
+      newQuery = '공공기관 문화 설문 안내';
+    await app.browser.context!.route('https://search.naver.com/**', async (r) => {
+      visits.push(r.request().url());
+      await r.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>공개 검색 결과</h1>' });
+    });
+    await app.browser.context!.route('https://www.google.com/search?**', async (r) => {
+      visits.push(r.request().url());
+      await r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: '<div id="challenge-running">추가 인증이 필요합니다</div>',
+      });
+    });
+    const j = job(searchUrl(oldQuery));
+    let calls = 0;
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) => {
+        calls++;
+        assert.ok(ctx.observation.url.startsWith('https://search.naver.com/'));
+        if (calls === 1) return { action: 'search', text: oldQuery, searchEngine: 'google' };
+        assert.deepEqual(ctx.discovery.blockedEngines, ['google']);
+        if (calls === 2) {
+          assert.equal(ctx.discovery.needsFreshSearch, true);
+          return { action: 'search', text: newQuery, searchEngine: 'naver' };
+        }
+        assert.equal(ctx.observation.url, searchUrl(newQuery));
+        return { action: 'done' };
+      }),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(calls, 3);
+    assert.equal(result.discovery!.replans, 1);
+    assert.equal(result.maxSteps, 10);
+    assert.deepEqual(app.store.settings('connectionNeeds', []), []);
+    assert.deepEqual(visits, [
+      searchUrl(oldQuery),
+      searchUrl(oldQuery, 'google'),
+      searchUrl(oldQuery),
+      searchUrl(newQuery),
+    ]);
   }));

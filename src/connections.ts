@@ -21,7 +21,7 @@ export const SITES = [
     id: 'google',
     name: 'Google · Forms',
     url: 'https://accounts.google.com/',
-    note: '로그인 필요 폼용 · 자동화 브라우저 로그인 거부 가능, 실서비스 제출 미검증',
+    note: '선택한 폼에서 로그인을 요구할 때 사용 · Google 검색 차단을 풀기 위한 연결은 아닙니다.',
   },
   {
     id: 'moaform',
@@ -167,17 +167,19 @@ export function registerCandidateConnections(store: Store, event: EventRecord, p
   }
 }
 export function connectionSummary(store: Store, profile: string) {
-  const needs = store
-    .settings<ConnectionNeed[]>('connectionNeeds', [])
-    .filter(
-      (n) =>
-        n.profile === profile &&
-        !connectionReady(store, n.siteId, profile) &&
-        (!n.eventId || store.submission(n.eventId)?.state !== 'completed') &&
-        (!n.jobId ||
-          store.job(n.jobId)?.kind !== 'apply' ||
-          store.job(n.jobId)?.status !== 'stopped'),
+  const needs = store.settings<ConnectionNeed[]>('connectionNeeds', []).filter((n) => {
+    const job = n.jobId ? store.job(n.jobId) : undefined;
+    // Hide legacy discovery-only notices without erasing their evidence. A completed
+    // collection job can still own an unentered candidate that genuinely needs login.
+    if (job?.archivedAt || job?.status === 'stopped') return false;
+    if (job?.kind === 'discover' && !n.eventId) return false;
+    if (job?.status === 'completed' && !n.eventId) return false;
+    return (
+      n.profile === profile &&
+      !connectionReady(store, n.siteId, profile) &&
+      (!n.eventId || store.submission(n.eventId)?.state !== 'completed')
     );
+  });
   const policy = store.settings<{ mode?: string; newConnections?: string; registrations?: string }>(
     'selectionPolicy',
     {},
@@ -209,7 +211,13 @@ export function connectionSummary(store: Store, profile: string) {
       )
       .map((n) => ({
         ...n,
-        title: n.eventId ? store.event(n.eventId)?.title : '탐색 중 확인한 연결',
+        title: n.eventId ? store.event(n.eventId)?.title : '진행 중 작업의 연결',
+        targetUrl: n.eventId
+          ? [
+              store.event(n.eventId)?.entryUrl,
+              ...(store.event(n.eventId)?.tasks || []).map((t) => t.url),
+            ].find((url) => url && siteFor(url)?.id === n.siteId) || n.url
+          : n.url,
       })),
     state:
       site.id === 'moaform'

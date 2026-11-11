@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../../src/server.js';
-import { requireConnection } from '../../src/connections.js';
+import { requireConnection, saveConnection } from '../../src/connections.js';
 import type { Job } from '../../src/store.js';
 
 test('dashboard filters completed opportunities, pages both lists, persists detailed scope and renders contact provenance', async () => {
@@ -206,6 +206,96 @@ test('batched connection checks preserve waiting form and profile isolation and 
     const still = await fetch(app.origin + '/api/state').then((r) => r.json());
     assert.equal(still.connections.find((c: any) => c.id === 'naver').state, 'signed_in_visible');
     assert.equal((await post('/api/connections/check', { ids: [] })).status, 400);
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Google search notices stay out of attention and blocked form login offers direct participation without a login loop', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-google-attention-')),
+    app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  const ui = await chromium.launch(),
+    page = await ui.newPage();
+  try {
+    const at = new Date().toISOString();
+    const j: Job = {
+      id: 'fixture-search',
+      kind: 'discover',
+      goal: '가상 탐색',
+      provider: { kind: 'api', model: 'fixture' },
+      status: 'paused',
+      createdAt: at,
+      updatedAt: at,
+      steps: 1,
+      maxSteps: 10,
+      candidateLimit: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      note: '가상 출처 소진',
+      uncertain: false,
+      allowedOrigins: [],
+      approvedTexts: [],
+      history: [],
+    };
+    app.store.saveJob(j);
+    requireConnection(
+      app.store,
+      'https://www.google.com/sorry/index',
+      'chromium',
+      '탐색 인증',
+      j.id,
+    );
+    saveConnection(app.store, 'chromium', {
+      service: 'google',
+      state: 'blocked',
+      message: '가상 로그인 거부',
+    });
+    await page.goto(app.origin);
+    await page.locator('#site-connections .connection-card').first().waitFor();
+    assert.equal(await page.locator('#connection-attention h3').count(), 0);
+    const google = page
+      .locator('#site-connections .connection-card')
+      .filter({ hasText: 'Google · Forms' });
+    assert.equal(await google.locator('[data-login]').count(), 0);
+    assert.match(await google.innerText(), /로그인 상태는 전용 브라우저에 전달되지 않습니다/);
+    const form = 'https://docs.google.com/forms/d/fixture/viewform';
+    const event = app.store.record(
+      {
+        title: '가상 Google 폼 이벤트',
+        organizer: '가상 주최자',
+        entryUrl: form,
+        deadline: '2099-01-01T00:00:00Z',
+        prize: '커피',
+        winners: 5,
+        requirements: ['로그인'],
+        blockers: [],
+        evidenceQuote: '로그인 필요',
+        evidenceKind: 'text',
+        effortMinutes: 2,
+      },
+      form,
+      j.id,
+      'fixture.png',
+    ).event;
+    requireConnection(app.store, form, 'chromium', '폼 응답에 로그인 필요', j.id, event.id);
+    await page.reload();
+    await page.locator('#connection-attention h3').waitFor();
+    assert.match(await page.locator('#connection-attention').innerText(), /가상 Google 폼 이벤트/);
+    assert.equal(await page.locator('#connection-attention [data-login]').count(), 0);
+    let external = '';
+    await page.route('**/api/browser/external', async (route) => {
+      external = route.request().postDataJSON().url;
+      await route.fulfill({ contentType: 'application/json', body: '{"ok":true}' });
+    });
+    const response = page.waitForResponse('**/api/browser/external');
+    await page.locator('#connection-attention [data-external]').click();
+    await response;
+    assert.equal(external, form);
+    assert.equal(app.store.job(j.id)!.status, 'paused');
+    assert.equal(app.store.completedEntries().length, 0);
   } finally {
     await ui.close();
     await app.close();

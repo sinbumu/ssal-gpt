@@ -1015,6 +1015,14 @@ function fillSelection(p) {
 }
 $('selection-policy-form').elements.mode.onchange = () =>
   fillSelection(state.selectionPresets[$('selection-policy-form').elements.mode.value]);
+function connectionActions(c) {
+  if (c.state === 'not_required') return '';
+  return `${c.state === 'blocked' ? '<p class="warning-text">전용 브라우저의 로그인이 거부됐습니다. 같은 로그인 절차를 반복하지 말고 필요한 참여 페이지를 일반 브라우저에서 직접 열 수 있습니다.</p>' : ''}
+    <div class="inline">${c.state === 'blocked' ? '' : `<button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>열기 · 직접 로그인</button>`}
+    ${c.id === 'google' || c.state === 'blocked' ? `<button data-external="${esc(c.url)}">일반 브라우저에서 직접 열기</button>` : ''}
+    <button data-check-site="${esc(c.id)}" ${state.busy || state.browser?.engine === 'connected' ? 'disabled' : ''}>상태 확인</button></div>
+    ${c.id === 'google' || c.state === 'blocked' ? '<p class="hint">일반 브라우저는 직접 참여용입니다. 그곳의 로그인 상태는 전용 브라우저에 전달되지 않습니다.</p>' : ''}`;
+}
 function renderConnections() {
   const labels = {
     unknown: '미확인',
@@ -1028,20 +1036,23 @@ function renderConnections() {
   $('site-connections').innerHTML = rows
     .map(
       (c) =>
-        `<article class="connection-card"><div class="card-top"><strong>${esc(c.name)}</strong><span class="pill">${esc(c.stale ? '재확인 필요' : labels[c.state] || '미확인')}</span></div><p class="hint">${esc(c.note)}</p><p>마지막 확인: ${c.checkedAt ? esc(new Date(c.checkedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : '아직 확인하지 않음'}</p>${c.message ? `<p class="hint">${esc(c.message)}</p>` : ''}<div class="inline">${c.state !== 'not_required' ? `<button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>열기 · 직접 로그인</button><button data-check-site="${esc(c.id)}" ${state.busy || state.browser?.engine === 'connected' ? 'disabled' : ''}>상태 확인</button>` : ''}</div></article>`,
+        `<article class="connection-card"><div class="card-top"><strong>${esc(c.name)}</strong><span class="pill">${esc(c.stale ? '재확인 필요' : labels[c.state] || '미확인')}</span></div><p class="hint">${esc(c.note)}</p><p>마지막 확인: ${c.checkedAt ? esc(new Date(c.checkedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : '아직 확인하지 않음'}</p>${c.message ? `<p class="hint">${esc(c.message)}</p>` : ''}${connectionActions(c)}</article>`,
     )
     .join('');
   const needed = rows.filter((c) => c.requiredBy.length);
   $('connection-attention').innerHTML = needed.length
-    ? `<section class="panel connection-inbox"><h3>필요한 연결 · ${needed.length}개 사이트</h3><p>후보별 연결 요구를 모았습니다. 로그인은 직접 진행하고 상태를 재확인하세요. 확인 후 새 후보는 수집한 기회에서 응모 준비를, 진행 중 작업은 현재 화면에서 재개를 선택하세요.</p>${needed
+    ? `<section class="panel connection-inbox"><h3>필요한 연결 · ${needed.length}개 사이트</h3><p>선택한 후보·진행 중 작업에 필요한 연결을 모았습니다. 전용 브라우저에서 연결을 마치면 상태를 재확인하세요. 로그인 거부 시 일반 브라우저는 직접 참여용이며 자동 응모로 이어지지 않습니다.</p>${needed
         .map(
           (c) =>
             `<article><strong>${esc(c.name)}</strong><ul>${c.requiredBy
               .slice(0, 10)
-              .map((n) => `<li>${esc(n.title)} · ${esc(n.reason)}</li>`)
+              .map(
+                (n) =>
+                  `<li>${esc(n.title)} · ${esc(n.reason)}${c.state === 'blocked' || c.id === 'google' ? `<br><button data-external="${esc(n.targetUrl || c.url)}">참여 페이지를 일반 브라우저에서 직접 열기</button>` : ''}</li>`,
+              )
               .join(
                 '',
-              )}</ul><button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>${esc(c.name)} 열기 · 로그인</button></article>`,
+              )}</ul>${c.state === 'blocked' ? '<p class="warning-text">전용 브라우저 로그인 거부 · 일반 브라우저의 로그인 상태는 자동 공유되지 않습니다.</p>' : `<button data-login="${esc(c.url)}" ${state.busy ? 'disabled' : ''}>${esc(c.name)} 열기 · 로그인</button>`}</article>`,
         )
         .join(
           '',

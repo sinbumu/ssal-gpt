@@ -308,15 +308,8 @@ export class Runner {
         !signal.aborted &&
         !job.uncertain
       ) {
-        requireConnection(
-          this.store,
-          url,
-          this.browser.profileKey(),
-          '탐색 중 로그인 또는 추가 인증이 필요한 화면을 확인했습니다.',
-          job.id,
-        );
-        const visible = await this.browser.connectionStatus().catch(() => undefined);
-        if (visible) saveConnection(this.store, this.browser.profileKey(), visible, url);
+        // An authentication wall on a discarded discovery source is not an entry login need.
+        // Selected candidates register their own evidenced requirements after recording.
         const engine = searchLocation(url)?.engine;
         if (engine)
           discoveryState(job).blockedEngines = [
@@ -327,7 +320,17 @@ export class Runner {
           url,
           '로그인 또는 추가 인증이 필요한 출처입니다. 인증을 우회하지 않고 제외합니다.',
         );
-        await this.redirectDiscovery(job, nextDiscoveryRoute(job, undefined, engine), signal);
+        const route = nextDiscoveryRoute(job, undefined, engine);
+        const readable = [job.currentUrl, ...(job.visitedUrls || []).toReversed()].find((raw) => {
+          if (!raw || raw === url || excludedSource(job, raw)) return false;
+          const priorEngine = searchLocation(raw)?.engine;
+          return !priorEngine || !discoveryState(job).blockedEngines.includes(priorEngine);
+        });
+        if (!route && readable && discoveryState(job).blockedEngines.length < 2) {
+          await this.redirectDiscovery(job, undefined, signal, true);
+          // Replanning sees a previously read public page, never the challenge or login screen.
+          await this.browser.navigate(readable);
+        } else await this.redirectDiscovery(job, route, signal);
         return this.snapshot(job, signal);
       } else throw error;
     }
@@ -980,6 +983,7 @@ export class Runner {
       }
     } catch (error) {
       if (
+        job.kind !== 'discover' &&
         error instanceof ServiceError &&
         [
           'needs_login_manual',

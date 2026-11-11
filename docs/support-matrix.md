@@ -90,3 +90,5 @@ OAuth 토큰은 OS 자격증명 저장소 또는 보호된 로컬 비밀정보 �
 
 
 2026-11-11 연결 관리: Instagram·Naver·Google의 기존 화면 판별을 프로필별 상태·마지막 확인 기록과 묶음 확인에 연결했다. 지원하지 않는 사이트는 미확인으로 유지한다. 새 인증 방식을 구현하거나 Google 브라우저 거부를 우회하지 않는다. [Google 로그인 제한](https://support.google.com/accounts/answer/7675428?hl=ko), [Forms의 1회 응답 제한](https://support.google.com/docs/answer/2839588?hl=en-LI), [파일 업로드 로그인](https://support.google.com/docs/answer/15473134?hl=en-en), [모아폼 응답자 비로그인 안내](https://help.moaform.com/hc/ko/articles/900005549763)를 확인했다. Google 연결 버튼·진단이 Google Forms 실서비스 제출 지원 검증을 대신하지 않는다.
+
+2026-11-11 직접 운영 수정: Google 검색의 추가 인증은 해당 출처를 제외·전환할 사유이며 Google Forms 로그인 요청으로 등록하지 않는다. 실제 후보가 요구하는 로그인은 유지한다. Google 공식 로그인 제한 문서를 다시 확인했으며 자동화로 제어되는 브라우저가 거부될 수 있다. 거부 상태에는 같은 로그인 버튼을 반복 노출하지 않고 후보별 일반 브라우저 직접 참여를 제공한다. 두 브라우저의 세션은 공유되지 않으며 이 경로는 자동 응모가 아니다.

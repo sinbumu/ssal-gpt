@@ -4,21 +4,62 @@ import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
 import type { ModelClient } from './model.js';
 import { collectEvidence, type SourceEvidence } from './evidence.js';
-import type { Dialog, Response } from 'playwright';
+import type { Dialog, Request, Response } from 'playwright';
 import { maskPrivateText } from './private-text.js';
 
-// Record a native alert only after the exact approved form destination returned
-// a successful POST response. Reading a dialog never accepts a confirm/prompt.
+// Bind native alerts to the approved form POST, or to one same-origin script
+// POST carrying the approved text fields. Never accept a confirm/prompt.
 export function watchSubmissionDialogs(
   store: Store,
   browser: Browser,
   job: Job,
   destination: string,
+  ajaxValues?: string[],
 ) {
   const page = browser.page!;
   const intentHash = hash(job.intent);
   const origin = new URL(job.intent!.url).origin;
   let responseAt = 0;
+  let responseUrl = destination;
+  const requests = new Set<Request>();
+  const values = [...new Set(ajaxValues?.filter((v) => v.trim().length > 0) || [])];
+  const request = (r: Request) => {
+    if (
+      r.method() !== 'POST' ||
+      new URL(r.url()).origin !== origin ||
+      browser.ownerJobId !== job.id ||
+      !job.uncertain ||
+      hash(job.intent) !== intentHash
+    )
+      return;
+    if (r.isNavigationRequest() && r.url() === destination) {
+      requests.add(r);
+      return;
+    }
+    // A script button has no declared form action. Bind only a main-frame
+    // XHR/fetch carrying ALL approved text values, not an unrelated analytics
+    // response or a page's claim that it submitted. Payload stays in memory.
+    if (
+      values.length < 2 ||
+      !values.some((v) => v.length >= 3) ||
+      r.frame() !== page.mainFrame() ||
+      !['xhr', 'fetch'].includes(r.resourceType())
+    )
+      return;
+    const body = r.postData() || '';
+    let parts: string[] = [];
+    try {
+      if (r.headers()['content-type']?.includes('application/json')) {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+          parts = Object.values(parsed).filter((v): v is string => typeof v === 'string');
+      } else if (r.headers()['content-type']?.includes('application/x-www-form-urlencoded'))
+        parts = [...new URLSearchParams(body).values()];
+    } catch {
+      return;
+    }
+    if (values.every((v) => parts.some((part) => part.includes(v)))) requests.add(r);
+  };
   let dialogSeen = false;
   let wake: (() => void) | undefined;
   const response = (r: Response) => {
@@ -26,14 +67,15 @@ export function watchSubmissionDialogs(
       browser.ownerJobId === job.id &&
       job.uncertain &&
       hash(job.intent) === intentHash &&
-      r.request().method() === 'POST' &&
-      r.request().isNavigationRequest() &&
-      r.url() === destination &&
+      requests.has(r.request()) &&
+      requests.size === 1 &&
       new URL(r.url()).origin === origin &&
       r.status() >= 200 &&
       r.status() < 300
-    )
+    ) {
       responseAt = Date.now();
+      responseUrl = r.url();
+    }
   };
   const dialog = (d: Dialog) => {
     if (
@@ -44,6 +86,7 @@ export function watchSubmissionDialogs(
       job.intent?.kind !== 'submission' ||
       hash(job.intent) !== intentHash ||
       !responseAt ||
+      requests.size !== 1 ||
       new URL(page.url()).origin !== origin ||
       page.frames().some((f) => {
         const url = f.url();
@@ -60,7 +103,7 @@ export function watchSubmissionDialogs(
       {
         text: maskPrivateText(d.message(), secrets).slice(0, 3000),
         url: job.intent.url,
-        responseUrl: destination,
+        responseUrl,
         responseAt,
         observedAt: Date.now(),
         intentHash,
@@ -70,6 +113,7 @@ export function watchSubmissionDialogs(
     dialogSeen = true;
     wake?.();
   };
+  page.on('request', request);
   page.on('response', response);
   page.on('dialog', dialog);
   return {
@@ -91,6 +135,7 @@ export function watchSubmissionDialogs(
     },
     close() {
       page.off('response', response);
+      page.off('request', request);
       page.off('dialog', dialog);
       wake?.();
     },

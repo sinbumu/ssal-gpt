@@ -173,7 +173,10 @@ test('adaptive consent adds bounded non-profile items only with full-notice low-
 });
 test('optional refusal, required skip and changed notices preserve distinct outcomes', () => {
   const s = setup('routine');
-  assert.deepEqual(decideConsent({ ...consentQ(), required: false }, s).answer, ['no']);
+  assert.deepEqual(
+    decideConsent({ ...consentQ(), label: '선택 개인정보 동의', required: false }, s).answer,
+    ['no'],
+  );
   s.policy.consent.blockedRequired = 'skip';
   assert.equal(decideConsent(consentQ(notice('이름', '이벤트 광고 안내')), s).decision, 'skip');
   const old = consentQ();
@@ -186,4 +189,15 @@ test('optional refusal, required skip and changed notices preserve distinct outc
     'ask',
     'missing notice is never guessed',
   );
+});
+test('an absent HTML required attribute never makes a consent optional', () => {
+  const s = setup('adaptive');
+  const q = {
+    ...consentQ(),
+    label: '상품 발송을 위한 개인정보 제공에 동의합니다.',
+    description: '',
+    required: false,
+  };
+  assert.equal(decideConsent(q, s).decision, 'ask');
+  assert.equal(decideConsent({ ...q, label: '선택 마케팅 동의' }, s).decision, 'decline');
 });

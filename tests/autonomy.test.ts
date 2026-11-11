@@ -227,6 +227,15 @@ test('shipping profile separates region, base, detail and postal code; ambiguous
       label,
     );
   a.profile.postalCode = '01234';
+  const address = q('주소', 'text');
+  const consent = q('상품 발송을 위한 개인정보 제공에 동의합니다.', 'checkbox');
+  assert.deepEqual(resolveAnswer(address, undefined, a, [], '', [address, consent]).answer, [
+    '가상도 예시시 테스트로 10, 101호',
+  ]);
+  assert.equal(
+    resolveAnswer(q('친구 주소', 'text'), undefined, a, [], '', [consent]).answer,
+    undefined,
+  );
   assert.deepEqual(resolveAnswer(q('우편번호', 'text'), undefined, a, [], '').answer, ['01234']);
   a.profile.email = 'fixture@example.invalid';
   assert.deepEqual(resolveAnswer(q('이메일 주소', 'text'), undefined, a, [], '').answer, [

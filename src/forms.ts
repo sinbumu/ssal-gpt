@@ -185,6 +185,38 @@ export async function inspectForm(page: Page) {
       const heading = fieldset
         ?.querySelector('legend,h1,h2,h3,h4,[role=heading],.js-question-content')
         ?.textContent?.trim();
+      // Plain HTML often groups a question in a div instead of a fieldset.
+      // Use only a small visible container with this one control, never the
+      // page-wide text (which can mix separate questions and private values).
+      const localBlock = !fieldset && el.parentElement;
+      const localText =
+        localBlock &&
+        !localBlock.matches('body,html,main,form') &&
+        localBlock.querySelectorAll('input:not([type=hidden]),textarea,select').length === 1 &&
+        helpers.visible(localBlock)
+          ? localBlock.innerText.trim().slice(0, 3000)
+          : '';
+      let nearbyConsent = '';
+      if (kind === 'checkbox' && group.length === 1 && /동의|consent/i.test(helpers.label(el))) {
+        let block = el.parentElement;
+        for (let depth = 0; block && depth < 3; depth++, block = block.parentElement) {
+          if (
+            block.matches('body,html,main,form') ||
+            block.querySelectorAll('input:not([type=hidden]),textarea,select').length !== 1
+          )
+            break;
+          const previous = block.previousElementSibling;
+          if (
+            previous instanceof HTMLElement &&
+            helpers.visible(previous) &&
+            !previous.querySelector('input,textarea,select,button') &&
+            /개인정보.{0,20}(?:수집|이용)|privacy|personal information/i.test(previous.innerText)
+          ) {
+            nearbyConsent = previous.innerText.slice(0, 3000);
+            break;
+          }
+        }
+      }
       const questionLabel = (
         (kind === 'text' &&
         fieldset?.matches('fieldset') &&
@@ -208,6 +240,8 @@ export async function inspectForm(page: Page) {
         label: questionLabel,
         description: [
           describedBy,
+          localText && localText !== helpers.label(el) ? localText : '',
+          nearbyConsent,
           el.getAttribute('title') || '',
           linkedConsent?.element === el ? linkedConsent.text : '',
           linkedConsent &&
@@ -246,6 +280,9 @@ export async function inspectForm(page: Page) {
             /동의를\s*거부할\s*경우[\s\S]{0,120}(?:이용|참여|응모)[\s\S]{0,60}(?:없|불가|제한)/.test(
               linkedConsent.text,
             )) ||
+          /동의하지\s*않을\s*경우[\s\S]{0,80}(?:추첨|참여|응모)[\s\S]{0,40}(?:제외|불가|제한)/.test(
+            nearbyConsent,
+          ) ||
           /답변\s*필수/.test(questionLabel),
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
         options,
@@ -396,7 +433,7 @@ export async function inspectForm(page: Page) {
           b.visible &&
           !b.disabled &&
           (['submit', 'image'].includes(b.type) ||
-            /^(다음|next|continue|제출|응모하기|submit)$/i.test(b.label)),
+            /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label)),
       );
     return { groups, buttons, forms: forms.map((f) => ({ action: f.action, method: f.method })) };
   });
@@ -433,6 +470,8 @@ export async function inspectForm(page: Page) {
       options,
     };
   });
+  if (new Set(questions.map((q) => q.signature)).size !== questions.length)
+    throw new ServiceError('ambiguous_form_questions');
   if (new Set(raw.groups.map((g) => g.form)).size > 1)
     throw new ServiceError('multiple_forms_require_manual_selection');
   const buttons = raw.buttons.map((b) => ({

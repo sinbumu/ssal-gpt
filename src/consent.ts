@@ -125,6 +125,15 @@ function consentAnswer(q: Question, accept: boolean) {
   if (options.length === 1) return [options[0]!.id];
   if (!accept && !q.required && q.kind === 'checkbox') return [];
 }
+export function optionalConsent(q: Question) {
+  // Missing HTML `required` is not evidence that the organizer allows refusal.
+  return (
+    !q.required &&
+    /^(?:\s|\(|\[)*선택(?:사항|동의)?(?=\s|[)\]:.]|$)|[([]\s*선택\s*[)\]]|^\s*(?:\(|\[)?optional\b/i.test(
+      q.label,
+    )
+  );
+}
 export function decideConsent(
   q: Question,
   state: AutonomyState,
@@ -134,7 +143,7 @@ export function decideConsent(
   const ask = (reason: string): ConsentDecision => ({ decision: 'ask', reason });
   if (policy.mode === 'manual') return ask('모든 동의를 직접 확인하도록 설정되어 있습니다.');
   const blocked = (reason: string): ConsentDecision => {
-    if (!q.required && policy.declineOptional) {
+    if (optionalConsent(q) && policy.declineOptional) {
       const answer = consentAnswer(q, false);
       return answer
         ? { decision: 'decline', reason, answer }
@@ -142,7 +151,8 @@ export function decideConsent(
     }
     return { decision: policy.blockedRequired === 'skip' ? 'skip' : 'ask', reason };
   };
-  if (!q.required && policy.declineOptional) return blocked('선택 동의는 거부하도록 위임했습니다.');
+  if (optionalConsent(q) && policy.declineOptional)
+    return blocked('선택 동의는 거부하도록 위임했습니다.');
   const notice = `${q.label}\n${q.description || ''}`;
   if (
     /약관|계약|마케팅|광고|홍보|판매|국외|해외\s*이전|무기한|영구|탈퇴\s*시|철회\s*시|주민등록|여권|신분증|계좌|신용카드|비밀번호|민감정보|건강정보|진료정보|정치|종교|생체|위치정보|초상권|저작권|password|passport|marketing|advertis|credit.?card|bank.account|payment|sensitive|biometric|precise.location|terms|contract|indefinite/i.test(

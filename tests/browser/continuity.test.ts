@@ -396,7 +396,7 @@ test('optional refusal and required skip never accidentally transmit an out-of-s
         if (r.request().method() === 'POST') posts++;
         return r.fulfill({
           contentType: 'text/html; charset=utf-8',
-          body: `<form method="post"><label>이름<input name="n" required></label><fieldset><legend>마케팅 동의</legend><label><input name="m" type="checkbox" ${required ? 'required' : ''}>동의합니다</label></fieldset><button>제출</button></form>`,
+          body: `<form method="post"><label>이름<input name="n" required></label><fieldset><legend>${required ? '필수' : '선택'} 마케팅 동의</legend><label><input name="m" type="checkbox" ${required ? 'required' : ''}>동의합니다</label></fieldset><button>제출</button></form>`,
         });
       });
       app.runner.model.decide = async (_p, _i, raw: any) => ({

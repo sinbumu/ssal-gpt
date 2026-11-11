@@ -246,7 +246,16 @@ function shippingField(q: Question, questions: Question[]) {
   if (/상세주소|나머지주소|동[·/\s]?호수|addressline2|apartment|suite/i.test(label))
     return 'shippingAddressDetail';
   if (/기본주소|도로명주소|지번주소|addressline1/i.test(label)) return 'shippingAddress';
-  if (/배송|경품.*(?:발송|수령)|shipping|delivery/i.test(q.description || ''))
+  const delivery = /배송|(?:경품|상품|물품).*?(?:발송|수령)|shipping|delivery/i;
+  // Questions come from one inspected form. Its explicit consent notice may
+  // explain a bare address field, but does not itself authorize that consent.
+  if (
+    delivery.test(q.description || '') ||
+    questions.some(
+      (other) =>
+        consentQuestion(other) && delivery.test(`${other.label}\n${other.description || ''}`),
+    )
+  )
     return otherDetail ? 'shippingAddress' : 'full';
   return 'review';
 }
@@ -259,6 +268,9 @@ export function verificationQuestion(q: Question) {
   );
 }
 export function validateAnswer(q: Question, answer: string[]): string[] | undefined {
+  // Refusal of a mandatory, single-checkbox consent is a valid user decision;
+  // the runner stops participation instead of forcing an affirmative answer.
+  if (q.kind === 'checkbox' && consentQuestion(q) && answer.length === 0) return [];
   if (q.kind === 'file')
     return (!q.required && answer.length === 0) ||
       (answer.length === 1 && /^(asset|drive):[a-f0-9-]{36}$/.test(answer[0]!))

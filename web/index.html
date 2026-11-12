@@ -639,6 +639,19 @@
                   required
               /></label>
             </div>
+            <label
+              >탐색 자동 출처 전환 한도<input
+                name="discoverySwitches"
+                type="number"
+                min="1"
+                max="100"
+                required
+            /></label>
+            <p class="hint">
+              반복 검색이나 부적합한 출처에서 앱이 다른 출처를 자동으로 고르는 횟수입니다. 공급자의
+              잔여 사용량과 별개인 앱 제한이며, 새 작업·재개부터 적용합니다. 이미 사용한 횟수는
+              유지하고 탐색 AI 호출·하루 사용량 한도도 함께 적용합니다.
+            </p>
             <details>
               <summary>API 추정 비용 제한</summary>
               <p class="hint">

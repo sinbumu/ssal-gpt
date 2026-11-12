@@ -837,3 +837,61 @@ test('a blocked read with no fresh links replans from a fresh public observation
       }
     });
 });
+
+test('dashboard operations increase resumes the same exhausted discovery with counters and exclusions retained', async () =>
+  fixture(async (app, visits) => {
+    app.scheduler.stop();
+    const query = '무료 이벤트',
+      j = job(searchUrl(query));
+    j.steps = 3;
+    const d = discoveryState(j);
+    d.switches = 6;
+    d.searches = [{ engine: 'naver', query, step: 0 }];
+    rejectSource(j, 'https://example.org/expired', '이미 제외한 행사');
+    const priorSelection = app.store.settings('selectionPolicy', {});
+    app.runner.model.decide = model((ctx) =>
+      ctx.observation.url.includes('google.com/search')
+        ? { action: 'done' }
+        : { action: 'search', text: query, searchEngine: 'naver' },
+    ).decide;
+    app.store.saveJob(j);
+    async function post(path: string, body: unknown) {
+      const s = await fetch(app.origin + '/api/state').then((r) => r.json());
+      const r = await fetch(app.origin + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': s.csrf },
+        body: JSON.stringify(body),
+      });
+      assert.equal(r.status, 200, await r.text());
+    }
+    await post(`/api/jobs/${j.id}/resume`, {});
+    await app.runner.finished();
+    let result = app.store.job(j.id)!;
+    assert.equal(result.status, 'paused');
+    assert.equal(result.steps, 4);
+    assert.match(result.stopReason!.nextAction, /운영탭/);
+    assert.equal(result.discovery!.switches, 6);
+    const s = await fetch(app.origin + '/api/state').then((r) => r.json());
+    await post('/api/operations', { ...s.operations, discoverySwitches: 20 });
+    await post(`/api/jobs/${j.id}/resume`, {});
+    await app.runner.finished();
+    result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(result.maxSteps, 10);
+    assert.equal(result.steps, 6);
+    assert.equal(result.discovery!.switches, 7);
+    assert.equal(result.discovery!.switchLimit, 20);
+    assert.ok(excludedSource(result, 'https://example.org/expired'));
+    assert.ok(
+      result.history.some(
+        (h) => h.action === 'discovery_limit_updated' && h.reason.includes('6→20'),
+      ),
+    );
+    assert.equal(visits.at(-1), searchUrl(query, 'google'));
+    assert.deepEqual(app.store.settings('selectionPolicy', {}), priorSelection);
+    const updated = app.store.settings<any>('operations', {});
+    assert.deepEqual(
+      { ...updated, discoverySwitches: s.operations.discoverySwitches },
+      s.operations,
+    );
+  }));

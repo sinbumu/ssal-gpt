@@ -19,11 +19,19 @@ test('dashboard saves operations and schedules with visible controls and no Java
     await page.goto(app.origin);
     await page.locator('#operations-form [name=dailyCalls]').fill('15');
     await page.locator('#operations-form [name=dailyTokens]').fill('250000');
+    await page.locator('#operations-form [name=discoverySwitches]').fill('20');
     await page.locator('#operations-form button[type=submit],#operations-form button').click();
     await page.waitForFunction(() =>
       document.querySelector('#toast')?.textContent?.includes('운영 설정을 저장'),
     );
     assert.equal(app.store.settings<any>('operations', {}).dailyCalls, 15);
+    assert.equal(app.store.settings<any>('operations', {}).discoverySwitches, 20);
+    await page.reload();
+    await page.waitForFunction(
+      () =>
+        (document.querySelector('#operations-form [name=discoverySwitches]') as HTMLInputElement)
+          ?.value === '20',
+    );
     await page.locator('#schedule-form [name=name]').fill('합성 예약');
     await page.locator('#schedule-form [name=sourceUrl]').fill(app.origin + '/demo/event');
     await page.locator('#schedule-form button').click();

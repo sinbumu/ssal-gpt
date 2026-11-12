@@ -4,7 +4,7 @@ import { canonicalUrl, type Job } from './store.js';
 import { searchUrl } from './evidence.js';
 
 type Engine = 'naver' | 'google';
-export const MAX_DISCOVERY_SWITCHES = 6;
+export const DEFAULT_DISCOVERY_SWITCHES = 6;
 export type DiscoveryState = {
   searches: { engine: Engine; query: string; step: number }[];
   visited: string[];
@@ -13,6 +13,7 @@ export type DiscoveryState = {
   blockedEngines: Engine[];
   lastProgressStep: number;
   switches: number;
+  switchLimit?: number;
   readCounts?: Record<string, number>;
   navigationCounts?: Record<string, number>;
   replans?: number;
@@ -39,6 +40,12 @@ export function searchLocation(raw: string) {
     return { engine: 'naver' as const, query: u.searchParams.get('query') || '' };
   if (/^(www\.)?google\.[a-z.]+$/.test(u.hostname) && /^\/(search|sorry)/.test(u.pathname))
     return { engine: 'google' as const, query: u.searchParams.get('q') || '' };
+}
+export function discoverySwitchLimit(job: Job) {
+  const value = job.discovery?.switchLimit;
+  return Number.isInteger(value) && value! >= 1 && value! <= 100
+    ? value!
+    : DEFAULT_DISCOVERY_SWITCHES;
 }
 // Navigation wrappers and tracking parameters are not new source material.
 export function discoveryPageKey(raw: string) {
@@ -420,6 +427,7 @@ export function discoveryContext(job: Job) {
     rejectedSources: s.rejected.slice(-12),
     freshLinks: s.frontier.slice(0, 16),
     switches: s.switches,
+    switchLimit: discoverySwitchLimit(job),
     replans: s.replans || 0,
     needsFreshSearch: !!s.needsFreshSearch,
     remainingDecisions: job.maxSteps - job.steps,
@@ -435,7 +443,7 @@ export function nextDiscoveryRoute(
   from?: Engine,
 ): DiscoveryRoute | undefined {
   const s = discoveryState(job);
-  if (s.switches >= MAX_DISCOVERY_SWITCHES || job.steps >= job.maxSteps) return;
+  if (s.switches >= discoverySwitchLimit(job) || job.steps >= job.maxSteps) return;
   const current = from || job.searchEngine || 'naver';
   const relevantForm =
     formDiscovery(job) &&

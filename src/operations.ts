@@ -29,6 +29,7 @@ export const OperationsSchema = z.object({
     .max(20)
     .default([]),
   maxPending: z.number().int().min(1).max(30).default(5),
+  discoverySwitches: z.number().int().min(1).max(100).default(6),
 });
 export const ScheduleSchema = z.object({
   id: z.string().uuid().optional(),

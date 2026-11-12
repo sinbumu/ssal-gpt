@@ -32,7 +32,7 @@ import {
   rejectSource,
   searchLocation,
   type DiscoveryRoute,
-  MAX_DISCOVERY_SWITCHES,
+  discoverySwitchLimit,
   selectedDiscoveryLink,
   discoveryPageKey,
   noteDiscoveryRead,
@@ -197,6 +197,21 @@ export class Runner {
       throw new ServiceError('entry_owned_by_another_job');
     if ((job.browserEngine || 'chromium') !== this.browser.engine)
       throw new ServiceError('job_browser_profile_mismatch');
+    if (job.kind === 'discover') {
+      const prior = discoverySwitchLimit(job),
+        limit = operations(this.store).discoverySwitches;
+      const state = discoveryState(job);
+      state.switchLimit = limit;
+      if (job.steps > 0 && prior !== limit) {
+        const reason = `운영 설정에 따라 출처 전환 한도를 ${prior}→${limit}회로 적용합니다. 이미 사용한 ${state.switches}회와 판단 횟수는 유지합니다.`;
+        job.history.push({
+          action: 'discovery_limit_updated',
+          reason,
+          url: job.currentUrl || job.startUrl,
+        });
+        this.store.note(job.id, reason);
+      }
+    }
     this.browser.setManual(false);
     this.controller = new AbortController();
     this.browser.observationContext = {
@@ -335,7 +350,8 @@ export class Runner {
     if (job.retryEventId) throw new ServiceError('retry_source_unavailable');
     const state = discoveryState(job);
     if (job.steps >= job.maxSteps) throw new ServiceError('discovery_decision_limit');
-    if (state.switches >= MAX_DISCOVERY_SWITCHES) throw new ServiceError('discovery_switch_limit');
+    if (state.switches >= discoverySwitchLimit(job))
+      throw new ServiceError('discovery_switch_limit');
     if (!route) {
       if (!canReplan || (state.replans || 0) >= 2)
         throw new ServiceError('discovery_no_alternative');
@@ -1131,7 +1147,7 @@ export class Runner {
         selection_call_limit: '선정 설정의 이 작업 AI 호출 상한에 도달했습니다.',
         selection_token_limit: '선정 설정의 이 작업 보고 토큰 상한에 도달했습니다.',
         discovery_decision_limit: '판단 한도에 도달해 탐색을 보관합니다.',
-        discovery_switch_limit: '자동 출처 전환 6회 한도에 도달해 탐색을 보관합니다.',
+        discovery_switch_limit: `자동 출처 전환 ${discoverySwitchLimit(job)}회 한도에 도달해 탐색을 보관합니다.`,
         discovery_no_alternative: `현재 읽을 수 있는 관측 출처를 찾지 못해 탐색을 보관합니다. 새 검색 재계획 ${job.discovery?.replans || 0}/2회.`,
       };
       const exhausted = error instanceof ServiceError ? discoveryStops[error.code] : undefined;
@@ -1144,6 +1160,8 @@ export class Runner {
             : executionPhase,
         );
         if (exhausted) job.stopReason.reason = exhausted;
+        if (error instanceof ServiceError && error.code === 'discovery_switch_limit')
+          job.stopReason.nextAction = `운영탭의 ‘탐색 자동 출처 전환 한도’를 조정한 뒤 재개할 수 있습니다. 판단은 ${job.steps}/${job.maxSteps}회 사용했으며 하루 사용량 한도도 계속 적용됩니다.`;
       }
       job.status = job.uncertain
         ? 'submission_unknown'

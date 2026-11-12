@@ -16,6 +16,15 @@ import {
 } from '../src/operations.js';
 import type { Runner } from '../src/runner.js';
 
+test('source transition setting is independent of daily usage and validates its range', () => {
+  assert.equal(OperationsSchema.parse({}).discoverySwitches, 6);
+  const old = OperationsSchema.parse({ dailyCalls: 123, dailyTokens: 456789 });
+  const changed = OperationsSchema.parse({ ...old, discoverySwitches: 20 });
+  assert.deepEqual({ ...changed, discoverySwitches: old.discoverySwitches }, old);
+  for (const discoverySwitches of [0, 101, 1.5])
+    assert.equal(OperationsSchema.safeParse({ discoverySwitches }).success, false);
+});
+
 test('daily metering covers failures, blocks next inference, persists and uses Seoul midnight', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-budget-'));
   let store = new Store(dir);

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   discoveryState,
+  discoverySwitchLimit,
   guardDiscoverySearch,
   nextDiscoveryRoute,
   noteSearch,
@@ -101,6 +102,24 @@ test('source exclusion cannot replace consent or entry actions in apply and unce
   j.kind = 'discover';
   j.uncertain = true;
   assert.equal(actionPolicy(j, s, o), 'block');
+});
+
+test('configured source limit allows remaining transitions without resetting counts or decision cap', () => {
+  const j = job(),
+    s = discoveryState(j);
+  s.switches = 6;
+  assert.equal(discoverySwitchLimit(j), 6);
+  assert.equal(nextDiscoveryRoute(j, '새 설문'), undefined);
+  s.switchLimit = 20;
+  assert.ok(nextDiscoveryRoute(j, '새 설문'));
+  assert.equal(s.switches, 6);
+  j.steps = j.maxSteps;
+  assert.equal(nextDiscoveryRoute(j, '새 설문'), undefined);
+  j.steps = 0;
+  s.switches = 20;
+  assert.equal(nextDiscoveryRoute(j, '새 설문'), undefined);
+  s.switchLimit = 101;
+  assert.equal(discoverySwitchLimit(j), 6);
 });
 
 test('explicitly restricted sources exclude alternate pages on that host, not other organizers', () => {

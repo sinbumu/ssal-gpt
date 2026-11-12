@@ -96,7 +96,10 @@ export type Job = {
   skippedUrls?: string[];
   searchEngine?: 'google' | 'naver';
   discovery?: DiscoveryState;
-  receiptObservations?: (SourceEvidence & { intentHash: string })[];
+  receiptObservations?: (SourceEvidence & {
+    intentHash: string;
+    googleConfirmation?: import('./google-receipt.js').GoogleConfirmationView;
+  })[];
   receiptDialogs?: {
     text: string;
     url: string;

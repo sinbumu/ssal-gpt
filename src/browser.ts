@@ -23,6 +23,7 @@ import { ServiceError } from './auth.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
 import { isMoaform, moaformSnapshot } from './forms.js';
+import { observeGoogleConfirmation, type GoogleConfirmationView } from './google-receipt.js';
 import {
   inspectInstagram,
   waitForInstagram,
@@ -72,6 +73,7 @@ export type Observation = {
   capturedAt: number;
   revision: number;
   hasResponseFields?: boolean;
+  googleConfirmation?: GoogleConfirmationView;
   instagram?: InstagramView;
 };
 export function privateAddress(address: string) {
@@ -917,8 +919,12 @@ export class Browser {
         );
       }),
     );
+    const confirmation = await observeGoogleConfirmation(page);
+    const googleConfirmation = confirmation
+      ? { ...confirmation, message: maskPrivateText(confirmation.message, secrets) }
+      : undefined;
     const fingerprint = createHash('sha256')
-      .update(JSON.stringify({ url, text, elements }))
+      .update(JSON.stringify({ url, text, elements, googleConfirmation }))
       .digest('hex');
     const observation = {
       id,
@@ -929,6 +935,7 @@ export class Browser {
       ...viewport,
       revision,
       hasResponseFields,
+      googleConfirmation,
       instagram: social ? { ...social, controls: socialRefs } : undefined,
       fingerprint,
       screenshot,

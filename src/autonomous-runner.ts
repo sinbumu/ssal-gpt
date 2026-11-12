@@ -184,7 +184,9 @@ export async function runAutonomous(
           if (await verifyReceipt(store, browser, model, job, signal, true)) return;
           job.status = 'submission_unknown';
           record(
-            job.receiptCheck?.reason || '접수 결과를 확정하지 못했습니다. 재제출하지 않습니다.',
+            googleNextIntent(job)
+              ? '구글폼의 다음 단계 이동을 확인하지 못했습니다. 현재 화면을 보존하며 자동으로 다시 전송하지 않습니다.'
+              : job.receiptCheck?.reason || '접수 결과를 확정하지 못했습니다. 재제출하지 않습니다.',
           );
           break;
         }

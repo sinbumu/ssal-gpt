@@ -95,3 +95,23 @@ test('form parser/input failures are technical, while scoped review and live pag
     'user',
   );
 });
+
+test('unverified Google Next shows a page transition issue instead of final receipt uncertainty', () => {
+  const job = {
+    status: 'submission_unknown',
+    uncertain: true,
+    note: 'unknown',
+    intent: {
+      kind: 'step',
+      providerControl: 'google-next',
+      at: 100,
+      url: 'https://docs.google.com/forms/d/e/fixtureGoogle/viewform',
+      beforeText: '',
+    },
+  } as Job;
+  assert.equal(jobNotice(job)?.code, 'form_step_unverified');
+  assert.equal(jobNotice(job)?.category, 'technical');
+  assert.match(jobNotice(job)!.nextAction, /자동 재전송하지/);
+  job.intent!.kind = 'submission';
+  assert.notEqual(jobNotice(job)?.code, 'form_step_unverified');
+});

@@ -8,7 +8,11 @@ import { createApp } from '../../src/server.js';
 import { createAutonomy, syntheticSettings } from '../../src/autonomy.js';
 import { inspectForm } from '../../src/forms.js';
 import { captureReceipt, watchSubmissionDialogs } from '../../src/receipt.js';
-import { savedGoogleContinuation, restoreGoogleDraft } from '../../src/google-progress.js';
+import {
+  savedGoogleContinuation,
+  restoreGoogleDraft,
+  savedRestoredGoogleContinuation,
+} from '../../src/google-progress.js';
 import type { Job } from '../../src/store.js';
 const url = 'https://docs.google.com/forms/d/e/fixtureGoogle/viewform';
 const target = url.replace('viewform', 'formResponse');
@@ -16,14 +20,14 @@ function form(stage: number) {
   const history = ['0', '0,3', '0,3,7'][stage];
   const key = ['name', 'email', 'phone'][stage];
   const label = ['이름', '이메일', '휴대폰 번호'][stage];
-  return `<title>가상 구글폼</title><form method="post" action="${target}" data-is-first-page="${stage === 0}">
+  return `<title>가상 구글폼</title><form method="post" action="${target}" ${stage === 0 ? 'data-is-first-page="true"' : ''}>
   <input type="hidden" name="pageHistory" value="${history}">
   <label>${label}<input name="${key}" required></label>
   ${stage === 2 ? '<fieldset><legend>개인정보 수집 및 이용 동의</legend><p>전화번호를 경품 발송에 이용하고 발표 후 1주일 보관합니다. 수집자: 가상 주최자</p><label><input type="radio" name="consent" value="yes" required>동의합니다</label><label><input type="radio" name="consent" value="no">동의하지 않습니다</label></fieldset>' : ''}
   ${stage ? '<div role="button">뒤로</div>' : ''}
   <div role="button" jsname="${stage === 2 ? 'final' : 'OCpkoe'}" tabindex="0" onclick="this.closest('form').requestSubmit()">${stage === 2 ? '제출' : '다음'}</div></form>`;
 }
-for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
+for (const scenario of ['fresh', 'legacy-live', 'restart', 'step-capture-migration'] as const)
   test(`Google ${scenario}: native POST Next, branched sections, final review once and one final submission`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssal-google-next-'));
     const app = await createApp({ dir, port: 0, headless: true });
@@ -122,6 +126,7 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
         j.history = [{ action: 'form_batch', reason: 'legacy Next mislabeled final', url }];
         captureReceipt(j, await app.browser.observe(true));
         assert.ok(savedGoogleContinuation(j));
+        assert.equal((await inspectForm(app.browser.page!)).view.googlePage!.first, false);
         // Invalid captures/final actions never unlock an unknown submission.
         for (const mutate of [
           (x: Job) => {
@@ -144,14 +149,60 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
           mutate(x);
           assert.equal(savedGoogleContinuation(x), undefined);
         }
-        if (scenario === 'restart') {
+        if (scenario === 'step-capture-migration') {
+          const prior = j.receiptObservations!.at(-1)!;
+          j.continuations = [
+            {
+              at: Date.now(),
+              screenshot: prior.screenshot,
+              from: url,
+              page: 2,
+              quote: '첫 다음 이동만 복원 · 최종 제출 아님',
+            },
+          ];
+          await app.browser.navigate(url);
+          const firstAgain = await app.browser.observe(true);
+          await app.browser.page!.locator('[name=name]').fill(config.profile.name);
+          j.intent = {
+            at: Date.now(),
+            url,
+            kind: 'step',
+            controlLabel: '다음',
+            providerControl: 'google-next',
+            beforeText: firstAgain.text,
+            googlePage: { history: [0], signatures: first.questions.map((q) => q.signature) },
+          };
+          const secondWatch = await watchSubmissionDialogs(app.store, app.browser, j, target);
+          await app.browser.page!.getByRole('button', { name: '다음', exact: true }).click();
+          await secondWatch.settle(AbortSignal.timeout(10000));
+          secondWatch.close();
+          j.screenshot = (await app.browser.observe(true)).screenshot;
+          delete j.receiptObservations;
+          j.history.push(
+            { action: 'form_draft_restored', reason: 'fixture', url },
+            { action: 'form_batch', reason: 'fixture', url },
+          );
+          j.autonomy!.metrics.recoveries = 1;
+          assert.ok(await savedRestoredGoogleContinuation(app.store, j));
+          const changed = structuredClone(j);
+          changed.screenshot = firstAgain.screenshot;
+          assert.equal(await savedRestoredGoogleContinuation(app.store, changed), undefined);
+          const later = structuredClone(j);
+          later.intent!.googlePage!.history = [0, 3];
+          assert.equal(await savedRestoredGoogleContinuation(app.store, later), undefined);
+        }
+        if (scenario === 'restart' || scenario === 'step-capture-migration') {
           await app.browser.close();
           await app.browser.open();
           await route();
           const missing = structuredClone(j);
           missing.autonomy!.overrides = {};
           assert.equal(await restoreGoogleDraft(app.store, app.browser, missing), false);
-          assert.equal(nextPosts, 1, 'a failed recovery must not transmit anything');
+          assert.equal(
+            nextPosts,
+            scenario === 'step-capture-migration' ? 2 : 1,
+            'a failed recovery must not transmit anything',
+          );
         }
       }
       app.runner.model.decide = (async (_p: unknown, _i: string, ctx: any) => {
@@ -192,9 +243,18 @@ for (const scenario of ['fresh', 'legacy-live', 'restart'] as const)
       assert.equal(current.autonomy!.inbox!.final, undefined, 'Next never opens final approval');
       assert.equal(current.autonomy!.inbox!.items.length, 1);
       assert.equal(finalPosts, 0);
-      assert.equal(nextPosts, scenario === 'restart' ? 3 : 2);
-      assert.equal(current.continuations?.length, scenario === 'restart' ? 3 : 2);
-      assert.equal(current.autonomy!.metrics.recoveries, scenario === 'fresh' ? 0 : 1);
+      assert.equal(
+        nextPosts,
+        scenario === 'step-capture-migration' ? 4 : scenario === 'restart' ? 3 : 2,
+      );
+      assert.equal(
+        current.continuations?.length,
+        scenario === 'step-capture-migration' ? 4 : scenario === 'restart' ? 3 : 2,
+      );
+      assert.equal(
+        current.autonomy!.metrics.recoveries,
+        scenario === 'step-capture-migration' ? 2 : scenario === 'fresh' ? 0 : 1,
+      );
       const pending = current.autonomy!.inbox!;
       await inbox({
         inboxId: pending.id,

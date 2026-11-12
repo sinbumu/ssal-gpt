@@ -388,7 +388,10 @@ export function captureReceipt(job: Job, o: Observation) {
   if (
     !job.uncertain ||
     (job.intent?.kind !== 'submission' &&
-      !(job.intent?.kind === 'step' && job.intent.providerControl === 'naver-next'))
+      !(
+        job.intent?.kind === 'step' &&
+        ['naver-next', 'google-next'].includes(job.intent.providerControl || '')
+      ))
   )
     return;
   const evidence = collectEvidence([], o)[0]!;

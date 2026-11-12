@@ -38,7 +38,11 @@ export async function googleFormState(page: Page) {
     if (paths.length !== 1 || !/^0(?:,\d{1,4}){0,99}$/.test(paths[0]!.value)) return;
     const history = paths[0]!.value.split(',').map(Number);
     const first = form.getAttribute('data-is-first-page');
-    if (!['true', 'false'].includes(first || '') || (first === 'true') !== (history.length === 1))
+    // Google omits this attribute on later sections; it does not emit false.
+    if (
+      (history.length === 1 && first !== 'true') ||
+      (history.length > 1 && first !== null && first !== 'false')
+    )
       return;
     const controls = [...form.querySelectorAll<HTMLElement>('[role=button],button')].filter(
       (b) =>

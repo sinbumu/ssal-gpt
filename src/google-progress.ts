@@ -4,6 +4,8 @@ import { hash } from './autonomy.js';
 import { observedQuote } from './evidence.js';
 import { inspectForm, type FormView } from './forms.js';
 import { googleFormId, googleFormState } from './google-form-dom.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const nextLabel = /^(다음|next)$/i;
 const finalLine = /^(제출|제출하기|submit|send)$/im;
@@ -86,6 +88,45 @@ export function savedGoogleContinuation(job: Job) {
   )
     return;
   return { after };
+}
+
+// Migration for the first adapter revision, which omitted step observations.
+// One restored first-Next only: the newly captured result must be byte-identical
+// to the previously proven second-page screenshot. No visual similarity/AI guess,
+// later-page replay, arbitrary image path or missing file can unlock a draft.
+export async function savedRestoredGoogleContinuation(store: Store, job: Job) {
+  const i = job.intent,
+    prior = job.continuations?.[0];
+  if (
+    !observedNext(job) ||
+    i?.providerControl !== 'google-next' ||
+    JSON.stringify(i.googlePage?.history) !== '[0]' ||
+    job.receiptObservations?.length ||
+    job.continuations?.length !== 1 ||
+    !prior ||
+    prior.page !== 2 ||
+    prior.quote !== '첫 다음 이동만 복원 · 최종 제출 아님' ||
+    prior.from !== i.url ||
+    prior.at >= i.at! ||
+    job.history.filter((h) => h.action === 'form_batch').length !== 2 ||
+    job.history.filter((h) => h.action === 'form_draft_restored').length !== 1 ||
+    !i.url.endsWith('/viewform') ||
+    googleFormId(job.currentUrl || '') !== googleFormId(i.url) ||
+    !job.currentUrl?.endsWith('/formResponse') ||
+    finalLine.test(i.beforeText) ||
+    backLine.test(i.beforeText) ||
+    ![prior.screenshot, job.screenshot].every((s) => /^[a-f0-9-]{36}\.png$/.test(s || ''))
+  )
+    return;
+  try {
+    const [before, after] = await Promise.all(
+      [prior.screenshot, job.screenshot!].map((s) => readFile(join(store.dir, 'evidence', s))),
+    );
+    if (!before!.length || !before!.equals(after!)) return;
+    return { after: { screenshot: job.screenshot!, url: job.currentUrl } };
+  } catch {
+    return;
+  }
 }
 
 function recordContinuation(
@@ -179,7 +220,7 @@ export async function verifyGoogleContinuation(
 }
 
 export async function restoreGoogleDraft(store: Store, browser: Browser, job: Job) {
-  const proof = savedGoogleContinuation(job),
+  const proof = savedGoogleContinuation(job) || (await savedRestoredGoogleContinuation(store, job)),
     page = browser.page;
   if (
     !proof ||

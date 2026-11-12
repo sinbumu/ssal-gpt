@@ -1,9 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { freshReceipt } from '../src/receipt.js';
+import { freshReceipt, captureReceipt } from '../src/receipt.js';
+import type { Observation } from '../src/browser.js';
 import { hash } from '../src/autonomy.js';
 import { completionMessage, receiptLineSafe } from '../src/completion.js';
 import type { Job } from '../src/store.js';
+
+test('Google Next retains its scoped after-screen without treating it as a final receipt', () => {
+  const job = {
+    uncertain: true,
+    intent: {
+      kind: 'step',
+      providerControl: 'google-next',
+      url: 'https://docs.google.com/forms/d/e/fixtureGoogle/viewform',
+      beforeText: '첫 문항',
+      at: 2000,
+    },
+  } as Job;
+  const o = {
+    id: 'screen',
+    url: job.intent!.url.replace('viewform', 'formResponse'),
+    title: '설문',
+    text: '새 필수 문항\n뒤로\n다음',
+    screenshot: 'screen.png',
+    capturedAt: 3000,
+    elements: [],
+  } as unknown as Observation;
+  captureReceipt(job, o);
+  assert.equal(job.receiptObservations?.length, 1);
+  assert.equal(job.receiptObservations![0]!.intentHash, hash(job.intent));
+  assert.equal(freshReceipt(job, job.receiptObservations![0]!, '새 필수 문항'), false);
+});
 
 test('receipt proof is bound to the exact submission, time and origin; old or negative fragments cannot complete it', () => {
   const job = {

@@ -99,6 +99,22 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
 }
 
 export function jobNotice(job: Job): JobNotice | undefined {
+  if (
+    (job.uncertain || job.status === 'submission_unknown') &&
+    job.intent?.kind === 'step' &&
+    job.intent.providerControl === 'google-next'
+  )
+    return {
+      category: 'technical',
+      title: '기술 오류 · 다음 단계 확인 중단',
+      reason:
+        '다음 이동 후 새 문항을 확인하지 못했습니다. 최종 응모의 접수 실패를 뜻하지 않습니다.',
+      nextAction:
+        '현재 브라우저 화면에서 재개하면 페이지 경로와 문항을 다시 확인합니다. 확인 전에는 자동 재전송하지 않습니다.',
+      code: 'form_step_unverified',
+      phase: 'form_navigation',
+      at: job.intent.at,
+    };
   if ((job.uncertain || job.status === 'submission_unknown') && job.receiptCheck?.captureIncomplete)
     return {
       category: 'technical',

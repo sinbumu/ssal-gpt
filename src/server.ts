@@ -22,6 +22,7 @@ import {
   verificationQuestion,
   otherTextCondition,
   textDraftEligible,
+  consentQuestion,
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
 import {
@@ -754,7 +755,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|prepare-drafts|restore-form|delegation|retry-research|archive|unarchive|hold-note|task)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|prepare-drafts|restore-form|review-consent|delegation|retry-research|archive|unarchive|hold-note|task)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -906,6 +907,81 @@ export async function createApp(options: {
           manualNavigation = false;
         }
       }
+      if (action === 'review-consent') {
+        const a = job.autonomy;
+        if (
+          runner.isBusy() ||
+          manualNavigation ||
+          !a ||
+          job.status !== 'stopped' ||
+          job.archivedAt ||
+          !job.note.startsWith('동의 정책에 따라') ||
+          job.uncertain ||
+          job.transmitted ||
+          job.intent ||
+          a.metrics.fields ||
+          a.metrics.batches ||
+          (!a.synthetic && settings(store).revision !== a.revision) ||
+          (job.browserEngine || 'chromium') !== browser.engine
+        )
+          throw new ServiceError('consent_review_unavailable');
+        const url = job.currentUrl || job.startUrl;
+        if (new URL(url).origin !== a.origin) throw new ServiceError('form_origin_outside_grant');
+        manualNavigation = true;
+        try {
+          let page = browser.jobPage(id);
+          if (!page || page.isClosed() || page.url() === 'about:blank') {
+            await browser.selectJob(id);
+            browser.setManual(false);
+            browser.setReadOnlyMode(true);
+            await browser.navigate(url);
+            page = browser.page!;
+          }
+          const { view } = await inspectForm(page);
+          const items = view.questions
+            .filter(
+              (q) =>
+                consentQuestion(q) &&
+                a.consents?.some(
+                  (c) =>
+                    c.signature === q.signature && c.actor === 'user' && c.decision === 'decline',
+                ) &&
+                a.overrides[q.signature]?.length === 0,
+            )
+            .map((q) => ({
+              ...q,
+              category: 'consent' as const,
+              reason: '지난 미선택은 거부로 처리됐습니다. 동의 또는 거부를 직접 선택하세요.',
+            }));
+          if (!items.length) throw new ServiceError('consent_review_unavailable');
+          for (const q of items) {
+            delete a.overrides[q.signature];
+            if (a.reused) delete a.reused[q.signature];
+          }
+          a.inbox = {
+            id: randomUUID(),
+            fingerprint: view.fingerprint,
+            items,
+            createdAt: Date.now(),
+          };
+          delete a.finalApproval;
+          delete a.plan;
+          delete job.stopReason;
+          job.status = 'needs_user';
+          job.note = '다른 답변은 보존했습니다. 확인함에서 동의 선택만 다시 검토해 주세요.';
+          browser.ownerJobId = id;
+          if (job.eventId) store.markSubmission(job.eventId, 'in_progress');
+          store.saveJob(job);
+          store.note(
+            id,
+            '사용자가 동의 선택 재검토를 요청했습니다. 동의·제출을 자동 승인하지 않았습니다.',
+          );
+          return send(response, 200, { ok: true });
+        } finally {
+          browser.setManual(true);
+          manualNavigation = false;
+        }
+      }
       if (action === 'retry-research') {
         const state = job.autonomy;
         const questions =
@@ -963,6 +1039,20 @@ export async function createApp(options: {
             const answers = z
               .record(z.string(), z.array(z.string().max(2000)).max(30))
               .parse(data.answers);
+            const declines = new Set(
+              z
+                .array(z.string())
+                .max(80)
+                .parse(data.explicitDeclines || []),
+            );
+            for (const q of inbox.items) {
+              if (q.category !== 'consent' || q.kind !== 'checkbox' || q.options.length !== 1)
+                continue;
+              if (!answers[q.id]?.length && !declines.has(q.id))
+                throw new ServiceError('consent_decision_required');
+              if (answers[q.id]?.length && declines.has(q.id))
+                throw new ServiceError('invalid_consent_decision');
+            }
             const validated = inbox.items.map((q) => {
               const condition = otherTextCondition(q, inbox.items);
               const parent = condition && answers[condition.questionId];

@@ -199,6 +199,9 @@ for (const scenario of [
       }
       await post({
         inboxId: inbox.id,
+        explicitDeclines: scenario.includes('decline')
+          ? inbox.items.filter((q) => q.category === 'consent').map((q) => q.id)
+          : [],
         answers: Object.fromEntries(
           inbox.items.map((q) => [
             q.id,

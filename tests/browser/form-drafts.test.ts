@@ -172,7 +172,7 @@ test('open-ended drafts are prepared in one batch, editable and persistent; Othe
     assert.equal(await field.inputValue(), '사용자가 직접 다듬은 제안');
     await form.getByRole('button', { name: '추천 답변 모두 선택' }).click();
     assert.equal(await field.inputValue(), '사용자가 직접 다듬은 제안');
-    await form.getByLabel('개인정보 동의', { exact: true }).check();
+    await form.getByLabel('동의합니다', { exact: true }).check();
     await form.getByRole('button', { name: '한 번에 답변하고 재개' }).click();
     await page.getByRole('button', { name: '최종 제출하고 결과 확인', exact: true }).waitFor();
     assert.equal(posts, 0);

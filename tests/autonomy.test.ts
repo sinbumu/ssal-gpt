@@ -34,6 +34,22 @@ const plan: AnswerPlan = {
   answer: ['예'],
   reason: 'test',
 };
+test('a saved province maps only to a unique equivalent short label, never a city or ambiguous region', () => {
+  const state = createAutonomy(syntheticSettings, 'https://example.org');
+  state.profile.region = '경기도';
+  const field = {
+    ...q('거주 시도를 선택해 주세요', 'select'),
+    options: [
+      { id: 'seoul', label: '서울' },
+      { id: 'gyeonggi', label: '경기' },
+    ],
+  };
+  assert.deepEqual(resolveAnswer(field, undefined, state, [], '').answer, ['gyeonggi']);
+  field.options.push({ id: 'alias', label: '경기특별자치도' });
+  assert.equal(resolveAnswer(field, undefined, state, [], '').answer, undefined);
+  state.profile.region = '경기도 안양시';
+  assert.equal(resolveAnswer(field, undefined, state, [], '').answer, undefined);
+});
 test('review drafts are available without auto-answer delegation, but cannot fabricate facts or authorize consent', () => {
   const state = createAutonomy(
     {

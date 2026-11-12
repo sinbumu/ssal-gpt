@@ -9,7 +9,7 @@ import {
 } from './complex-controls.js';
 import { hash, type Question } from './autonomy.js';
 import { ServiceError } from './auth.js';
-import { googleFormState } from './google-form-dom.js';
+import { googleFormId, googleFormState } from './google-form-dom.js';
 
 export type FormView = {
   url: string;
@@ -27,12 +27,32 @@ export type FormView = {
 type Binding = {
   indices: number[];
   optionValues: string[];
-  custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'rank' | 'picker';
+  custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'google-select' | 'rank' | 'picker';
 };
 export const isMoaform = (page: Page) => new URL(page.url()).hostname === 'answer.moaform.com';
 // Bind rendered controls only; never read provider-private response state.
 export async function inspectForm(page: Page) {
-  const raw = await page.evaluate(() => {
+  if (googleFormId(page.url())) {
+    await page
+      .waitForFunction(
+        () => {
+          const choices = [
+            ...document.querySelectorAll('[role=radio],[role=checkbox],[role=listbox]'),
+          ].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+          const options = choices.filter((e) => e.matches('[role=radio],[role=checkbox]'));
+          const readiness = options.length ? options : choices;
+          return (
+            !readiness.length || readiness.some((e) => e.getAttribute('aria-disabled') !== 'true')
+          );
+        },
+        undefined,
+        { timeout: 3000 },
+      )
+      .catch(() => {
+        throw new ServiceError('form_controls_not_ready');
+      });
+  }
+  const pending = page.evaluate(() => {
     const moa = location.hostname === 'answer.moaform.com';
     const all = [
       ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
@@ -82,7 +102,7 @@ export async function inspectForm(page: Page) {
               node instanceof Element &&
               (!helpers.visible(node) ||
                 node.matches(
-                  'input,textarea,select,output,button,[role=button],script,style,[aria-hidden=true]',
+                  'input,textarea,select,output,button,[role=button],[role=listbox],script,style,[aria-hidden=true]',
                 ))
             )
               return;
@@ -103,9 +123,49 @@ export async function inspectForm(page: Page) {
       options: { label: string; value: string }[];
       indices: number[];
       form: number;
-      custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'rank' | 'picker';
+      custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'google-select' | 'rank' | 'picker';
     }[] = [];
     const forms = [...document.forms];
+    if (location.hostname === 'docs.google.com' && /^\/forms\/d\//.test(location.pathname)) {
+      const lists = [...document.querySelectorAll<HTMLElement>('[role=listbox][jsname=W85ice]')];
+      lists.forEach((list, index) => {
+        if (!helpers.visible(list)) return;
+        const label = (list.getAttribute('aria-labelledby') || '')
+          .split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent || '')
+          .join(' ')
+          .trim();
+        const options = [
+          ...list.querySelectorAll<HTMLElement>('[jsname=d9BH4c] [role=option]'),
+        ].filter(
+          (e) => e.getAttribute('data-value') !== '' && e.getAttribute('aria-disabled') !== 'true',
+        );
+        if (
+          !label ||
+          !options.length ||
+          options.some(
+            (e) =>
+              !e.textContent?.trim() ||
+              !['true', 'false'].includes(e.getAttribute('aria-selected') || ''),
+          )
+        )
+          throw new Error('unsupported_google_dropdown');
+        groups.push({
+          label,
+          description: definitions.text(list.closest('[role=listitem]') || list),
+          kind: 'select',
+          required: list.getAttribute('aria-required') === 'true',
+          multiple: false,
+          options: options.map((e) => ({
+            label: e.textContent!.trim(),
+            value: e.textContent!.trim(),
+          })),
+          indices: [index],
+          form: forms.indexOf(list.closest('form')!),
+          custom: 'google-select',
+        });
+      });
+    }
     // Some native forms place their sole consent immediately before the form.
     // Only bind this explicit adjacent pair, never arbitrary outside controls.
     const precedingConsent = forms.length === 1 ? forms[0]!.previousElementSibling : null;
@@ -219,6 +279,20 @@ export async function inspectForm(page: Page) {
       const fieldset = el.closest(
         'fieldset,[role=group],[role=radiogroup],[role=listitem]' + (moa ? ',.js-question' : ''),
       );
+      const otherList = fieldset?.matches('[role=listitem]') ? fieldset.parentElement : undefined;
+      const otherTitle =
+        kind === 'text' &&
+        /기타|other/i.test(helpers.label(el)) &&
+        otherList?.matches('[role=list][aria-labelledby]') &&
+        fieldset?.querySelector(
+          '[role=checkbox][aria-label="기타:"],[role=radio][aria-label="Other:"]',
+        )
+          ? (otherList.getAttribute('aria-labelledby') || '')
+              .split(/\s+/)
+              .map((id) => document.getElementById(id)?.textContent || '')
+              .join(' ')
+              .trim()
+          : '';
       const dl = el.closest('dl');
       const dd = el.closest('dd');
       const term =
@@ -301,6 +375,7 @@ export async function inspectForm(page: Page) {
         }
       }
       const questionLabel = (
+        (otherTitle ? `${otherTitle} — 기타` : '') ||
         phonePart ||
         (kind === 'text' &&
         fieldset?.matches('fieldset') &&
@@ -386,8 +461,6 @@ export async function inspectForm(page: Page) {
     const visited = new Set<Element>();
     for (const control of aria) {
       if (!helpers.visible(control) || control.matches('input') || visited.has(control)) continue;
-      const block = control.closest('[role=radiogroup],fieldset,[role=group],[role=listitem]');
-      if (!block) throw new Error('unlabelled_custom_choice');
       const ariaHelpers = {
         labelBy(el: Element) {
           return (el.getAttribute('aria-labelledby') || '')
@@ -396,7 +469,23 @@ export async function inspectForm(page: Page) {
             .join(' ')
             .trim();
         },
+        block(el: Element) {
+          const nearest = el.closest('[role=radiogroup],fieldset,[role=group],[role=listitem]');
+          // Google checkbox options are themselves listitems. Their immediate
+          // labelled list owns the question; an individual option does not.
+          const list = nearest?.parentElement;
+          if (
+            nearest?.getAttribute('role') === 'listitem' &&
+            list?.matches('[role=list][aria-labelledby]') &&
+            helpers.visible(list) &&
+            ariaHelpers.labelBy(list)
+          )
+            return list;
+          return nearest;
+        },
       };
+      const block = ariaHelpers.block(control);
+      if (!block) throw new Error('unlabelled_custom_choice');
       const label =
         block.getAttribute('aria-label') ||
         ariaHelpers.labelBy(block) ||
@@ -406,7 +495,7 @@ export async function inspectForm(page: Page) {
       const options = aria.filter(
         (c) =>
           c.getAttribute('role') === kind &&
-          c.closest('[role=radiogroup],fieldset,[role=group],[role=listitem]') === block &&
+          ariaHelpers.block(c) === block &&
           helpers.visible(c) &&
           c.getAttribute('aria-disabled') !== 'true',
       );
@@ -583,6 +672,17 @@ export async function inspectForm(page: Page) {
       ),
     };
   });
+  const raw = await pending.catch((error: unknown) => {
+    // Only bounded parser codes cross the page boundary, never page content or
+    // arbitrary Playwright exception text (which can contain entered values).
+    const code =
+      error instanceof Error &&
+      error.message.match(
+        /^(?:page\.evaluate: )?(?:Error: )?(unlabelled_custom_choice|unsupported_choice_state|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
+      )?.[1];
+    if (code) throw new ServiceError(code);
+    throw error;
+  });
   const bindings = new Map<string, Binding>();
   const questions: Question[] = raw.groups.map((g, i) => {
     const options = g.options.map((o) => ({ id: o.label, label: o.label }));
@@ -695,6 +795,31 @@ export async function applyAnswers(
       return current.bindings.get(question.id)!;
     };
     if (binding.custom === 'notice') continue;
+    if (binding.custom === 'google-select') {
+      signal.throwIfAborted();
+      if (answer.length !== 1 || !question.options.some((o) => o.id === answer[0]))
+        throw new ServiceError('invalid_form_answer');
+      const list = page.locator('[role=listbox][jsname=W85ice]').nth(binding.indices[0]!);
+      const selected = async () =>
+        (
+          await list.locator('[jsname=d9BH4c] [role=option][aria-selected=true]').allTextContents()
+        ).map((s) => s.trim());
+      if ((await selected()).join('') !== answer[0]) {
+        await list.click({ timeout: 3000 });
+        await rebind();
+        signal.throwIfAborted();
+        const target = list
+          .getByRole('option', { name: answer[0], exact: true })
+          .filter({ visible: true });
+        if ((await target.count()) !== 1) throw new ServiceError('ambiguous_form_options');
+        await target.click({ timeout: 3000 });
+      }
+      await rebind();
+      if ((await selected()).length !== 1 || (await selected())[0] !== answer[0])
+        throw new ServiceError('field_verification_failed');
+      onField();
+      continue;
+    }
     if (binding.custom === 'rank') {
       await applyRank(page, binding.indices[0]!, answer, signal);
       onField();
@@ -875,7 +1000,7 @@ export async function formValuesHash(page: Page) {
   return hash(
     await page
       .locator(
-        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[draggable=true],[role=listitem] a,fieldset a',
+        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[role=listbox][jsname=W85ice],[draggable=true],[role=listitem] a,fieldset a',
       )
       .evaluateAll((els) =>
         els
@@ -884,6 +1009,11 @@ export async function formValuesHash(page: Page) {
             value: (el as HTMLInputElement).value,
             checked: (el as HTMLInputElement).checked,
             ariaChecked: el.getAttribute('aria-checked'),
+            dropdown: el.matches('[role=listbox][jsname=W85ice]')
+              ? [...el.querySelectorAll('[jsname=d9BH4c] [role=option][aria-selected=true]')].map(
+                  (e) => e.textContent?.trim(),
+                )
+              : undefined,
             text: el.matches('[draggable=true],a')
               ? el.getAttribute('aria-label') || el.textContent
               : undefined,
@@ -905,6 +1035,19 @@ export async function moaformSnapshot(page: Page) {
   for (const q of view.questions) {
     const b = bindings.get(q.id)!;
     if (b.custom === 'notice') continue;
+    if (b.custom === 'google-select') {
+      fields.push({
+        label: q.label,
+        type: q.kind,
+        group: q.id,
+        value: await page
+          .locator('[role=listbox][jsname=W85ice]')
+          .nth(b.indices[0]!)
+          .locator('[jsname=d9BH4c] [role=option][aria-selected=true]')
+          .allTextContents(),
+      });
+      continue;
+    }
     if (b.custom === 'rank') {
       fields.push({
         label: q.label,

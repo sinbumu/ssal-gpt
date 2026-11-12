@@ -321,7 +321,7 @@ export function otherTextCondition(q: Question, questions: Question[]) {
       ['radio', 'checkbox', 'select'].includes(parent.kind),
   );
   const parent = parents.length === 1 ? parents[0] : undefined;
-  const options = parent?.options.filter((o) => /^(기타|other)$/i.test(o.label.trim()));
+  const options = parent?.options.filter((o) => /^(기타|other)\s*[:：]?$/i.test(o.label.trim()));
   return parent && options?.length === 1
     ? { questionId: parent.id, optionId: options[0]!.id }
     : undefined;
@@ -429,8 +429,19 @@ export function resolveAnswer(
           value = digits.replace(/^(01\d)(\d{3,4})(\d{4})$/, '$1-$2-$3');
       }
     }
-    const answer =
+    let answer =
       q.kind === 'text' ? [value] : q.options.filter((o) => o.label === value).map((o) => o.id);
+    if (key === 'region' && q.kind !== 'text' && !answer.length) {
+      const province = (s: string) =>
+        s
+          .trim()
+          .match(
+            /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청북|충청남|전라북|전라남|경상북|경상남|제주)(?:특별자치도|특별자치시|특별시|광역시|도)?$/,
+          )?.[1];
+      const region = province(value);
+      const matches = region ? q.options.filter((o) => province(o.label) === region) : [];
+      if (matches.length === 1) answer = [matches[0]!.id];
+    }
     return { answer: value ? validateAnswer(q, answer) : undefined, source: 'profile' };
   }
   const exact = saved.find((a) => a.origin === state.origin && a.signature === q.signature);

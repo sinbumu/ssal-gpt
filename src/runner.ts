@@ -42,6 +42,7 @@ import {
   stalledDiscoveryRead,
   discoveryNeedsReplan,
   unrelatedDiscoveryLink,
+  formDiscovery,
 } from './discovery.js';
 export { pageProgress } from './page-progress.js';
 
@@ -839,7 +840,11 @@ export class Runner {
               this.store.saveJob(job);
               break;
             }
-            const selected = !discoveryNeedsReplan(job) && selectedDiscoveryLink(job, o, step.url);
+            // After repeated failures the router must either inspect the remaining
+            // direct form or replan; a suggested older list cannot bypass it.
+            const selected =
+              !(formDiscovery(job) && (state.rejectedSinceSearch || 0) >= 3) &&
+              selectedDiscoveryLink(job, o, step.url);
             if (selected) {
               step = {
                 action: 'navigate',

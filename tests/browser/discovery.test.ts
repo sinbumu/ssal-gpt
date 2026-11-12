@@ -779,6 +779,42 @@ test('failed replanning remains bounded after resume and reports missing sources
     assert.equal(result.approval, undefined);
   }));
 
+test('a model-suggested older list cannot bypass the remaining direct form after repeated exclusions', async () =>
+  fixture(async (app, visits) => {
+    const source = app.origin + '/demo/expired',
+      older = app.origin + '/demo/older',
+      form = 'https://forms.gle/directRemaining';
+    await app.browser.context!.route('**/demo/expired', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<p>종료된 행사</p><a href="${older}">이전 설문 모음</a><a href="${form}">구글폼 설문 참여</a>`,
+      }),
+    );
+    const j = job(source);
+    j.goal = '새 Google Forms 설문';
+    discoveryState(j).rejectedSinceSearch = 2;
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === source
+          ? { action: 'skip_source', reason: '종료', skipCategory: 'ended', url: older }
+          : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(result.steps, 2);
+    assert.ok(visits.includes(form));
+    assert.ok(!visits.includes(older));
+    assert.equal(result.discovery!.switches, 1);
+    assert.equal(result.maxSteps, 10);
+  }));
+
 test('a model-selected next source uses the normal read failure recovery instead of asking the user to repair it', async () =>
   fixture(async (app, visits) => {
     const j = job(`${app.origin}/demo/expired`),

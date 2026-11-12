@@ -67,6 +67,13 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     ambiguous_form_questions:
       '서로 다른 문항을 구별하지 못해 입력 전에 멈췄습니다. 문항 인식의 기술 오류입니다.',
     ambiguous_form_options: '선택지의 연결을 명확히 구별하지 못해 입력을 중단했습니다.',
+    unlabelled_custom_choice:
+      '선택지와 질문 제목을 연결하지 못해 입력 전에 멈췄습니다. 문항 인식의 기술 오류입니다.',
+    unsupported_choice_state: '선택지의 현재 선택 상태를 확인하지 못해 입력 전에 멈췄습니다.',
+    form_controls_not_ready:
+      '폼 선택지가 아직 로딩 중이어서 입력하지 않았습니다. 화면이 준비된 뒤 재개할 수 있습니다.',
+    unsupported_google_dropdown:
+      '구글폼 드롭다운의 질문·선택지를 명확히 연결하지 못해 입력 전에 멈췄습니다.',
     form_structure_changed: '입력 중 폼 구조가 달라졌고 허용된 자동 복구로 해결하지 못했습니다.',
     field_verification_failed: '입력 후 실제 값이나 선택 상태를 검증하지 못했습니다.',
     form_destination_outside_grant:

@@ -185,15 +185,26 @@ export async function verifyGoogleContinuation(
 ) {
   const marker = view.googlePage,
     i = job.intent;
+  if (!i) return false;
+  // A native Next with a recorded section path can lead to optional-only
+  // questions (for example, contact details for a prize draw). Requiredness is
+  // not navigation evidence. Legacy intents keep their stricter required-field
+  // rule because they do not carry the same verified control/path metadata.
+  const nativeStep = i.kind === 'step' && i.providerControl === 'google-next' && i.googlePage;
+  const newQuestion = view.questions.find(
+    (q) =>
+      (q.required || nativeStep) &&
+      !observedQuote(i.beforeText, q.label) &&
+      (!i.googlePage || !i.googlePage.signatures.includes(q.signature)),
+  );
   if (
     browser.ownerJobId !== job.id ||
     !observedNext(job) ||
-    !i ||
     googleFormId(o.url) !== googleFormId(i.url) ||
     !marker?.back ||
     marker.first ||
     !view.buttons.some((b) => b.providerControl?.startsWith('google-')) ||
-    !view.questions.some((q) => q.required && !observedQuote(i.beforeText, q.label))
+    !newQuestion
   )
     return false;
   const before = i.googlePage?.history;
@@ -201,21 +212,13 @@ export async function verifyGoogleContinuation(
     if (
       marker.history.length !== before.length + 1 ||
       !before.every((p, n) => marker.history[n] === p) ||
-      before.includes(marker.history.at(-1)!) ||
-      !view.questions.some((q) => q.required && !i.googlePage!.signatures.includes(q.signature))
+      before.includes(marker.history.at(-1)!)
     )
       return false;
   } else if (marker.history.length !== 2 || !savedGoogleContinuation(job)) return false;
   await browser.assertFresh(o.id, 'navigate');
   if ((await inspectForm(browser.page!)).view.fingerprint !== view.fingerprint) return false;
-  recordContinuation(
-    store,
-    job,
-    o,
-    marker.history.length,
-    view.questions.find((q) => q.required && !observedQuote(i.beforeText, q.label))!.label,
-    false,
-  );
+  recordContinuation(store, job, o, marker.history.length, newQuestion.label, false);
   return true;
 }
 

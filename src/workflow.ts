@@ -101,7 +101,18 @@ export function preparationReasons(store: Store, e: EventRecord, retry?: Job) {
       !!e.tasks?.length)
   ))
     reasons.push('자동 준비를 검증한 참여 경로가 아닙니다.');
-  if (/구매|결제|방문|친구.*태그|구독|리그램/.test(e.requirements.join(' ')))
+  // A survey question about visiting a website is not a physical-visit task.
+  // Only explicit web-page wording is removed; ambiguous/offline visits and
+  // additional purchase/engagement conditions still need their existing route.
+  const requiredActions = e.requirements
+    .map((text) =>
+      text.replace(
+        /(?:홈페이지|웹\s*페이지|웹\s*사이트|사이트|누리집)(?:\s*[을를])?\s*방문/g,
+        '웹페이지 열람',
+      ),
+    )
+    .join(' ');
+  if (/구매|결제|방문|친구.*태그|구독|리그램/.test(requiredActions))
     reasons.push('구매·방문·친구 태그·구독·리그램 필수 과제는 자동 준비 범위 밖입니다.');
   if (/팔로우|좋아요|댓글/.test(e.requirements.join(' ')) && !e.tasks?.length)
     reasons.push('SNS 필수 과제를 구조화하지 못했습니다.');

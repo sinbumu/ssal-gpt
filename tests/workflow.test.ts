@@ -9,8 +9,72 @@ import {
   prepareDiscoveredEntry,
   nextWorkflowJob,
   reuseUnenteredCandidates,
+  preparationReasons,
 } from '../src/workflow.js';
 import { buildTasks } from '../src/tasks.js';
+
+test('website visit questions can prepare a form without admitting physical or ambiguous visits', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-web-visit-'));
+  const store = new Store(dir);
+  try {
+    store.setSettings('autonomy', syntheticSettings);
+    const entryUrl = 'https://form.naver.com/response/fixture';
+    const event = store.record(
+      {
+        title: '가상 홈페이지 만족도 조사',
+        organizer: 'fixture',
+        entryUrl,
+        deadline: '2099-01-01T00:00:00Z',
+        prize: '커피',
+        winners: 10,
+        requirements: ['홈페이지 방문 이유 및 사용 편의성에 대한 실제 개인 평가 응답'],
+        blockers: [],
+        evidenceQuote: '공식 안내',
+        evidenceKind: 'text',
+        effortMinutes: 3,
+      },
+      'https://example.org/official',
+      'discover',
+      'x.png',
+      {
+        sourceEvidence: [
+          {
+            id: 'form',
+            url: entryUrl,
+            title: '폼',
+            text: '설문 1/2',
+            screenshot: 'x.png',
+            observedAt: Date.now(),
+          },
+        ],
+      },
+    ).event;
+    assert.deepEqual(preparationReasons(store, event), []);
+    for (const requirement of ['웹사이트를 방문한 이유', '누리집 방문 만족도'])
+      assert.deepEqual(preparationReasons(store, { ...event, requirements: [requirement] }), []);
+    for (const requirement of [
+      '매장 방문 후 설문',
+      '방문 이유',
+      '홈페이지 방문 후 현장 방문',
+      '홈페이지 방문 후 구매',
+      '웹페이지 방문 후 친구 태그',
+      '누리집 방문 후 구독',
+    ])
+      assert.ok(
+        preparationReasons(store, { ...event, requirements: [requirement] }).some((reason) =>
+          reason.includes('자동 준비 범위 밖'),
+        ),
+        requirement,
+      );
+    assert.ok(
+      preparationReasons(store, { ...event, blockers: ['실제 이용 경험 확인 필요'] }).length,
+    );
+    assert.ok(preparationReasons(store, { ...event, sourceEvidence: [] }).length);
+  } finally {
+    store.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('a skipped candidate starts a separate metered discovery with inherited switch and expiry bounds', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-switch-search-')),

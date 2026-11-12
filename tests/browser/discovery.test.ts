@@ -10,7 +10,12 @@ import { Runner } from '../../src/runner.js';
 import type { ModelClient, Step } from '../../src/model.js';
 import type { Job } from '../../src/store.js';
 import { searchUrl } from '../../src/evidence.js';
-import { discoveryState, noteDiscoveryDestination, rejectSource } from '../../src/discovery.js';
+import {
+  discoveryState,
+  noteDiscoveryDestination,
+  rejectSource,
+  excludedSource,
+} from '../../src/discovery.js';
 
 function job(startUrl: string): Job {
   return {
@@ -94,6 +99,110 @@ test('default Naver does not override an explicit model choice of Google', async
     await runner.finished();
     assert.equal(visits[1], searchUrl('다른 검색', 'google'));
     assert.equal(app.store.job(j.id)!.searchEngine, 'google');
+  }));
+
+test('directory row context observes the primary link only and masks private echoes without reading response rows', async () =>
+  fixture(async (app) => {
+    await app.browser.context!.route('**/demo/rows', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<table><tr><td>설문/투표</td><td><a href="/demo/survey">기관 의견</a></td><td>private-recipient <a href="/demo/gift">커피 경품</a></td></tr>
+      <tr><td><a href="/demo/response">응답 링크</a></td><td><input value="never-read"></td></tr>
+      <tr><td><a href="/demo/private">개인 링크</a></td><td data-private>never-read</td></tr></table>`,
+      }),
+    );
+    await app.browser.navigate(app.origin + '/demo/rows');
+    const o = await app.browser.observe(false, ['private-recipient']);
+    assert.match(o.elements.find((e) => e.label === '기관 의견')!.context!, /설문\/투표/);
+    assert.ok(!JSON.stringify(o.elements).includes('private-recipient'));
+    for (const label of ['커피 경품', '응답 링크', '개인 링크'])
+      assert.equal(o.elements.find((e) => e.label === label)!.context, undefined);
+  }));
+
+test('rejecting the observed original prevents reopening its directory detail and selects a fresh multi-page form', async () =>
+  fixture(async (app, visits) => {
+    const list = app.origin + '/demo/catalog';
+    const detail = 'https://www.suto.co.kr/cpevent/42';
+    const link = 'https://www.suto.co.kr/bbs/link.php?bo_table=cpevent&wr_id=42&no=1';
+    const original = 'https://example.org/event/social';
+    const form = 'https://form.naver.com/response/new_fixture';
+    await app.browser.context!.route('**/*', async (r) => {
+      if (r.request().method() !== 'GET') return r.fallback();
+      const url = r.request().url();
+      if (![list, detail, link, original, form].includes(url)) return r.fallback();
+      visits.push(url);
+      if (url === link)
+        return r.fulfill({
+          contentType: 'text/html',
+          body: `<script>location.replace(${JSON.stringify(original)})</script>`,
+        });
+      const body =
+        url === list
+          ? `<h1>행사 목록</h1><a href="${detail}">퀴즈 이벤트</a><a href="${form}">설문 참여</a>`
+          : url === detail
+            ? `<h1>퀴즈 이벤트 안내</h1><a href="${link}">응모하기</a>`
+            : url === original
+              ? '<h1>공식 행사 원문</h1><p>댓글로만 참여합니다.</p>'
+              : '<h1>무료 설문 이벤트</h1><p>1/2 · 누구나 참여, 마감 2099년 12월 1일, 커피 10명</p><label>이름<input required></label><button type="button" id="nsv_page_control_next">다음</button>';
+      await r.fulfill({ contentType: 'text/html; charset=utf-8', body });
+    });
+    const j = job(list);
+    j.goal = '새 다중페이지 네이버폼 이벤트';
+    let calls = 0;
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) => {
+        calls++;
+        assert.equal(ctx.discovery.formSearch.preferred, 'naver');
+        if (calls === 1) return { action: 'navigate', url: detail };
+        if (calls === 2) return { action: 'navigate', url: link };
+        if (calls === 3) {
+          assert.equal(ctx.observation.url, original);
+          assert.ok(ctx.observation.text.includes('댓글로만 참여합니다.'));
+          return {
+            action: 'skip_source',
+            skipCategory: 'requirements',
+            reason: '댓글형 행사여서 폼 조건과 다릅니다.',
+            url: list,
+          };
+        }
+        if (calls === 4) return { action: 'navigate', url: detail }; // stale model choice must be intercepted
+        assert.equal(ctx.observation.url, form);
+        assert.ok(ctx.observation.text.includes('1/2'));
+        return {
+          action: 'record_event',
+          candidate: {
+            title: '가상 다중페이지 폼',
+            organizer: '가상 기관',
+            entryUrl: form,
+            deadline: null,
+            deadlineDate: '2099-12-01',
+            prize: '커피',
+            winners: 10,
+            requirements: ['설문'],
+            blockers: [],
+            evidenceQuote: '무료 설문 이벤트',
+            evidenceKind: 'text',
+            effortMinutes: 3,
+          },
+        };
+      }),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(calls, 5);
+    assert.equal(result.maxSteps, 10);
+    assert.deepEqual(visits, [list, detail, link, original, list, form]);
+    assert.ok(excludedSource(result, detail));
+    assert.equal(excludedSource(result, list), false);
+    assert.ok(result.history.some((h) => h.action === 'discovery_repeat_prevented'));
+    assert.equal(app.store.events()[0]!.entryUrl, form);
+    assert.equal(result.uncertain, false);
   }));
 
 test('candidate evidence remains bound to its screenshot despite decorative DOM changes, never another URL', async () => {

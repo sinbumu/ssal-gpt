@@ -32,6 +32,7 @@ export type VisibleElement = {
   role: string;
   type: string;
   label: string;
+  context?: string;
   href?: string;
   navigationOnly?: boolean;
   mediaNavigation?: 'next' | 'previous';
@@ -658,6 +659,18 @@ export class Browser {
                 ? el.type
                 : el.getAttribute('type') || '',
             label: label.slice(0, 240),
+            // A directory row's rendered type (e.g. survey vs comment) helps
+            // rank its link. Never collect response controls or entire tables.
+            context:
+              el instanceof HTMLAnchorElement &&
+              el.closest('tr')?.querySelector('a[href]') === el &&
+              !el
+                .closest('tr')!
+                .querySelector(
+                  'input,textarea,select,[contenteditable=true],[data-private],[aria-hidden=true]',
+                )
+                ? (el.closest('tr') as HTMLElement).innerText.replace(/\s+/g, ' ').slice(0, 300)
+                : undefined,
             href: el instanceof HTMLAnchorElement ? el.href : undefined,
             navigationOnly,
             mediaNavigation,
@@ -778,7 +791,10 @@ export class Browser {
       return lines.join('\n').slice(0, 18000);
     }, fullPage);
     text = maskPrivateText(text, secrets);
-    for (const element of elements) element.label = maskPrivateText(element.label, secrets);
+    for (const element of elements) {
+      element.label = maskPrivateText(element.label, secrets);
+      if (element.context) element.context = maskPrivateText(element.context, secrets);
+    }
     if (fullPage && (await page.evaluate(() => document.documentElement.scrollHeight)) > 12000)
       throw new ServiceError('form_page_too_large');
     const image = await page.screenshot({

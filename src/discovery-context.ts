@@ -30,6 +30,7 @@ export function compactDiscoveryContext<
         role: e.role || undefined,
         type: e.type || undefined,
         label: e.label,
+        context: e.context,
         href: e.href,
         navigationOnly: e.navigationOnly || undefined,
         mediaNavigation: e.mediaNavigation,

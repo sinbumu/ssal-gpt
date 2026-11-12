@@ -8,8 +8,8 @@ export const MAX_DISCOVERY_SWITCHES = 6;
 export type DiscoveryState = {
   searches: { engine: Engine; query: string; step: number }[];
   visited: string[];
-  frontier: { url: string; label: string; source: string }[];
-  rejected: { url: string; reason: string; host?: string }[];
+  frontier: { url: string; label: string; source: string; context?: string }[];
+  rejected: { url: string; reason: string; host?: string; basis?: 'observed_conditions' }[];
   blockedEngines: Engine[];
   lastProgressStep: number;
   switches: number;
@@ -43,6 +43,21 @@ export function searchLocation(raw: string) {
 // Navigation wrappers and tracking parameters are not new source material.
 export function discoveryPageKey(raw: string) {
   const u = new URL(raw);
+  // The visible event's participation link carries the same detail ID. Only
+  // this exact directory route is an alias; lists, other links and IDs are not.
+  if (
+    /^(www\.)?suto\.co\.kr$/.test(u.hostname) &&
+    u.pathname === '/bbs/link.php' &&
+    u.searchParams.get('bo_table') === 'cpevent' &&
+    /^\d+$/.test(u.searchParams.get('wr_id') || '') &&
+    u.searchParams.get('no') === '1' &&
+    ['bo_table', 'wr_id', 'no'].every((k) => u.searchParams.getAll(k).length === 1) &&
+    [...u.searchParams.keys()].every(
+      (k) => ['bo_table', 'wr_id', 'no'].includes(k) || /^utm_/.test(k),
+    )
+  )
+    return `https://www.suto.co.kr/cpevent/${u.searchParams.get('wr_id')}`;
+  if (/^(www\.)?suto\.co\.kr$/.test(u.hostname)) u.hostname = 'www.suto.co.kr';
   if (u.hostname === 'blog.naver.com' && u.pathname === '/PostView.naver') {
     const blog = u.searchParams.get('blogId'),
       post = u.searchParams.get('logNo');
@@ -142,16 +157,17 @@ export function reuseDiscoveryRejections(job: Job, pastJobs: Job[], now = Date.n
     for (const r of past.discovery?.rejected || []) {
       // Technical failures and inferred user facts are not durable source exclusions.
       if (
-        !past.history.some(
-          (h) =>
-            h.action === 'skip_source' &&
-            discoveryPageKey(h.url) === discoveryPageKey(r.url) &&
-            h.reason === r.reason,
-        ) ||
+        (r.basis !== 'observed_conditions' &&
+          !past.history.some(
+            (h) =>
+              h.action === 'skip_source' &&
+              discoveryPageKey(h.url) === discoveryPageKey(r.url) &&
+              h.reason === r.reason,
+          )) ||
         /인증|로그인|읽기 실패|접근 실패|접속 실패/.test(r.reason)
       )
         continue;
-      rejectSource(job, r.url, r.reason, !!r.host);
+      rejectSource(job, r.url, r.reason, !!r.host, true);
       s.reusedRejections.push({ fromJob: past.id, url: r.url });
     }
     // Only aliases connected to an imported rejection are needed.
@@ -194,10 +210,30 @@ function nextPageLink(raw: string, label: string, source?: string) {
 export function promotionalLink(raw: string, label = '') {
   const u = new URL(raw);
   return (
+    (/^(www\.)?suto\.co\.kr$/.test(u.hostname) && /^\/membership\/?$/.test(u.pathname)) ||
     /(?:^|\/)(?:advertise|advertising|ads)(?:\/|$)/i.test(u.pathname) ||
     /광고\s*(?:문의|상품|단가|집행)|이벤트\s*홍보가\s*필요|추천\s*캠페인\s*집행|매체\s*소개서|advertis(?:e with us|ing rates)/i.test(
       label,
     )
+  );
+}
+
+export function formDiscovery(job: Pick<Job, 'goal'>) {
+  return /네이버\s*폼|naver\s*form|웹\s*폼|다중\s*페이지.{0,20}폼|폼\s*(?:이벤트|설문|응모)/i.test(
+    job.goal,
+  );
+}
+
+function directForm(raw: string) {
+  const u = new URL(raw);
+  return u.hostname === 'form.naver.com' && /^\/response\/[\w-]+\/?$/.test(u.pathname);
+}
+
+function formLinkScore(link: { url: string; label: string; context?: string }) {
+  return (
+    (directForm(link.url) ? 30 : 0) +
+    (/네이버\s*폼|naver\s*form/i.test(link.label) ? 12 : 0) +
+    (/설문|만족도|의견\s*조사|survey/i.test(link.label + ' ' + (link.context || '')) ? 10 : 0)
   );
 }
 export function noteDiscoveryDestination(job: Job, requested: string, resolved: string) {
@@ -237,7 +273,10 @@ function readableLink(raw: string, label: string, source?: string) {
         !/이벤트|event|경품|응모/i.test(label)
       ) &&
       (nextPageLink(raw, label, source) ||
-        /이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice/i.test(label) ||
+        /이벤트|event|퀴즈|댓글|응모|경품|팔로우|좋아요|공지|notice|설문|만족도|투표|survey/i.test(
+          label,
+        ) ||
+        directForm(raw) ||
         /(?:^|\/)events?(?:\/|\.|$)|\/notice(?:\/|$)/i.test(u.pathname) ||
         (/^(www\.)?instagram\.com$/.test(u.hostname) &&
           /^\/(?:[\w.]+\/)?(?:p|reel)\//.test(u.pathname)))
@@ -264,13 +303,18 @@ export function observeDiscovery(job: Job, o: Observation) {
   for (const e of o.elements) {
     if (
       !e.href ||
-      !readableLink(e.href, e.label, o.url) ||
+      !readableLink(e.href, e.label + ' ' + (e.context || ''), o.url) ||
       s.visited.includes(discoveryPageKey(e.href)) ||
       excludedSource(job, e.href)
     )
       continue;
     if (!s.frontier.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!))) {
-      s.frontier.push({ url: e.href, label: e.label.slice(0, 200), source: o.url });
+      s.frontier.push({
+        url: e.href,
+        label: e.label.slice(0, 200),
+        source: o.url,
+        context: e.context,
+      });
       (s.readCounts ??= {})[key] = 0;
     }
   }
@@ -284,7 +328,11 @@ export function observeDiscovery(job: Job, o: Observation) {
     .sort((a, b) => {
       const score = (link: typeof a) =>
         words(job.goal).filter((w) => link.label.toLowerCase().includes(w)).length +
-        (/instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url) ? 8 : 0) +
+        (formDiscovery(job)
+          ? formLinkScore(link)
+          : /instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url)
+            ? 8
+            : 0) +
         (nextPageLink(link.url, link.label, link.source) ? 5 : 0) -
         s.rejected.filter((r) => sourceFamily(r.url) === sourceFamily(link.url)).length * 4;
       return score(b) - score(a);
@@ -292,13 +340,24 @@ export function observeDiscovery(job: Job, o: Observation) {
     .slice(0, 100);
   s.visited = s.visited.slice(-200);
 }
-export function rejectSource(job: Job, url: string, reason: string, restricted = false) {
+export function rejectSource(
+  job: Job,
+  url: string,
+  reason: string,
+  restricted = false,
+  factual = false,
+) {
   const s = discoveryState(job);
   url = discoveryPageKey(url);
   const host = restricted ? new URL(url).hostname.replace(/^www\./, '') : undefined;
   const existing = s.rejected.find((v) => discoveryPageKey(v.url) === url);
   if (existing && host) existing.host = host;
-  if (!existing) s.rejected.push({ url, reason: reason.slice(0, 500), host });
+  const basis = factual ? ('observed_conditions' as const) : undefined;
+  if (existing && basis) {
+    existing.basis = basis;
+    existing.reason = reason.slice(0, 500);
+  }
+  if (!existing) s.rejected.push({ url, reason: reason.slice(0, 500), host, basis });
   s.rejected = s.rejected.slice(-80);
   job.skippedUrls = [...new Set([...(job.skippedUrls || []), url])].slice(-80);
 }
@@ -309,7 +368,9 @@ export function selectedDiscoveryLink(job: Job, o: Observation, url?: string) {
   const link =
     o.elements.find((e) => e.href === url) ||
     discoveryState(job).frontier.find((e) => e.url === url);
-  return link && readableLink(url, link.label, o.url) ? url : undefined;
+  return link && readableLink(url, link.label + ' ' + (link.context || ''), o.url)
+    ? url
+    : undefined;
 }
 export function noteDiscoveryRead(job: Job, source: string, step: Step) {
   const s = discoveryState(job),
@@ -337,6 +398,18 @@ export function stalledDiscoveryRead(job: Job, o: Observation, step: Step) {
 export function discoveryContext(job: Job) {
   const s = discoveryState(job);
   return {
+    formSearch: formDiscovery(job)
+      ? {
+          preferred: /네이버\s*폼|naver\s*form/i.test(job.goal) ? 'naver' : 'web',
+          strategy:
+            'Prefer observed direct form links and survey/satisfaction rows or survey category links over generic quizzes/social posts. Use public website/service satisfaction or opinion surveys; check eligibility, prizes and required page count. Do not invent personal experience. A paid survey membership menu is not an event category.',
+          queryApproaches: [
+            '현재 연월 홈페이지 만족도 조사 경품',
+            '현재 연월 설문 이벤트 네이버 폼',
+            '현재 연월 온라인 의견 조사 추첨',
+          ],
+        }
+      : undefined,
     preferredEngine: job.searchEngine || 'naver',
     blockedEngines: s.blockedEngines,
     recentSearches: s.searches.slice(-8),
@@ -360,6 +433,19 @@ export function nextDiscoveryRoute(
   const s = discoveryState(job);
   if (s.switches >= MAX_DISCOVERY_SWITCHES || job.steps >= job.maxSteps) return;
   const current = from || job.searchEngine || 'naver';
+  const relevantForm =
+    formDiscovery(job) &&
+    s.frontier.find(
+      (v) =>
+        formLinkScore(v) >= 10 &&
+        !s.visited.includes(discoveryPageKey(v.url)) &&
+        !excludedSource(job, v.url),
+    );
+  if (relevantForm)
+    return {
+      url: relevantForm.url,
+      reason: `관측한 폼·설문 후보를 우선 확인합니다: ${relevantForm.label.slice(0, 100)}`,
+    };
   const q = query || s.searches.at(-1)?.query || job.goal.slice(0, 500);
   const alternate: Engine = current === 'naver' ? 'google' : 'naver';
   if (

@@ -4,11 +4,12 @@ import { canonicalUrl, type Job } from './store.js';
 import { searchUrl } from './evidence.js';
 
 type Engine = 'naver' | 'google';
+type DiscoveryLink = { url: string; label: string; source: string; context?: string };
 export const DEFAULT_DISCOVERY_SWITCHES = 6;
 export type DiscoveryState = {
   searches: { engine: Engine; query: string; step: number }[];
   visited: string[];
-  frontier: { url: string; label: string; source: string; context?: string }[];
+  frontier: DiscoveryLink[];
   rejected: { url: string; reason: string; host?: string; basis?: 'observed_conditions' }[];
   blockedEngines: Engine[];
   lastProgressStep: number;
@@ -18,6 +19,8 @@ export type DiscoveryState = {
   navigationCounts?: Record<string, number>;
   replans?: number;
   needsFreshSearch?: boolean;
+  rejectedSinceSearch?: number;
+  filteredLinks?: { url: string; reason: string }[];
   redirects?: { requested: string; resolved: string }[];
   contextSize?: { samples: number; originalChars: number; submittedChars: number };
   reusedRejections?: { fromJob: string; url: string }[];
@@ -116,6 +119,7 @@ export function noteSearch(job: Job, engine: Engine, query: string) {
   s.searches = s.searches.slice(-80);
   job.searchEngine = engine;
   s.needsFreshSearch = false;
+  s.rejectedSinceSearch = 0;
 }
 export function excludedSource(job: Job, raw: string) {
   const s = discoveryState(job);
@@ -227,24 +231,76 @@ export function promotionalLink(raw: string, label = '') {
 }
 
 export function formDiscovery(job: Pick<Job, 'goal'>) {
-  return /네이버\s*폼|naver\s*form|웹\s*폼|다중\s*페이지.{0,20}폼|폼\s*(?:이벤트|설문|응모)/i.test(
+  return /구글\s*폼|google\s*forms?|네이버\s*폼|naver\s*form|웹\s*폼|다중\s*페이지.{0,20}폼|폼\s*(?:이벤트|설문|응모)/i.test(
     job.goal,
   );
 }
 
-function directForm(raw: string) {
+function directForm(raw: string): 'google' | 'naver' | undefined {
   const u = new URL(raw);
-  return u.hostname === 'form.naver.com' && /^\/response\/[\w-]+\/?$/.test(u.pathname);
+  if (u.hostname === 'form.naver.com' && /^\/response\/[\w-]+\/?$/.test(u.pathname)) return 'naver';
+  if (
+    (u.hostname === 'forms.gle' && /^\/[\w-]+\/?$/.test(u.pathname)) ||
+    (u.hostname === 'docs.google.com' &&
+      /^\/forms\/d\/(?:e\/)?[\w-]+\/viewform\/?$/.test(u.pathname))
+  )
+    return 'google';
 }
 
-function formLinkScore(link: { url: string; label: string; context?: string }) {
+function preferredForm(job: Pick<Job, 'goal'>) {
+  // Use the first named provider: later goal clauses may explicitly exclude others.
+  const first = job.goal.match(/구글\s*폼|google\s*forms?|네이버\s*폼|naver\s*forms?/i)?.[0];
+  return first ? (/구글|google/i.test(first) ? 'google' : 'naver') : 'web';
+}
+
+export function unrelatedDiscoveryLink(job: Job, link: Pick<DiscoveryLink, 'url' | 'label'>) {
+  if (!formDiscovery(job) || directForm(link.url)) return;
+  const u = new URL(link.url);
+  const path = u.pathname;
+  if (
+    (u.hostname === 'workspace.google.com' && /\/products\/forms\/?$/.test(path)) ||
+    (/^(www\.)?google\.com$/.test(u.hostname) && /\/forms\/about\/?$/.test(path)) ||
+    (u.hostname === 'docs.google.com' && /^\/forms(?:\/u\/\d+)?\/?$/.test(path))
+  )
+    return '참여 폼이 아닌 설문 도구 소개·생성 페이지입니다.';
+  if (/\/(?:tag|tags)\//i.test(path)) return '개별 응모 안내가 아닌 블로그 태그 모음입니다.';
+  if (
+    /(?:설문|survey|구글\s*폼|google\s*forms?).{0,50}(?:도구|툴\b|자동화|사용법|만들기|만드는\s*방법|제작\s*방법|tool|software|tutorial)/i.test(
+      link.label,
+    ) ||
+    /(?:surveymonkey|타입폼|typeform).{0,30}(?:소개|비교|활용|사용법|리뷰)/i.test(link.label) ||
+    /추진\s*계획|결재\s*문서|입찰\s*공고|과업\s*지시서|용역\s*계약/.test(link.label)
+  )
+    return '응모 안내가 아닌 설문 도구·행정 문서입니다.';
+}
+
+function formLinkScore(link: Pick<DiscoveryLink, 'url' | 'label' | 'context'>, job: Job) {
+  const provider = directForm(link.url),
+    preferred = preferredForm(job);
   return (
-    (directForm(link.url) ? 30 : 0) +
-    (/네이버\s*폼|naver\s*form/i.test(link.label) ? 12 : 0) +
+    (provider ? (preferred === 'web' || provider === preferred ? 30 : -40) : 0) +
+    (/구글\s*폼|google\s*forms?|네이버\s*폼|naver\s*form/i.test(link.label) ? 12 : 0) +
     (/설문|만족도|의견\s*조사|survey/i.test(link.label + ' ' + (link.context || '')) ? 10 : 0) -
     // Administrative documents may describe surveys but are not participation
     // notices. Lower their priority without excluding other pages on the host.
     (/추진\s*계획|결재\s*문서|입찰\s*공고|과업\s*지시서|용역\s*계약/.test(link.label) ? 40 : 0)
+  );
+}
+function eligibleFrontier(job: Job) {
+  const s = discoveryState(job);
+  return s.frontier.filter(
+    (v) =>
+      !s.visited.includes(discoveryPageKey(v.url)) &&
+      !excludedSource(job, v.url) &&
+      !unrelatedDiscoveryLink(job, v),
+  );
+}
+export function discoveryNeedsReplan(job: Job) {
+  const s = discoveryState(job);
+  return (
+    formDiscovery(job) &&
+    (s.rejectedSinceSearch || 0) >= 3 &&
+    !eligibleFrontier(job).some((v) => directForm(v.url) && formLinkScore(v, job) >= 30)
   );
 }
 export function noteDiscoveryDestination(job: Job, requested: string, resolved: string) {
@@ -319,6 +375,14 @@ export function observeDiscovery(job: Job, o: Observation) {
       excludedSource(job, e.href)
     )
       continue;
+    const irrelevant = unrelatedDiscoveryLink(job, { url: e.href, label: e.label });
+    if (irrelevant) {
+      s.filteredLinks ??= [];
+      if (!s.filteredLinks.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!)))
+        s.filteredLinks.push({ url: e.href, reason: irrelevant });
+      s.filteredLinks = s.filteredLinks.slice(-40);
+      continue;
+    }
     if (!s.frontier.some((v) => discoveryPageKey(v.url) === discoveryPageKey(e.href!))) {
       s.frontier.push({
         url: e.href,
@@ -334,13 +398,14 @@ export function observeDiscovery(job: Job, o: Observation) {
       (v) =>
         !s.visited.includes(discoveryPageKey(v.url)) &&
         !excludedSource(job, v.url) &&
+        !unrelatedDiscoveryLink(job, v) &&
         !promotionalLink(v.url, v.label),
     )
     .sort((a, b) => {
       const score = (link: typeof a) =>
         words(job.goal).filter((w) => link.label.toLowerCase().includes(w)).length +
         (formDiscovery(job)
-          ? formLinkScore(link)
+          ? formLinkScore(link, job)
           : /instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(link.url)
             ? 8
             : 0) +
@@ -374,11 +439,12 @@ export function rejectSource(
 }
 export function selectedDiscoveryLink(job: Job, o: Observation, url?: string) {
   if (!url || discoveryPageKey(url) === discoveryPageKey(o.url) || excludedSource(job, url)) return;
-  // A visited list is still an observed destination after leaving the frontier.
-  if (job.visitedUrls?.includes(url)) return url;
   const link =
     o.elements.find((e) => e.href === url) ||
     discoveryState(job).frontier.find((e) => e.url === url);
+  if (unrelatedDiscoveryLink(job, { url, label: link?.label || '' })) return;
+  // A visited list is still an observed destination after leaving the frontier.
+  if (job.visitedUrls?.includes(url)) return url;
   return link && readableLink(url, link.label + ' ' + (link.context || ''), o.url)
     ? url
     : undefined;
@@ -411,13 +477,14 @@ export function discoveryContext(job: Job) {
   return {
     formSearch: formDiscovery(job)
       ? {
-          preferred: /네이버\s*폼|naver\s*form/i.test(job.goal) ? 'naver' : 'web',
+          preferred: preferredForm(job),
           strategy:
-            'Prefer observed direct form links and survey/satisfaction rows or survey category links over generic quizzes/social posts. Use public website/service satisfaction or opinion surveys; check eligibility, prizes and required page count. Do not invent personal experience. A paid survey membership menu is not an event category.',
+            'Prefer actual respondent form links and organizer survey notices with prizes. Forms product pages, survey software tutorials, blog tags and administrative plans are not entry opportunities. Generic event footers are not evidence of a survey. Preserve target provider and page-count requirements; do not invent personal experience.',
           queryApproaches: [
             '현재 연월 홈페이지 만족도 조사 경품',
-            '현재 연월 설문 이벤트 네이버 폼',
+            `현재 연월 설문 이벤트 ${preferredForm(job) === 'google' ? '구글폼' : preferredForm(job) === 'naver' ? '네이버폼' : '참여'}`,
             '현재 연월 온라인 의견 조사 추첨',
+            '현재 연월 기관 홈페이지 이용자 만족도 설문 커피',
           ],
         }
       : undefined,
@@ -425,7 +492,9 @@ export function discoveryContext(job: Job) {
     blockedEngines: s.blockedEngines,
     recentSearches: s.searches.slice(-8),
     rejectedSources: s.rejected.slice(-12),
-    freshLinks: s.frontier.slice(0, 16),
+    freshLinks: eligibleFrontier(job).slice(0, 16),
+    filteredLinks: s.filteredLinks?.slice(-8),
+    rejectedSinceSearch: s.rejectedSinceSearch || 0,
     switches: s.switches,
     switchLimit: discoverySwitchLimit(job),
     replans: s.replans || 0,
@@ -435,6 +504,16 @@ export function discoveryContext(job: Job) {
   };
 }
 export type DiscoveryRoute = { url: string; reason: string; engine?: Engine; query?: string };
+export function nextDiscoverySource(job: Job): DiscoveryRoute | undefined {
+  if (job.steps >= job.maxSteps || discoveryState(job).switches >= discoverySwitchLimit(job))
+    return;
+  // General/SNS discovery keeps its observed-link-first fallback. Form goals
+  // must pass the relevance and replan checks rather than draining every link.
+  const link = !formDiscovery(job) && eligibleFrontier(job)[0];
+  return link
+    ? { url: link.url, reason: `관측된 다음 출처를 확인합니다: ${link.label.slice(0, 100)}` }
+    : nextDiscoveryRoute(job);
+}
 // Read-only alternatives are either standard search URLs or actually observed links.
 // No candidate is invented, and this function cannot authorize entry actions.
 export function nextDiscoveryRoute(
@@ -444,12 +523,14 @@ export function nextDiscoveryRoute(
 ): DiscoveryRoute | undefined {
   const s = discoveryState(job);
   if (s.switches >= discoverySwitchLimit(job) || job.steps >= job.maxSteps) return;
+  if (discoveryNeedsReplan(job)) return;
+  const fresh = eligibleFrontier(job);
   const current = from || job.searchEngine || 'naver';
   const relevantForm =
     formDiscovery(job) &&
-    s.frontier.find(
+    fresh.find(
       (v) =>
-        formLinkScore(v) >= 10 &&
+        formLinkScore(v, job) >= 10 &&
         !s.visited.includes(discoveryPageKey(v.url)) &&
         !excludedSource(job, v.url),
     );
@@ -471,9 +552,7 @@ export function nextDiscoveryRoute(
       reason: `반복·실패 검색을 건너뛰고 ${alternate === 'google' ? 'Google' : '네이버'} 검색으로 전환합니다.`,
     };
   }
-  const link = s.frontier.find(
-    (v) => !s.visited.includes(discoveryPageKey(v.url)) && !excludedSource(job, v.url),
-  );
+  const link = fresh.find((v) => !formDiscovery(job) || nextPageLink(v.url, v.label, v.source));
   if (link)
     return {
       url: link.url,
@@ -489,7 +568,8 @@ export function guardDiscoverySearch(job: Job, step: Step) {
   const previous = s.searches.filter((v) => v.engine === engine);
   const exact = previous.some((v) => words(v.query).join(' ') === words(query).join(' '));
   const similar = previous.filter((v) => similarQuery(v.query, query)).length;
-  const stagnant = previous.filter((v) => v.step >= s.lastProgressStep).length >= 3;
+  const stagnant =
+    !s.needsFreshSearch && previous.filter((v) => v.step >= s.lastProgressStep).length >= 3;
   if (s.blockedEngines.includes(engine) || exact || similar >= 2 || stagnant)
     return {
       route: nextDiscoveryRoute(job, query, engine),

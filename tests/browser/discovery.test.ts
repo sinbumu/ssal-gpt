@@ -628,6 +628,123 @@ test('an exhausted frontier requests a new model search within the existing budg
     assert.ok(visits.includes(searchUrl('다른 주최자 온라인 경품')));
   }));
 
+test('irrelevant survey links and three rejected notices lead to a new search and a real multi-page Google form', async () =>
+  fixture(async (app, visits) => {
+    const list = app.origin + '/demo/survey-list';
+    const notices = [1, 2, 3, 4].map((n) => app.origin + '/demo/survey-' + n);
+    const form = 'https://docs.google.com/forms/d/e/new_fixture/viewform';
+    const query = '공공 문화 홈페이지 이용자 만족도 커피 추첨';
+    const search = searchUrl(query);
+    const junk = 'https://workspace.google.com/intl/ko/products/forms/';
+    await app.browser.context!.route('**/*', async (r) => {
+      const url = r.request().url();
+      if (![list, ...notices, form, search].includes(url)) return r.fallback();
+      assert.equal(r.request().method(), 'GET');
+      visits.push(url);
+      const body =
+        url === list
+          ? notices.map((href, i) => `<a href="${href}">기관 ${i + 1} 만족도 조사</a>`).join('') +
+            `<a href="${junk}">Google Forms 온라인 설문조사</a><a href="https://blog.example/tag/survey/">설문조사</a>`
+          : notices.includes(url)
+            ? '<h1>기관 만족도 조사 종료</h1><p>지난 행사입니다.</p>'
+            : url === search
+              ? `<h1>새 검색 결과</h1><a href="${form}">새 공공기관 설문 참여</a>`
+              : '<h1>가상 무료 설문 이벤트</h1><p>1/2 · 누구나 참여, 마감 2099년 12월 1일, 커피 10명</p><label>이름<input required></label><button type="button">다음</button>';
+      await r.fulfill({ contentType: 'text/html; charset=utf-8', body });
+    });
+    const j = job(list);
+    j.goal = '새 다중페이지 Google Forms 경품 이벤트';
+    discoveryState(j).blockedEngines = ['google'];
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) => {
+        assert.equal(ctx.discovery.formSearch.preferred, 'google');
+        assert.ok(!ctx.discovery.freshLinks.some((v: any) => v.url === junk));
+        if (ctx.discovery.needsFreshSearch) {
+          assert.equal(ctx.discovery.rejectedSinceSearch, 3);
+          return { action: 'search', searchEngine: 'naver', text: query };
+        }
+        if (ctx.observation.url === list) return { action: 'navigate', url: notices[0] };
+        const index = notices.indexOf(ctx.observation.url);
+        if (index >= 0)
+          return {
+            action: 'skip_source',
+            skipCategory: 'ended',
+            reason: '마감된 행사입니다.',
+            url: notices[index + 1],
+          };
+        if (ctx.observation.url === search) return { action: 'navigate', url: form };
+        assert.equal(ctx.observation.url, form);
+        assert.match(ctx.observation.text, /1\/2/);
+        return {
+          action: 'record_event',
+          candidate: {
+            title: '가상 다중페이지 Google Forms 이벤트',
+            organizer: '가상 기관',
+            entryUrl: form,
+            deadline: null,
+            deadlineDate: '2099-12-01',
+            prize: '커피',
+            winners: 10,
+            requirements: ['설문'],
+            blockers: [],
+            evidenceQuote: '가상 무료 설문 이벤트',
+            evidenceKind: 'text',
+            effortMinutes: 3,
+          },
+        };
+      }),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.equal(result.steps, 7);
+    assert.equal(result.maxSteps, 10);
+    assert.equal(result.discovery!.replans, 1);
+    assert.equal(result.discovery!.rejectedSinceSearch, 0);
+    assert.equal(result.discovery!.rejected.length, 3);
+    assert.ok(!visits.includes(notices[3]!));
+    assert.ok(!visits.includes(junk));
+    assert.equal(result.approval, undefined);
+    assert.equal(app.store.events().length, 1);
+  }));
+
+test('a stale model suggestion cannot navigate a filtered form product link', async () =>
+  fixture(async (app, visits) => {
+    const list = app.origin + '/demo/source';
+    const junk = 'https://workspace.google.com/intl/ko/products/forms/';
+    const form = 'https://forms.gle/freshFixture';
+    await app.browser.context!.route('**/demo/source', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<a href="${junk}">온라인 설문</a><a href="${form}">참여하기</a>`,
+      }),
+    );
+    const j = job(list);
+    j.goal = '구글폼 설문 이벤트';
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((ctx) =>
+        ctx.observation.url === list ? { action: 'navigate', url: junk } : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.ok(!visits.includes(junk));
+    assert.ok(visits.includes(form));
+    assert.ok(result.history.some((h) => h.action === 'discovery_irrelevant_link'));
+    assert.equal(result.steps, 2);
+  }));
+
 test('failed replanning remains bounded after resume and reports missing sources separately from decision exhaustion', async () =>
   fixture(async (app) => {
     const j = job(`${app.origin}/demo/empty`);

@@ -39,6 +39,7 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  formExecution?: import('./form-execution.js').FormExecution;
   stopReason?: JobNotice;
   observationDiagnostics?: ObservationDiagnostic[];
   retryEventId?: string;
@@ -463,6 +464,7 @@ export class Store {
     try {
       job.status = 'completed';
       job.uncertain = false;
+      if (job.formExecution) job.formExecution.submission = { state: 'accepted', at: Date.now() };
       job.note = '완료 문구와 접수 결과를 확인했습니다.';
       const formTask = job.taskFormStarted
         ? job.tasks?.find((t) => t.kind === 'form' && t.state !== 'verified')

@@ -264,6 +264,18 @@ export async function createApp(options: {
         jobs: store.jobs().map((job) => ({
           ...job,
           notice: jobNotice(job),
+          formExecution: job.formExecution
+            ? {
+                ...job.formExecution,
+                input: job.formExecution.input
+                  ? { ...job.formExecution.input, values: undefined, definition: undefined }
+                  : undefined,
+                transition: job.formExecution.transition
+                  ? { ...job.formExecution.transition, intentHash: undefined }
+                  : undefined,
+                pages: job.formExecution.pages.map((p) => ({ ...p, definition: undefined })),
+              }
+            : undefined,
           tasks: job.tasks?.map((task) => ({
             ...task,
             permitted: taskPermission(store, task, job.autonomy?.synthetic),

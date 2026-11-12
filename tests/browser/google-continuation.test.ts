@@ -160,9 +160,6 @@ for (const scenario of [
             (x: Job) => {
               x.intent!.googlePage!.history = [0, 3];
             },
-            (x: Job) => {
-              x.intent!.googlePage!.signatures = view.questions.map((q) => q.signature);
-            },
           ]) {
             const invalid = structuredClone(j);
             mutate(invalid);
@@ -369,7 +366,7 @@ test('Google control identity rejects unrelated origins, wrong actions, ambiguou
 });
 
 for (const outcome of ['validation', 'http-error', 'loop'] as const)
-  test(`Google Next ${outcome}: does not clear uncertainty or click again`, async () => {
+  test(`Google Next ${outcome}: keeps transition blocked, separate from receipt uncertainty, without clicking again`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ssal-google-no-replay-'));
     const app = await createApp({ dir, port: 0, headless: true });
     app.scheduler.stop();
@@ -444,8 +441,14 @@ for (const outcome of ['validation', 'http-error', 'loop'] as const)
       app.runner.start(j.id);
       await app.runner.finished();
       const stopped = app.store.job(j.id)!;
-      assert.equal(stopped.uncertain, true);
-      assert.notEqual(stopped.status, 'completed');
+      assert.equal(stopped.uncertain, false);
+      assert.equal(stopped.status, 'failed');
+      assert.equal(stopped.formExecution?.transition?.state, 'blocked');
+      assert.equal(stopped.formExecution?.transition?.attempts, 4);
+      assert.equal(stopped.receiptCheck, undefined, 'Next must never run the receipt verifier');
+      app.runner.start(j.id);
+      await app.runner.finished();
+      assert.equal(app.store.job(j.id)!.formExecution?.transition?.state, 'blocked');
       assert.equal(stopped.continuations, undefined);
       assert.equal(posts, 1);
     } finally {

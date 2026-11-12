@@ -23,6 +23,8 @@ export type FormView = {
     providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
   }[];
   googlePage?: NonNullable<Awaited<ReturnType<typeof googleFormState>>>;
+  // Transient UI is diagnostic, never part of the question definition hash.
+  ui?: { invalidFields: number; validationAlerts: number; busy: boolean };
 };
 type Binding = {
   indices: number[];
@@ -766,6 +768,18 @@ export async function inspectForm(page: Page) {
       ]),
     }),
   };
+  view.ui = await page.evaluate(() => {
+    const visible = [
+      ...document.querySelectorAll('[aria-invalid=true],[role=alert],[aria-busy=true]'),
+    ].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+    return {
+      invalidFields: visible.filter((e) => e.getAttribute('aria-invalid') === 'true').length,
+      validationAlerts: visible.filter(
+        (e) => e.getAttribute('role') === 'alert' && e.textContent?.trim(),
+      ).length,
+      busy: visible.some((e) => e.getAttribute('aria-busy') === 'true'),
+    };
+  });
   return { view, bindings, buttonBindings: new Map(raw.buttons.map((b, i) => [`b${i}`, b.index])) };
 }
 export async function applyAnswers(
@@ -1151,13 +1165,7 @@ export async function moaformSnapshot(page: Page) {
   }
   return [{ action: page.url(), fields }];
 }
-export async function advanceForm(
-  page: Page,
-  expected: FormView,
-  buttonId: string,
-  signal: AbortSignal,
-) {
-  signal.throwIfAborted();
+export async function verifyFormInput(page: Page, expected: FormView, buttonId: string) {
   const fresh = await inspectForm(page);
   if (fresh.view.fingerprint !== expected.fingerprint)
     throw new ServiceError('form_structure_changed');
@@ -1170,6 +1178,17 @@ export async function advanceForm(
     (el) => ((el as HTMLButtonElement).form || el.closest('form'))?.checkValidity() ?? true,
   );
   if (!valid) throw new ServiceError('form_validation_failed');
+  return locator;
+}
+export async function advanceForm(
+  page: Page,
+  expected: FormView,
+  buttonId: string,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
+  const locator = await verifyFormInput(page, expected, buttonId);
+  signal.throwIfAborted();
   await locator.click({ timeout: 6000 });
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(200);

@@ -1,3 +1,4 @@
+import { pendingFormAction, recordFormTransition } from './form-execution.js';
 import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
 import { hash } from './autonomy.js';
@@ -14,7 +15,7 @@ const backLine = /^(뒤로|이전|back)$/im;
 export function googleNextIntent(job: Job) {
   const i = job.intent;
   return !!(
-    job.uncertain &&
+    pendingFormAction(job) &&
     i &&
     googleFormId(i.url) &&
     nextLabel.test(i.controlLabel || '') &&
@@ -151,6 +152,7 @@ function recordContinuation(
   const reason = restart
     ? '구글폼 첫 다음 단계의 응답·추가 문항 증거를 확인했습니다. 저장한 답변으로 첫 페이지의 다음 이동만 복원하며 최종 제출은 다시 검토합니다.'
     : '같은 구글폼의 다음 입력 단계임을 페이지 경로·뒤로 버튼·새 문항으로 확인했습니다. 현재 문항에서 계속합니다.';
+  recordFormTransition(job, reason);
   job.uncertain = false;
   delete job.intent;
   delete job.receiptObservations;
@@ -174,6 +176,24 @@ function recordContinuation(
   job.note = reason;
   store.saveJob(job);
   store.note(job.id, reason);
+}
+
+export function googleTransitionReason(job: Job, view: FormView) {
+  if (!googleNextIntent(job)) return 'step_intent_missing';
+  if (googleFormId(view.url) !== googleFormId(job.intent!.url)) return 'step_form_changed';
+  if (!observedNext(job)) return 'step_network_unsettled_or_unmatched';
+  const marker = view.googlePage,
+    before = job.intent!.googlePage?.history;
+  if (!marker) return 'step_page_not_ready';
+  if (!marker.back || marker.first) return 'step_path_not_advanced';
+  if (
+    before &&
+    (marker.history.length !== before.length + 1 ||
+      !before.every((p, n) => marker.history[n] === p) ||
+      before.includes(marker.history.at(-1)!))
+  )
+    return 'step_path_not_advanced';
+  return 'step_controls_or_definition_unverified';
 }
 
 export async function verifyGoogleContinuation(
@@ -204,7 +224,7 @@ export async function verifyGoogleContinuation(
     !marker?.back ||
     marker.first ||
     !view.buttons.some((b) => b.providerControl?.startsWith('google-')) ||
-    !newQuestion
+    (!nativeStep && !newQuestion)
   )
     return false;
   const before = i.googlePage?.history;
@@ -218,7 +238,14 @@ export async function verifyGoogleContinuation(
   } else if (marker.history.length !== 2 || !savedGoogleContinuation(job)) return false;
   await browser.assertFresh(o.id, 'navigate');
   if ((await inspectForm(browser.page!)).view.fingerprint !== view.fingerprint) return false;
-  recordContinuation(store, job, o, marker.history.length, newQuestion.label, false);
+  recordContinuation(
+    store,
+    job,
+    o,
+    marker.history.length,
+    newQuestion?.label || '확인된 다음 섹션',
+    false,
+  );
   return true;
 }
 

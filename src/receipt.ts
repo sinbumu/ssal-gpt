@@ -1,4 +1,5 @@
 import { completionMessage, receiptLineSafe } from './completion.js';
+import { pendingFormAction } from './form-execution.js';
 import { hash, redactContext } from './autonomy.js';
 import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
@@ -75,7 +76,10 @@ export async function watchSubmissionDialogs(
   const bindings = new Map<Request, Promise<Binding | undefined>>();
   const values = [...new Set(ajaxValues?.filter((v) => v.trim()) || [])];
   const valid = () =>
-    open && job.uncertain && hash(job.intent) === intentHash && browser.ownerJobId === job.id;
+    open &&
+    pendingFormAction(job) &&
+    hash(job.intent) === intentHash &&
+    browser.ownerJobId === job.id;
   const save = (closed = false) => {
     if (!valid()) return;
     diagnostics.matchedRequests = requests.size;
@@ -387,7 +391,7 @@ export async function watchSubmissionDialogs(
 
 export function captureReceipt(job: Job, o: Observation) {
   if (
-    !job.uncertain ||
+    !pendingFormAction(job) ||
     (job.intent?.kind !== 'submission' &&
       !(
         job.intent?.kind === 'step' &&

@@ -1,5 +1,6 @@
 import { ServiceError, safeMessage } from './auth.js';
 import type { Job } from './store.js';
+import { pendingFormStep } from './form-execution.js';
 
 export type ObservationDiagnostic = {
   at: number;
@@ -57,6 +58,18 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       code,
     );
   const messages: Record<string, string> = {
+    form_observation_unstable:
+      '문항 구조가 계속 바뀌어 안정된 화면을 확보하지 못했습니다. 입력·전송하지 않았습니다.',
+    step_intent_missing: '다음 이동의 실행 기록을 현재 화면과 연결하지 못했습니다.',
+    step_form_changed: '다음 이동 뒤 다른 폼이 표시되어 진행을 멈췄습니다.',
+    step_network_unsettled_or_unmatched:
+      '다음 이동과 연결된 서버 응답이 없거나 수집이 끝나지 않았습니다.',
+    step_page_not_ready: '다음 이동 뒤 새 페이지의 경로를 아직 읽지 못했습니다.',
+    step_path_not_advanced:
+      '다음 이동 뒤 섹션 경로가 진행되지 않았습니다. 사이트의 입력 오류도 확인하세요.',
+    step_controls_or_definition_unverified:
+      '다음 섹션의 경로는 관찰했지만 문항·이동 버튼을 검증하지 못했습니다.',
+    step_page_or_controls_unverified: '다음 페이지 번호·문항·이동 버튼을 함께 확인하지 못했습니다.',
     browser_observation_unstable:
       '화면 전환이 반복되어 두 번 다시 읽은 뒤에도 안정된 화면을 확보하지 못했습니다.',
     browser_observation_failed: '브라우저 화면을 읽는 중 분류되지 않은 오류가 발생했습니다.',
@@ -97,7 +110,9 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       : user
         ? '연결 또는 확인함의 요청을 처리한 뒤 재개하세요.'
         : phase.startsWith('form_')
-          ? '문항 인식·입력 오류 기록을 확인하세요. 미제출 작업은 수정 후 남은 한도로 기존 화면에서 재개할 수 있습니다. 직접 제출했다면 재개하지 말고 수동 완료로 기록하세요.'
+          ? phase === 'form_transition'
+            ? '현재 화면에서 재개하면 이동 결과만 다시 관찰합니다. 다음 버튼을 자동 재전송하지 않으며 최종 접수 판정과는 별개입니다.'
+            : '문항 인식·입력 오류 기록을 확인하세요. 미제출 작업은 수정 후 남은 한도로 기존 화면에서 재개할 수 있습니다. 직접 제출했다면 재개하지 말고 수동 완료로 기록하세요.'
           : '원인 기록을 확인하세요. 탐색은 남은 한도로 새 화면에서 재개할 수 있습니다. 같은 오류가 반복되면 이 기록을 보관하세요.',
     code,
     phase,
@@ -106,6 +121,16 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
 }
 
 export function jobNotice(job: Job): JobNotice | undefined {
+  if (pendingFormStep(job) && job.formExecution && !['running', 'queued'].includes(job.status))
+    return {
+      ...errorNotice(
+        new ServiceError(
+          job.formExecution.transition?.reason || 'step_page_or_controls_unverified',
+        ),
+        'form_transition',
+      ),
+      title: '기술 오류 · 다음 페이지 관찰 대기',
+    };
   if (
     (job.uncertain || job.status === 'submission_unknown') &&
     job.intent?.kind === 'step' &&

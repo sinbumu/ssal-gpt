@@ -1,3 +1,4 @@
+import { pendingFormAction, recordFormTransition } from './form-execution.js';
 import type { Browser, Observation } from './browser.js';
 import type { Job, Store } from './store.js';
 import { hash } from './autonomy.js';
@@ -12,7 +13,7 @@ function noPostNext(job: Job) {
   const intent = job.intent,
     capture = job.receiptCapture;
   if (
-    !job.uncertain ||
+    !pendingFormAction(job) ||
     !intent ||
     !intent.at ||
     !capture ||
@@ -74,6 +75,7 @@ function recordContinuation(
       page,
     },
   ].slice(-10);
+  recordFormTransition(job, '같은 폼의 다음 단계 확인');
   job.uncertain = false;
   delete job.intent;
   delete job.receiptObservations;

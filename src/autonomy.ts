@@ -384,7 +384,15 @@ export function resolveAnswer(
       consent,
     };
   }
-  if (state.reused?.[q.signature])
+  const eventEntryRoute =
+    /참여\s*경로|유입\s*경로/.test(q.label) ||
+    /(?:이벤트|행사|설문|조사).{0,20}(?:알게\s*된\s*경로|어떻게\s*알|접한\s*경로)/.test(q.label);
+  const serviceAwareness =
+    !eventEntryRoute && /알게\s*된\s*경로|어떻게\s*알|접한\s*경로/.test(q.label);
+  // Legacy automatic reuse has no provenance. Do not carry an inferred entry
+  // channel into personal awareness. Explicit user overrides above and saved
+  // site-scoped human answers below still apply.
+  if (state.reused?.[q.signature] && !serviceAwareness)
     return { answer: validateAnswer(q, state.reused[q.signature]!), source: 'job_memory' };
   const shipping = shippingField(q, questions);
   if (shipping) {
@@ -446,11 +454,7 @@ export function resolveAnswer(
   }
   const exact = saved.find((a) => a.origin === state.origin && a.signature === q.signature);
   if (exact) return { answer: validateAnswer(q, exact.answer), source: 'memory' };
-  if (
-    state.entryChannel &&
-    (/참여\s*경로|유입\s*경로/.test(q.label) ||
-      /(?:이벤트|행사|설문|조사).{0,20}(?:알게\s*된\s*경로|어떻게\s*알|접한\s*경로)/.test(q.label))
-  ) {
+  if (state.entryChannel && eventEntryRoute) {
     const channel = state.entryChannel;
     const aliases =
       channel === '인스타그램'

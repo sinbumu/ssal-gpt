@@ -413,6 +413,20 @@ test('public evidence and observed route are reusable, but never authorize inven
     ],
   };
   assert.equal(resolveAnswer(route, undefined, a, [], '').answer, undefined);
+  a.reused = { [route.signature]: ['app'] };
+  assert.equal(
+    resolveAnswer(route, undefined, a, [], '').answer,
+    undefined,
+    'legacy automatic cache does not establish service awareness',
+  );
+  a.overrides[route.signature] = ['new'];
+  assert.deepEqual(
+    resolveAnswer(route, undefined, a, [], '').answer,
+    ['new'],
+    'explicit user answer remains authoritative',
+  );
+  delete a.overrides[route.signature];
+  delete a.reused[route.signature];
   route.label = '이번 이벤트를 알게 된 경로';
   assert.equal(resolveAnswer(route, undefined, a, [], '').answer, undefined);
   route.options = [{ id: 'blog', label: '네이버 블로그' }];

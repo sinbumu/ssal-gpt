@@ -99,6 +99,16 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
 }
 
 export function jobNotice(job: Job): JobNotice | undefined {
+  if ((job.uncertain || job.status === 'submission_unknown') && job.receiptCheck?.captureIncomplete)
+    return {
+      category: 'technical',
+      title: '기술 오류 · 접수 관찰 미완료',
+      reason: job.receiptCheck.reason,
+      nextAction: '저장된 접수 증거만 다시 확인하세요. 입력·제출을 재실행하지 않습니다.',
+      code: 'receipt_capture_incomplete',
+      phase: 'form_receipt',
+      at: job.receiptCheck.at,
+    };
   if (job.uncertain || job.status === 'submission_unknown')
     return {
       category: 'user',

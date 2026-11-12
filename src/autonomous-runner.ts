@@ -56,6 +56,15 @@ export async function runAutonomous(
   let formLoadWaits = 0;
   let phase = 'form_navigation';
   let submissionDialogs: Awaited<ReturnType<typeof watchSubmissionDialogs>> | undefined;
+  const finishSubmissionObservation = async () => {
+    if (!submissionDialogs) return;
+    try {
+      await submissionDialogs.settle(signal);
+    } finally {
+      submissionDialogs.close();
+      submissionDialogs = undefined;
+    }
+  };
   const assertScope = () => {
     if (
       !state.policy.enabled ||
@@ -101,13 +110,10 @@ export async function runAutonomous(
     while (job.steps < job.maxSteps) {
       signal.throwIfAborted();
       // A scoped acknowledgement can arrive just before the site redirects.
-      if (
-        job.uncertain &&
-        browser.page &&
-        new URL(browser.page.url()).origin !== state.origin &&
-        (await verifyReceipt(store, browser, model, job, signal, false))
-      )
-        return;
+      if (job.uncertain && browser.page && new URL(browser.page.url()).origin !== state.origin) {
+        await finishSubmissionObservation();
+        if (await verifyReceipt(store, browser, model, job, signal, false)) return;
+      }
       assertScope();
       if (Date.now() - started > 15 * 60_000) throw new ServiceError('session_time_limit');
       try {
@@ -134,6 +140,7 @@ export async function runAutonomous(
         state.metrics.browserMs += Date.now() - observedAt;
         job.currentUrl = o.url;
         job.screenshot = o.screenshot;
+        if (job.uncertain) await finishSubmissionObservation();
         if (job.uncertain && job.intent?.kind === 'step') {
           const p = pageProgress(o.text, o.url);
           if (
@@ -608,6 +615,7 @@ export async function runAutonomous(
           captureReceipt(job, o);
           store.saveJob(job);
         }
+        await finishSubmissionObservation();
         if (await verifyReceipt(store, browser, model, job, signal, true)) return;
       } catch {
         /* Preserve uncertainty; never retry the external action. */

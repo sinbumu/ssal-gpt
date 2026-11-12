@@ -22,6 +22,7 @@ export type CaptureDiagnostics = {
   observedPosts: number;
   matchedRequests: number;
   responses: number;
+  failedRequests?: number;
   rejected: Record<string, number>;
   popups: number;
   navigations: number;
@@ -49,6 +50,8 @@ export type ReceiptCheck = {
   at: number;
   signals: ReceiptSignal[];
   capture?: CaptureDiagnostics;
+  captureIncomplete?: boolean;
+  reconciledCapture?: 'legacy_redirect';
 };
 
 const keyKind = (key: string): ReceiptField['kind'] | undefined => {

@@ -61,21 +61,36 @@ export async function watchSubmissionDialogs(
     pageClosed: false,
   };
   let open = true,
+    settlementCompleted = false,
     lastSignal = 0,
     responseAt = 0,
     responseUrl = destination;
   let responsePage: Page | undefined;
   const pending = new Set<Promise<unknown>>();
   const requests = new Set<Request>();
+  const responded = new Set<Request>();
+  const failed = new Set<Request>();
   type Binding = { page: Page; contract?: SubmissionContract };
   const bindings = new Map<Request, Promise<Binding | undefined>>();
   const values = [...new Set(ajaxValues?.filter((v) => v.trim()) || [])];
   const valid = () =>
     open && job.uncertain && hash(job.intent) === intentHash && browser.ownerJobId === job.id;
-  const save = (settled = false) => {
+  const save = (closed = false) => {
     if (!valid()) return;
     diagnostics.matchedRequests = requests.size;
-    job.receiptCapture = { intentHash, requests: requests.size, settled, diagnostics };
+    const responses = (job.receiptResponses || []).filter((r) => r.intentHash === intentHash);
+    job.receiptCapture = {
+      intentHash,
+      requests: requests.size,
+      settled:
+        settlementCompleted &&
+        pending.size === 0 &&
+        [...requests].every((r) => responded.has(r) || failed.has(r)) &&
+        responses.every((r) => r.bodyState !== 'reading'),
+      lifecycle: closed ? 'closed' : 'watching',
+      pendingTasks: pending.size,
+      diagnostics: structuredClone(diagnostics),
+    };
     store.saveJob(job);
   };
   const reject = (reason: string) => {
@@ -87,7 +102,12 @@ export async function watchSubmissionDialogs(
       if (valid()) reject('observation_error');
     });
     pending.add(safe);
-    void safe.finally(() => pending.delete(safe));
+    void safe.finally(() => {
+      pending.delete(safe);
+      // Late navigation/analytics must not turn an already-drained capture into
+      // permanent pending. Real request/response work still invalidates it.
+      if (settlementCompleted) save();
+    });
   };
   const listeners = new Map<Page, { nav: (frame: Frame) => void; closed: () => void }>();
   const attach = (p: Page) => {
@@ -214,6 +234,7 @@ export async function watchSubmissionDialogs(
       (async () => {
         const bound = await binding;
         if (!bound || !valid() || requests.size > 3 || !route(r.url())) return;
+        responded.add(r.request());
         if (requests.size === 1 && r.status() >= 200 && r.status() < 300) {
           responseAt = arrivedAt;
           responseUrl = r.url();
@@ -273,6 +294,19 @@ export async function watchSubmissionDialogs(
       })(),
     );
   };
+  const requestFailed = (r: Request) => {
+    const binding = bindings.get(r);
+    if (!binding) return;
+    track(
+      (async () => {
+        if (!(await binding) || !valid()) return;
+        failed.add(r);
+        diagnostics.failedRequests = failed.size;
+        lastSignal = Date.now();
+        save();
+      })(),
+    );
+  };
   const dialog = (d: Dialog) => {
     const dialogPage = d.page();
     if (d.type() !== 'alert' || !valid() || !dialogPage || !owned.has(dialogPage)) return;
@@ -318,6 +352,7 @@ export async function watchSubmissionDialogs(
   context.on('page', newPage);
   context.on('request', request);
   context.on('response', response);
+  context.on('requestfailed', requestFailed);
   context.on('dialog', dialog);
   return {
     async settle(signal: AbortSignal) {
@@ -327,14 +362,17 @@ export async function watchSubmissionDialogs(
         if (lastSignal && !pending.size && Date.now() - lastSignal >= 250) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      save(pending.size === 0);
+      settlementCompleted = true;
+      save();
       signal.throwIfAborted();
     },
     close() {
+      save(true);
       open = false;
       context.off('page', newPage);
       context.off('request', request);
       context.off('response', response);
+      context.off('requestfailed', requestFailed);
       context.off('dialog', dialog);
       for (const [p, l] of listeners) {
         p.off('framenavigated', l.nav);
@@ -432,10 +470,40 @@ export async function verifyReceipt(
   }
   const capture = job.receiptCapture?.intentHash === intentHash ? job.receiptCapture : undefined;
   let outcome = combineReceiptSignals(signals);
+  // Older observers reset `settled` on every navigation/rejected analytics POST.
+  // Reconcile only a fully accounted-for single 302/303 plus a fresh, explicit
+  // same-origin receipt page. Missing responses, unknown tasks, conflicting
+  // evidence and new-format incomplete captures remain locked.
+  const legacyRedirect =
+    capture &&
+    !capture.settled &&
+    capture.lifecycle === undefined &&
+    capture.pendingTasks === undefined &&
+    capture.requests === 1 &&
+    capture.diagnostics?.matchedRequests === 1 &&
+    capture.diagnostics.responses === 1 &&
+    !capture.diagnostics.pageClosed &&
+    Object.keys(capture.diagnostics.rejected).every((k) => k === 'unrecognized_destination') &&
+    capture.diagnostics.observedPosts ===
+      1 + (capture.diagnostics.rejected.unrecognized_destination || 0) &&
+    network.length === 1 &&
+    [302, 303].includes(network[0]!.status) &&
+    network[0]!.bodyState === 'unsupported' &&
+    screen &&
+    screen.observedAt >= network[0]!.at &&
+    signals.some((s) => s.kind === 'page' && s.outcome === 'accepted') &&
+    outcome === 'accepted';
+  const captureIncomplete = !!(
+    capture &&
+    capture.requests <= 1 &&
+    !capture.settled &&
+    !legacyRedirect &&
+    ['accepted', 'unconfirmed'].includes(outcome)
+  );
   if (capture && capture.requests > 1) outcome = 'conflict';
-  else if (capture && !capture.settled) outcome = 'pending';
+  else if (captureIncomplete) outcome = 'unconfirmed';
   const evidenceHash = hash({
-    version: 1,
+    version: 2,
     intentHash,
     network,
     alerts: alerts.map((a) => a.text),
@@ -448,10 +516,16 @@ export async function verifyReceipt(
     evidenceHash,
     outcome,
     method: 'rules' as 'rules' | 'ai',
-    reason: receiptReasons[outcome],
+    reason: captureIncomplete
+      ? '앱이 제출 응답 관찰을 끝내지 못했습니다. 서버의 처리 대기 안내와는 다릅니다. 재제출 없이 저장된 증거를 확인하세요.'
+      : legacyRedirect
+        ? '저장된 제출 응답과 새 완료 화면을 대조해 이전 관찰 상태를 재검증했습니다.'
+        : receiptReasons[outcome],
     at: Date.now(),
     signals: signals.slice(0, 20),
     capture: capture?.diagnostics ? structuredClone(capture.diagnostics) : undefined,
+    captureIncomplete,
+    reconciledCapture: legacyRedirect ? ('legacy_redirect' as const) : undefined,
   };
   const finish = (quote: string, verification: string, observedAt: number, screenshot?: string) => {
     if ((job.kind === 'demo' || job.autonomy?.synthetic) && !store.receipt(job.id)) return false;
@@ -496,7 +570,7 @@ export async function verifyReceipt(
     job.receiptCheck = prior;
     return false;
   }
-  if (outcome !== 'unconfirmed' || !semantic) {
+  if (outcome !== 'unconfirmed' || !semantic || captureIncomplete) {
     job.receiptCheck = check;
     store.saveJob(job);
     return false;

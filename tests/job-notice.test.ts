@@ -56,6 +56,18 @@ test('an old observation failure does not replace a new user question with a tec
   assert.equal(jobNotice(j)?.at, 1, 'projected notices remain stable across polling');
 });
 
+test('incomplete local receipt observation is technical, not a server pending or consent request', () => {
+  const j = {
+    status: 'submission_unknown',
+    uncertain: true,
+    receiptCheck: { captureIncomplete: true, reason: '관찰 미완료', at: 42 },
+  } as Job;
+  assert.equal(jobNotice(j)?.category, 'technical');
+  assert.equal(jobNotice(j)?.code, 'receipt_capture_incomplete');
+  assert.match(jobNotice(j)!.nextAction, /재실행하지/);
+  assert.equal(jobNotice(j)?.at, 42);
+});
+
 test('form parser/input failures are technical, while scoped review and live page recovery belong to the user', () => {
   for (const code of [
     'ambiguous_form_questions',

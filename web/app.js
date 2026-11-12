@@ -457,7 +457,7 @@ function renderReceiptCheck(check) {
     conflict: '서로 다른 결과',
     unconfirmed: '접수 미확인',
   };
-  return `<details class="receipt-check"><summary>제출 결과 판정 · ${esc(labels[check.outcome] || '미확인')}</summary><p>${esc(check.reason)}</p><p class="hint">${check.method === 'ai' ? 'AI 의미 검토' : '명확한 규칙으로 판정'} · ${esc(new Date(check.at).toLocaleString('ko-KR'))}</p>${check.signals.map((s) => `<div class="notification-note"><strong>${esc({ response: '서버 응답', dialog: '브라우저 알림', page: '화면' }[s.kind])} · ${esc(labels[s.outcome] || '미확인')}</strong>${s.status ? `<p>HTTP ${esc(s.status)}</p>` : ''}${s.bodyState && s.bodyState !== 'parsed' ? `<p>응답 본문: ${esc({ reading: '읽는 중', unsupported: '지원하지 않는 형식', too_large: '보관 크기 초과', unavailable: '읽기 실패 · 상태 코드만 기록' }[s.bodyState] || s.bodyState)}</p>` : ''}${s.codes?.length ? `<p>응답 코드: ${s.codes.map(esc).join(', ')}</p>` : ''}${s.flags?.length ? `<p>결과 플래그: ${s.flags.map(esc).join(', ')}</p>` : ''}${s.contract === 'naver-form-answer' ? '<p>네이버 폼의 해당 설문 답변 저장 응답으로 확인</p>' : ''}${s.receiptNumbers?.length ? `<p>접수번호: ${s.receiptNumbers.map(esc).join(', ')}</p>` : ''}${s.message ? `<blockquote>${esc(s.message)}</blockquote>` : ''}</div>`).join('')}${renderReceiptCapture(check.capture)}</details>`;
+  return `<details class="receipt-check"><summary>제출 결과 판정 · ${esc(check.captureIncomplete ? '접수 관찰 오류' : labels[check.outcome] || '미확인')}</summary><p>${esc(check.reason)}</p><p class="hint">${check.method === 'ai' ? 'AI 의미 검토' : '명확한 규칙으로 판정'} · ${esc(new Date(check.at).toLocaleString('ko-KR'))}</p>${check.signals.map((s) => `<div class="notification-note"><strong>${esc({ response: '서버 응답', dialog: '브라우저 알림', page: '화면' }[s.kind])} · ${esc(labels[s.outcome] || '미확인')}</strong>${s.status ? `<p>HTTP ${esc(s.status)}</p>` : ''}${s.bodyState && s.bodyState !== 'parsed' ? `<p>응답 본문: ${esc({ reading: '읽는 중', unsupported: '지원하지 않는 형식', too_large: '보관 크기 초과', unavailable: '읽기 실패 · 상태 코드만 기록' }[s.bodyState] || s.bodyState)}</p>` : ''}${s.codes?.length ? `<p>응답 코드: ${s.codes.map(esc).join(', ')}</p>` : ''}${s.flags?.length ? `<p>결과 플래그: ${s.flags.map(esc).join(', ')}</p>` : ''}${s.contract === 'naver-form-answer' ? '<p>네이버 폼의 해당 설문 답변 저장 응답으로 확인</p>' : ''}${s.receiptNumbers?.length ? `<p>접수번호: ${s.receiptNumbers.map(esc).join(', ')}</p>` : ''}${s.message ? `<blockquote>${esc(s.message)}</blockquote>` : ''}</div>`).join('')}${renderReceiptCapture(check.capture)}</details>`;
 }
 function renderReceiptCapture(capture) {
   if (!capture) return '';
@@ -474,7 +474,7 @@ function renderReceiptCapture(capture) {
     request_limit: '관찰 요청 한도 초과',
     observation_error: '응답 관찰 오류',
   };
-  return `<details><summary>네트워크 수집 진단</summary><p>관찰한 POST ${capture.observedPosts}개 · 승인 제출과 연결 ${capture.matchedRequests}개 · 응답 기록 ${capture.responses}개</p><p>새 탭 ${capture.popups}개 · 화면 이동 ${capture.navigations}회${capture.pageClosed ? ' · 창 닫힘 관측' : ''}</p>${capture.responses ? '' : '<p>연결된 서버 응답이 없어 화면·알림 근거만으로 판정했습니다.</p>'}${
+  return `<details><summary>네트워크 수집 진단</summary><p>관찰한 POST ${capture.observedPosts}개 · 승인 제출과 연결 ${capture.matchedRequests}개 · 응답 기록 ${capture.responses}개${capture.failedRequests ? ` · 네트워크 실패 관측 ${capture.failedRequests}개` : ''}</p><p>새 탭 ${capture.popups}개 · 화면 이동 ${capture.navigations}회${capture.pageClosed ? ' · 창 닫힘 관측' : ''}</p>${capture.responses ? '' : '<p>연결된 서버 응답이 없어 화면·알림 근거만으로 판정했습니다.</p>'}${
     Object.keys(capture.rejected).length
       ? `<ul>${Object.entries(capture.rejected)
           .map(([reason, count]) => `<li>${esc(reasons[reason] || reason)}: ${count}개</li>`)

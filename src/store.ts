@@ -109,6 +109,8 @@ export type Job = {
     intentHash: string;
     requests: number;
     settled: boolean;
+    lifecycle?: 'watching' | 'closed';
+    pendingTasks?: number;
     diagnostics?: CaptureDiagnostics;
   };
   receiptCheck?: ReceiptCheck;

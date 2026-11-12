@@ -363,9 +363,72 @@ function renderInbox(job) {
   const uncertainStage = box.final && /^(다음|next|continue)$/i.test(box.buttonLabel || '');
   return (
     metrics +
-    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'file' ? `<input name="${esc(q.id)}" type="file" accept=".png,.jpg,.jpeg,.pdf" ${q.required && !q.picker ? 'required' : ''}>${q.picker ? `<label>또는 Drive에서 선택할 정확한 파일명<input name="drive-${esc(q.id)}" maxlength="180" placeholder="같은 이름이 여러 개면 직접 선택이 필요합니다"></label>` : ''}<label class="check"><input type="checkbox" name="upload-${esc(q.id)}" ${q.required ? 'required' : ''}>선택한 실제 파일을 ${q.picker ? 'Google Drive 및 ' : ''}이 응모 주최자에게 첨부하는 데 동의합니다 (기기 파일 최대 5MB).</label>` : q.kind === 'rank' ? q.options.map((_, i) => `<label>${i + 1}순위<select name="${esc(q.id)}" required><option value="">선택</option>${q.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`).join('') : q.kind === 'text' ? `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">` : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit">한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
+    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}" ${q.condition ? `data-condition-parent="${esc(q.condition.questionId)}" data-condition-option="${esc(q.condition.optionId)}"` : ''}><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.kind === 'file' ? `<input name="${esc(q.id)}" type="file" accept=".png,.jpg,.jpeg,.pdf" ${q.required && !q.picker ? 'required' : ''}>${q.picker ? `<label>또는 Drive에서 선택할 정확한 파일명<input name="drive-${esc(q.id)}" maxlength="180" placeholder="같은 이름이 여러 개면 직접 선택이 필요합니다"></label>` : ''}<label class="check"><input type="checkbox" name="upload-${esc(q.id)}" ${q.required ? 'required' : ''}>선택한 실제 파일을 ${q.picker ? 'Google Drive 및 ' : ''}이 응모 주최자에게 첨부하는 데 동의합니다 (기기 파일 최대 5MB).</label>` : q.kind === 'rank' ? q.options.map((_, i) => `<label>${i + 1}순위<select name="${esc(q.id)}" required><option value="">선택</option>${q.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`).join('') : q.kind === 'text' ? (q.reviewDraft || q.draftEligible ? `<textarea name="${esc(q.id)}" rows="3" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">${esc(q.recommended?.[0] || '')}</textarea>` : `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="2000" autocomplete="off">`) : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.condition ? '<p class="hint">앞 문항에서 ‘기타’를 선택한 경우에만 작성합니다.</p>' : ''}${q.reviewDraft ? '<p class="hint">AI 검토용 초안 · 내용을 확인하고 필요하면 수정하세요. 실제 이용 경험을 확인한 답변은 아닙니다.</p>' : ''}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `${box.drafts?.reason ? `<p class="hint">${esc(box.drafts.reason)}</p>` : ''}${!state.browser.open && !box.final && !m.fields && !m.batches ? `<button type="button" data-restore-form="${job.id}">입력 전 응모 화면 복원</button>` : ''}${!box.drafts && box.items.some((q) => q.draftEligible && !q.recommended) ? `<button type="button" data-prepare-drafts="${job.id}">서술형 AI 초안 준비</button>` : box.drafts?.status === 'preparing' ? '<p class="hint">AI 초안을 준비하고 있습니다…</p>' : ''}<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit" ${box.drafts?.status === 'preparing' ? 'disabled' : ''}>한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
   );
 }
+const inboxStorageKey = (form) => `ssal-inbox:${form.dataset.inbox}:${form.dataset.inboxId}`;
+function readInboxEdits(form) {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(inboxStorageKey(form)) || 'null');
+    return saved && Date.now() - saved.at < 86400000 ? saved.answers : {};
+  } catch {
+    return {};
+  }
+}
+function savedInboxValue(form, name) {
+  return readInboxEdits(form)[name];
+}
+function syncInboxConditions(form) {
+  for (const field of form.querySelectorAll('[data-condition-parent]')) {
+    const selected = new FormData(form).getAll(field.dataset.conditionParent);
+    const active = selected.includes(field.dataset.conditionOption);
+    for (const el of field.querySelectorAll('input,textarea')) {
+      el.disabled = !active;
+      el.hidden = !active;
+    }
+  }
+}
+function restoreInboxEdits() {
+  const live = new Set();
+  for (const form of document.querySelectorAll('[data-inbox]')) {
+    live.add(inboxStorageKey(form));
+    const values = readInboxEdits(form);
+    for (const el of form.elements) {
+      const answer = values[el.name];
+      if (!answer || ['file', 'password'].includes(el.type)) continue;
+      if (['checkbox', 'radio'].includes(el.type)) el.checked = answer.includes(el.value);
+      else el.value = answer[0] || '';
+    }
+    syncInboxConditions(form);
+  }
+  for (const key of Object.keys(sessionStorage))
+    if (key.startsWith('ssal-inbox:') && !live.has(key)) sessionStorage.removeItem(key);
+}
+function saveInboxEdit(event) {
+  const el = event.target,
+    form = el.closest('[data-inbox]');
+  if (!form || !el.name || ['file', 'password'].includes(el.type)) return;
+  const q = state?.jobs
+    .find((j) => j.id === form.dataset.inbox)
+    ?.autonomy?.inbox?.items.find((q) => q.id === el.name);
+  if (
+    !q ||
+    /인증\s*문자|보안\s*문자|자동\s*(?:기입|입력)\s*방지|captcha|verification code/i.test(
+      `${q.label} ${q.description || ''}`,
+    )
+  )
+    return;
+  const answers = readInboxEdits(form);
+  answers[el.name] = [...form.elements]
+    .filter((e) => e.name === el.name && (!['checkbox', 'radio'].includes(e.type) || e.checked))
+    .map((e) => e.value);
+  try {
+    sessionStorage.setItem(inboxStorageKey(form), JSON.stringify({ at: Date.now(), answers }));
+  } catch {}
+  syncInboxConditions(form);
+}
+document.addEventListener('input', saveInboxEdit);
+document.addEventListener('change', saveInboxEdit);
 function renderReceiptCheck(check) {
   if (!check) return '';
   const labels = {
@@ -527,6 +590,7 @@ function render() {
   $('jobs').innerHTML =
     cards.filter((_, i) => !active(state.jobs[i])).join('') ||
     '<div class="empty compact">지난 실행 기록이 여기에 쌓입니다.</div>';
+  restoreInboxEdits();
 }
 async function refresh() {
   state = await api('/api/state');
@@ -724,6 +788,26 @@ const handleAutonomyClick = guard(async (event) => {
   }
   const forget = event.target.closest('[data-forget]');
   if (forget) await api('/api/answers/delete', { id: forget.dataset.forget });
+  const restore = event.target.closest('[data-restore-form]');
+  if (restore) {
+    if (
+      !confirm(
+        '이 폼을 직접 제출한 적이 없습니까? 확인하면 입력 전 화면만 다시 열고, 기존 답변 확인함은 유지합니다. 이미 제출했다면 취소해 주세요.',
+      )
+    )
+      return;
+    await api(`/api/jobs/${restore.dataset.restoreForm}/restore-form`, {
+      confirmedNotSubmitted: true,
+    });
+    toast('입력 전 화면을 복원했습니다. 기존 확인함에서 계속할 수 있습니다.');
+  }
+  const prepare = event.target.closest('[data-prepare-drafts]');
+  if (prepare) {
+    const box = state.jobs.find((j) => j.id === prepare.dataset.prepareDrafts)?.autonomy?.inbox;
+    await api(`/api/jobs/${prepare.dataset.prepareDrafts}/prepare-drafts`, { inboxId: box.id });
+    prepare.blur();
+    toast('서술형 초안을 준비합니다. 입력 중인 답변은 유지합니다.');
+  }
   const recommend = event.target.closest('[data-recommend]');
   if (recommend) {
     const box = state.jobs.find((j) => j.id === recommend.dataset.recommend).autonomy.inbox;
@@ -731,16 +815,23 @@ const handleAutonomyClick = guard(async (event) => {
     for (const q of box.items.filter((q) => q.recommended)) {
       let rankIndex = 0;
       for (const el of form.elements) {
-        if (el.name !== q.id) continue;
+        if (el.name !== q.id || savedInboxValue(form, q.id) !== undefined) continue;
         if (el.type === 'checkbox' || el.type === 'radio')
           el.checked = q.recommended.includes(el.value);
         else el.value = q.recommended[q.kind === 'rank' ? rankIndex++ : 0] || '';
       }
+      const first = [...form.elements].find((el) => el.name === q.id);
+      if (first) saveInboxEdit({ target: first });
     }
+    syncInboxConditions(form);
   }
 });
 document.addEventListener('click', (event) => {
-  if (event.target.closest('[data-login],[data-forget],[data-recommend],[data-external]'))
+  if (
+    event.target.closest(
+      '[data-login],[data-forget],[data-recommend],[data-prepare-drafts],[data-restore-form],[data-external]',
+    )
+  )
     void handleAutonomyClick(event);
 });
 document.addEventListener('submit', (event) => {
@@ -797,6 +888,7 @@ document.addEventListener('submit', (event) => {
       answers,
       remember: f.has('remember'),
     });
+    sessionStorage.removeItem(inboxStorageKey(form));
     toast('답변을 전달했습니다. 현재 화면에서 이어서 진행합니다.');
   })(event);
 });

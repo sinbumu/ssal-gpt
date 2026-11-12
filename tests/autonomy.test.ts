@@ -6,6 +6,8 @@ import {
   createAutonomy,
   syntheticSettings,
   resolveAnswer,
+  otherTextCondition,
+  reviewDraft,
   type Question,
   type AnswerPlan,
   type SavedAnswer,
@@ -32,6 +34,63 @@ const plan: AnswerPlan = {
   answer: ['예'],
   reason: 'test',
 };
+test('review drafts are available without auto-answer delegation, but cannot fabricate facts or authorize consent', () => {
+  const state = createAutonomy(
+    {
+      ...syntheticSettings,
+      policy: {
+        ...syntheticSettings.policy,
+        preferenceRule: '',
+        evaluationRule: '',
+        autoRecommendations: true,
+      },
+    },
+    'https://example.invalid',
+  );
+  const field = q('불편을 느끼신 부분의 개선의견을 주세요', 'text');
+  const proposed = {
+    ...plan,
+    answer: ['자주 찾는 메뉴와 관련 정보를 한눈에 볼 수 있으면 좋겠습니다.'],
+  };
+  const result = resolveAnswer(field, proposed, state, [], '');
+  assert.equal(result.answer, undefined);
+  assert.deepEqual(result.recommendation, proposed.answer);
+  assert.equal(result.source, 'review_draft');
+  assert.equal(
+    reviewDraft(field, { ...proposed, answer: ['여러 번 사용했는데 오류를 겪었습니다.'] }),
+    undefined,
+  );
+  for (const label of [
+    '방문 후기와 개선의견',
+    '개선의견 개인정보 동의',
+    '응원 인증문자',
+    '응원 경품 배송 주소',
+    '실제 이용 경험과 개선의견',
+  ])
+    assert.equal(reviewDraft(q(label, 'text'), proposed), undefined, label);
+  assert.equal(
+    reviewDraft(q('성별'), { ...proposed, category: 'fact', answer: ['남성'] }),
+    undefined,
+  );
+});
+test('Other text is conditional only for one exact parent and explicit Other option', () => {
+  const parent = {
+    ...q('방문 목적'),
+    id: 'parent',
+    options: [
+      { id: 'event', label: '이벤트 참여' },
+      { id: 'other', label: '기타' },
+    ],
+  };
+  const child = { ...q('방문 목적 — 기타 작성', 'text'), id: 'child', required: false };
+  assert.deepEqual(otherTextCondition(child, [parent, child]), {
+    questionId: 'parent',
+    optionId: 'other',
+  });
+  assert.equal(otherTextCondition({ ...child, required: true }, [parent]), undefined);
+  assert.equal(otherTextCondition(child, [parent, { ...parent, id: 'duplicate' }]), undefined);
+  assert.equal(otherTextCondition({ ...child, label: '기타 의견' }, [parent]), undefined);
+});
 test('verification codes require an explicit current-job answer, ignoring plans and memories', () => {
   const field = q('인증문자', 'text');
   const state = createAutonomy(syntheticSettings, 'https://example.invalid');

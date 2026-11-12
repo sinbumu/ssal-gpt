@@ -20,6 +20,8 @@ import {
   syntheticSettings,
   validateAnswer,
   verificationQuestion,
+  otherTextCondition,
+  textDraftEligible,
 } from './autonomy.js';
 import { autonomyDemo, acceptDemo } from './autonomy-demo.js';
 import {
@@ -283,6 +285,16 @@ export async function createApp(options: {
                 reused: undefined,
                 privateAnswers: undefined,
                 plan: undefined,
+                inbox: job.autonomy.inbox
+                  ? {
+                      ...job.autonomy.inbox,
+                      items: job.autonomy.inbox.items.map((q) => ({
+                        ...q,
+                        draftEligible: textDraftEligible(q),
+                        condition: otherTextCondition(q, job.autonomy!.inbox!.items),
+                      })),
+                    }
+                  : undefined,
               }
             : undefined,
         })),
@@ -742,7 +754,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|delegation|retry-research|archive|unarchive|hold-note|task)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|prepare-drafts|restore-form|delegation|retry-research|archive|unarchive|hold-note|task)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -843,6 +855,57 @@ export async function createApp(options: {
         (job.browserEngine || 'chromium') !== browser.engine
       )
         throw new ServiceError('job_browser_profile_mismatch');
+      if (action === 'prepare-drafts') {
+        if (manualNavigation) throw new ServiceError('browser_busy', 409);
+        if (data.inboxId !== job.autonomy?.inbox?.id) throw new ServiceError('inbox_expired');
+        runner.prepareDrafts(id);
+        return send(response, 200, { ok: true });
+      }
+      if (action === 'restore-form') {
+        const a = job.autonomy;
+        if (
+          runner.isBusy() ||
+          manualNavigation ||
+          data.confirmedNotSubmitted !== true ||
+          !a?.inbox ||
+          a.inbox.final ||
+          job.status !== 'needs_user' ||
+          job.archivedAt ||
+          job.uncertain ||
+          job.transmitted ||
+          job.intent ||
+          a.metrics.fields ||
+          a.metrics.batches ||
+          job.history.some((h) => h.action === 'form_batch') ||
+          (!a.synthetic && settings(store).revision !== a.revision) ||
+          (job.browserEngine || 'chromium') !== browser.engine
+        )
+          throw new ServiceError('untouched_form_restore_unavailable');
+        const url = job.currentUrl || job.startUrl;
+        if (new URL(url).origin !== a.origin) throw new ServiceError('form_origin_outside_grant');
+        manualNavigation = true;
+        try {
+          let page = browser.jobPage(id);
+          if (!page || page.isClosed() || page.url() === 'about:blank') {
+            await browser.selectJob(id);
+            browser.setManual(false);
+            browser.setReadOnlyMode(true);
+            await browser.navigate(url);
+            page = browser.page!;
+          }
+          if ((await inspectForm(page)).view.fingerprint !== a.inbox.fingerprint)
+            throw new ServiceError('inbox_page_changed');
+          browser.ownerJobId = id;
+          store.note(
+            id,
+            '직접 미제출 확인 후, 입력 전 폼을 읽기 전용으로 복원했습니다. 기존 확인함을 유지합니다.',
+          );
+          return send(response, 200, { ok: true });
+        } finally {
+          browser.setManual(true);
+          manualNavigation = false;
+        }
+      }
       if (action === 'retry-research') {
         const state = job.autonomy;
         const questions =
@@ -900,10 +963,19 @@ export async function createApp(options: {
             const answers = z
               .record(z.string(), z.array(z.string().max(2000)).max(30))
               .parse(data.answers);
-            const validated = inbox.items.map((q) => ({
-              q,
-              answer: validateAnswer(q, answers[q.id] || []),
-            }));
+            const validated = inbox.items.map((q) => {
+              const condition = otherTextCondition(q, inbox.items);
+              const parent = condition && answers[condition.questionId];
+              return {
+                q,
+                answer: validateAnswer(
+                  q,
+                  condition && parent && !parent.includes(condition.optionId)
+                    ? ['']
+                    : answers[q.id] || [],
+                ),
+              };
+            });
             if (validated.some((v) => !v.answer)) throw new ServiceError('invalid_inbox_answer');
             for (const { q, answer } of validated) {
               state.overrides[q.kind === 'file' ? q.id : q.signature] = answer!;

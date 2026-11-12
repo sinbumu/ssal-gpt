@@ -18,6 +18,9 @@ import { pageProgress } from './page-progress.js';
 import { compactDiscoveryContext } from './discovery-context.js';
 import { beginReadTrace } from './read-trace.js';
 import { settings } from './autonomy.js';
+import { prepareFormDrafts } from './form-drafts.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   discoveryContext,
   discoveryState,
@@ -287,6 +290,40 @@ export class Runner {
   }
   async finished() {
     while (this.work) await this.work;
+  }
+  prepareDrafts(id: string) {
+    if (this.isBusy()) throw new ServiceError('browser_busy', 409);
+    const job = this.store.job(id);
+    if (
+      !job ||
+      job.status !== 'needs_user' ||
+      job.archivedAt ||
+      job.uncertain ||
+      !job.autonomy?.inbox ||
+      job.autonomy.inbox.final ||
+      !/^[a-z0-9-]+\.png$/i.test(job.screenshot || '')
+    )
+      throw new ServiceError('inbox_not_available');
+    this.controller = new AbortController();
+    this.activeId = id;
+    this.work = readFile(join(this.store.dir, 'evidence', job.screenshot!))
+      .then((image) =>
+        prepareFormDrafts(
+          this.store,
+          meteredModel(this.store, this.model, job),
+          job,
+          image,
+          this.controller!.signal,
+        ),
+      )
+      .catch((error) => {
+        this.store.note(id, safeMessage(error));
+      })
+      .finally(() => {
+        this.work = undefined;
+        this.controller = undefined;
+        this.activeId = undefined;
+      });
   }
   private async redirectDiscovery(
     job: Job,

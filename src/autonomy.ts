@@ -85,6 +85,8 @@ export type SavedAnswer = {
 export type InboxItem = Question & {
   reason: string;
   recommended?: string[];
+  reviewDraft?: boolean;
+  condition?: { questionId: string; optionId: string };
   category: AnswerPlan['category'];
 };
 export type AutonomyState = {
@@ -113,6 +115,11 @@ export type AutonomyState = {
     buttonLabel?: string;
     review?: unknown;
     createdAt: number;
+    drafts?: {
+      status: 'preparing' | 'ready' | 'partial' | 'unavailable';
+      reason?: string;
+      at: number;
+    };
   };
   finalApproval?: string;
   metrics: {
@@ -266,6 +273,58 @@ export function verificationQuestion(q: Question) {
   return /인증\s*문자|보안\s*문자|자동\s*(?:기입|입력)\s*방지|captcha|verification code/i.test(
     `${q.label}\n${q.description || ''}`,
   );
+}
+// Suggestions are review material, not facts about the participant or a grant
+// to enter them. Restrict this path to requests for proposed wording.
+export function textDraftEligible(q: Question) {
+  const hint = `${q.label}\n${q.description || ''}`;
+  return (
+    q.kind === 'text' &&
+    !consentQuestion(q) &&
+    !verificationQuestion(q) &&
+    !personalKey(q) &&
+    !/주소|배송지|우편번호|계좌|주민등록|정답|퀴즈|실제.{0,12}경험|체험담|구매\s*후기|방문\s*후기|이용\s*후기|사용\s*후기|인증|password|email|phone|address/i.test(
+      hint,
+    ) &&
+    /개선\s*(?:의견|사항)|건의|제안|바라는|바라시는|기대|축하|응원|희망|suggestion|improvement|congratulat/i.test(
+      hint,
+    )
+  );
+}
+export function reviewDraft(q: Question, plan?: AnswerPlan) {
+  if (
+    !textDraftEligible(q) ||
+    plan?.source !== 'recommendation' ||
+    !['preference', 'evaluation'].includes(plan.category)
+  )
+    return;
+  const valid = validateAnswer(q, plan.answer || []);
+  if (!valid?.[0]?.trim()) return;
+  // Reject obvious invented experiences even as drafts. The planner also must
+  // phrase these as future requests, never imply it verified a personal story.
+  if (
+    /(?:이용|사용|방문|구매|참여)(?:했|하였|해\s*봤|해\s*보았|한\s*적|한\s*경험)|불편했|느꼈|겪었|어려웠|발생했|(?:저는|제가).{0,30}(?:거주|살고|직업)|항상\s*(?:이용|사용)|(?:이용|사용)하고\s*있/.test(
+      valid[0],
+    )
+  )
+    return;
+  return valid;
+}
+export function otherTextCondition(q: Question, questions: Question[]) {
+  if (q.kind !== 'text' || q.required) return;
+  const match = q.label.match(/^(.+) — (?:기타(?:\s*(?:작성|입력|의견))?|other)$/i);
+  if (!match) return;
+  const parents = questions.filter(
+    (parent) =>
+      parent.id !== q.id &&
+      parent.label === match[1] &&
+      ['radio', 'checkbox', 'select'].includes(parent.kind),
+  );
+  const parent = parents.length === 1 ? parents[0] : undefined;
+  const options = parent?.options.filter((o) => /^(기타|other)$/i.test(o.label.trim()));
+  return parent && options?.length === 1
+    ? { questionId: parent.id, optionId: options[0]!.id }
+    : undefined;
 }
 export function validateAnswer(q: Question, answer: string[]): string[] | undefined {
   // Refusal of a mandatory, single-checkbox consent is a valid user decision;
@@ -441,6 +500,8 @@ export function resolveAnswer(
       recommendation: valid,
       source: 'recommendation',
     };
+  const draft = reviewDraft(q, plan);
+  if (draft) return { source: 'review_draft', recommendation: draft };
   return { source: 'answer_required' };
 }
 export function redact(text: string, profile: Profile) {

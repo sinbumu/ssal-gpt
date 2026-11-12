@@ -30,6 +30,11 @@ import { researchQuestion } from './research.js';
 import { moaPageMarker, verifyFormContinuation } from './form-progress.js';
 import { pageProgress } from './page-progress.js';
 import { verifyNaverContinuation, restoreNaverDraft } from './naver-progress.js';
+import {
+  googleNextIntent,
+  verifyGoogleContinuation,
+  restoreGoogleDraft,
+} from './google-progress.js';
 import { consentQuestion } from './autonomy.js';
 import { optionalConsent } from './consent.js';
 import { errorNotice } from './job-notice.js';
@@ -85,14 +90,21 @@ export async function runAutonomous(
     store.saveJob(job);
   };
   try {
-    if (job.uncertain && (await verifyReceipt(store, browser, model, job, signal, false))) return;
+    if (
+      job.uncertain &&
+      !googleNextIntent(job) &&
+      (await verifyReceipt(store, browser, model, job, signal, false))
+    )
+      return;
     await browser.open();
     if (!job.currentUrl) await browser.navigate(job.startUrl);
     else if (browser.ownerJobId !== job.id || browser.page?.url() === 'about:blank') {
       assertScope();
-      const restored = await restoreNaverDraft(store, browser, job);
-      // Apart from a proven no-POST Naver first-Next draft, only untouched
-      // preparation may reopen. Possible external submissions remain locked.
+      const restored =
+        (await restoreNaverDraft(store, browser, job)) ||
+        (await restoreGoogleDraft(store, browser, job));
+      // Only a narrowly proven first-Next draft or untouched preparation may
+      // reopen. Possible final submissions remain locked.
       if (!restored) {
         if (
           !job.uncertain &&
@@ -141,7 +153,7 @@ export async function runAutonomous(
         job.currentUrl = o.url;
         job.screenshot = o.screenshot;
         if (job.uncertain) await finishSubmissionObservation();
-        if (job.uncertain && job.intent?.kind === 'step') {
+        if (job.uncertain && job.intent?.kind === 'step' && !googleNextIntent(job)) {
           const p = pageProgress(o.text, o.url);
           if (
             p &&
@@ -157,7 +169,10 @@ export async function runAutonomous(
           }
         }
         if (job.uncertain && view.questions.length) {
-          if (!(await verifyNaverContinuation(store, browser, job, o, view)))
+          if (
+            !(await verifyGoogleContinuation(store, browser, job, o, view)) &&
+            !(await verifyNaverContinuation(store, browser, job, o, view))
+          )
             await verifyFormContinuation(store, browser, model, job, o, view, signal);
         }
         if (!job.uncertain) {
@@ -165,7 +180,7 @@ export async function runAutonomous(
           submissionDialogs = undefined;
         }
         store.saveJob(job);
-        if (job.uncertain && job.intent?.kind === 'submission') {
+        if (job.uncertain && (job.intent?.kind === 'submission' || googleNextIntent(job))) {
           if (await verifyReceipt(store, browser, model, job, signal, true)) return;
           job.status = 'submission_unknown';
           record(
@@ -476,6 +491,7 @@ export async function runAutonomous(
         const progress = pageProgress(o.text, o.url);
         const intermediate =
           button.providerControl === 'naver-next' ||
+          button.providerControl === 'google-next' ||
           (!!progress &&
             progress.current < progress.total &&
             /^(다음(?:\s*(?:문항|페이지))?|next|continue)$/i.test(button.label));
@@ -518,12 +534,22 @@ export async function runAutonomous(
           kind: intermediate ? 'step' : 'submission',
           controlLabel: button.label,
           providerControl: button.providerControl,
+          googlePage: view.googlePage
+            ? {
+                history: view.googlePage.history,
+                signatures: view.questions.map((q) => q.signature),
+              }
+            : undefined,
           pageMarker: await moaPageMarker(browser.page!),
           progress: intermediate ? progress : undefined,
         };
         store.saveJob(job);
         if (job.eventId) store.markSubmission(job.eventId, 'unknown');
-        if (!intermediate || button.providerControl === 'naver-next') {
+        if (
+          !intermediate ||
+          button.providerControl === 'naver-next' ||
+          button.providerControl === 'google-next'
+        ) {
           submissionDialogs?.close();
           submissionDialogs = await watchSubmissionDialogs(
             store,

@@ -176,3 +176,15 @@ test('legacy drained redirect evidence is reconciled without browser access, rep
     if (scenario === 'new-capture') assert.equal(j.receiptCheck?.captureIncomplete, true);
   }
 });
+
+test('Google recorded-response wording requires an actual non-negated receipt', () => {
+  for (const text of ['응답이 기록되었습니다.', '답변이 기록되었습니다.'])
+    assert.equal(completionMessage(text, text), true);
+  for (const text of [
+    '응답이 기록되지 않았습니다.',
+    '예시: 응답이 기록되었습니다.',
+    '제출하면 응답이 기록되었습니다. 표시를 확인하세요.',
+    '기록할 응답을 입력하세요.',
+  ])
+    assert.equal(completionMessage(text, text), false);
+});

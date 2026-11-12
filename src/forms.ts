@@ -9,6 +9,7 @@ import {
 } from './complex-controls.js';
 import { hash, type Question } from './autonomy.js';
 import { ServiceError } from './auth.js';
+import { googleFormState } from './google-form-dom.js';
 
 export type FormView = {
   url: string;
@@ -19,8 +20,9 @@ export type FormView = {
     label: string;
     action: string;
     form: number;
-    providerControl?: 'naver-next' | 'naver-submit';
+    providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
   }[];
+  googlePage?: NonNullable<Awaited<ReturnType<typeof googleFormState>>>;
 };
 type Binding = {
   indices: number[];
@@ -530,6 +532,8 @@ export async function inspectForm(page: Page) {
         visible: helpers.visible(b),
         disabled: b.disabled,
         type: b.type,
+        role: b.getAttribute('role'),
+        jsname: b.getAttribute('jsname'),
         providerControl:
           location.origin === 'https://form.naver.com' &&
           /^\/response\/[A-Za-z0-9_-]{5,100}\/?$/.test(location.pathname) &&
@@ -616,21 +620,35 @@ export async function inspectForm(page: Page) {
     throw new ServiceError('ambiguous_form_questions');
   if (new Set(raw.groups.map((g) => g.form)).size > 1)
     throw new ServiceError('multiple_forms_require_manual_selection');
-  const buttons = raw.buttons.map((b, i) => ({
+  const googlePage = await googleFormState(page);
+  const buttons: FormView['buttons'] = raw.buttons.map((b, i) => ({
     id: `b${i}`,
     label: b.label,
     action: b.action,
     form: b.form,
-    providerControl: b.providerControl,
+    providerControl:
+      b.providerControl ||
+      (googlePage && b.form === googlePage.form
+        ? googlePage.next &&
+          b.role === 'button' &&
+          b.jsname === 'OCpkoe' &&
+          /^(다음|next)$/i.test(b.label)
+          ? 'google-next'
+          : googlePage.submit && /^(제출|submit)$/i.test(b.label)
+            ? 'google-submit'
+            : undefined
+        : undefined),
   }));
   const view: FormView = {
     url: page.url(),
     questions,
     buttons,
+    googlePage,
     fingerprint: hash({
       url: page.url(),
       questions,
       buttons,
+      googlePage,
       forms: raw.forms,
       constraints: raw.constraints,
       buttonHandlers: raw.buttons.map((b) => [b.handler, b.href]),

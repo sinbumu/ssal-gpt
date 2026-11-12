@@ -85,7 +85,8 @@ export type Job = {
     kind?: 'step' | 'submission';
     progress?: { current: number; total: number };
     controlLabel?: string;
-    providerControl?: 'naver-next' | 'naver-submit';
+    providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
+    googlePage?: { history: number[]; signatures: string[] };
     pageMarker?: { id: string; number: number };
     at?: number;
   };

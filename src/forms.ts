@@ -101,6 +101,9 @@ export async function inspectForm(page: Page) {
             if (
               node instanceof Element &&
               (!helpers.visible(node) ||
+                (location.hostname === 'docs.google.com' &&
+                  /^\/forms\/d\//.test(location.pathname) &&
+                  node.matches('[role=alert][jsname=Rfh2Tc]')) ||
                 node.matches(
                   'input,textarea,select,output,button,[role=button],[role=listbox],script,style,[aria-hidden=true]',
                 ))
@@ -136,7 +139,9 @@ export async function inspectForm(page: Page) {
           .join(' ')
           .trim();
         const options = [
-          ...list.querySelectorAll<HTMLElement>('[jsname=d9BH4c] [role=option]'),
+          // Opening the popup strips role=option from these original nodes;
+          // their public labels/data-value/selection state remain in place.
+          ...list.querySelectorAll<HTMLElement>('[jsname=d9BH4c] [data-value]'),
         ].filter(
           (e) => e.getAttribute('data-value') !== '' && e.getAttribute('aria-disabled') !== 'true',
         );
@@ -802,18 +807,46 @@ export async function applyAnswers(
       const list = page.locator('[role=listbox][jsname=W85ice]').nth(binding.indices[0]!);
       const selected = async () =>
         (
-          await list.locator('[jsname=d9BH4c] [role=option][aria-selected=true]').allTextContents()
+          await list.locator('[jsname=d9BH4c] [data-value][aria-selected=true]').allTextContents()
         ).map((s) => s.trim());
       if ((await selected()).join('') !== answer[0]) {
-        await list.click({ timeout: 3000 });
-        await rebind();
-        signal.throwIfAborted();
+        if ((await list.getAttribute('aria-expanded')) !== 'true')
+          await list.click({ timeout: 3000 });
         const target = list
           .getByRole('option', { name: answer[0], exact: true })
           .filter({ visible: true });
+        // Google mounts the popup asynchronously after the opening click.
+        // Wait for presence only; never use first() to choose among duplicates.
+        await target
+          .first()
+          .waitFor({ state: 'visible', timeout: 3000 })
+          .catch(() => {
+            signal.throwIfAborted();
+            throw new ServiceError('form_controls_not_ready');
+          });
+        await rebind();
+        signal.throwIfAborted();
         if ((await target.count()) !== 1) throw new ServiceError('ambiguous_form_options');
         await target.click({ timeout: 3000 });
+        await page
+          .waitForFunction(
+            ({ index, value }) => {
+              const current = document.querySelectorAll('[role=listbox][jsname=W85ice]')[index];
+              const values = [
+                ...(current?.querySelectorAll('[jsname=d9BH4c] [data-value][aria-selected=true]') ||
+                  []),
+              ].map((el) => el.textContent?.trim());
+              return values.length === 1 && values[0] === value;
+            },
+            { index: binding.indices[0]!, value: answer[0] },
+            { timeout: 3000 },
+          )
+          .catch(() => {
+            signal.throwIfAborted();
+            throw new ServiceError('field_verification_failed');
+          });
       }
+      signal.throwIfAborted();
       await rebind();
       if ((await selected()).length !== 1 || (await selected())[0] !== answer[0])
         throw new ServiceError('field_verification_failed');
@@ -1010,7 +1043,7 @@ export async function formValuesHash(page: Page) {
             checked: (el as HTMLInputElement).checked,
             ariaChecked: el.getAttribute('aria-checked'),
             dropdown: el.matches('[role=listbox][jsname=W85ice]')
-              ? [...el.querySelectorAll('[jsname=d9BH4c] [role=option][aria-selected=true]')].map(
+              ? [...el.querySelectorAll('[jsname=d9BH4c] [data-value][aria-selected=true]')].map(
                   (e) => e.textContent?.trim(),
                 )
               : undefined,
@@ -1043,7 +1076,7 @@ export async function moaformSnapshot(page: Page) {
         value: await page
           .locator('[role=listbox][jsname=W85ice]')
           .nth(b.indices[0]!)
-          .locator('[jsname=d9BH4c] [role=option][aria-selected=true]')
+          .locator('[jsname=d9BH4c] [data-value][aria-selected=true]')
           .allTextContents(),
       });
       continue;

@@ -87,6 +87,93 @@ test('Google loading choices settle before inspection instead of producing empty
     'https://docs.google.com/forms/d/e/fixture_google_loading/viewform',
   ));
 
+for (const mode of [
+  'delayed',
+  'already-open',
+  'changed',
+  'duplicate',
+  'never-opens',
+  'selection-not-applied',
+] as const) {
+  test(`Google dropdown ${mode}: wait for the menu, preserve identity and never repeat an opening click`, async () =>
+    fixture(
+      `<style>[jsname=d9BH4c] [role=option]:not([aria-selected=true]){display:none}.popup{display:none}[aria-expanded=true] .popup{display:block}[aria-expanded=true] [jsname=d9BH4c]{display:none}</style>
+      <form><div role="listitem"><h3 id="region">거주지역</h3>
+      <div role="listbox" jsname="W85ice" aria-labelledby="region" aria-expanded="false"><div jsname="d9BH4c">${['', '서울', '경기'].map((s, i) => `<div role="option" data-value="${s}" aria-selected="${i === 0}">${s || '선택'}</div>`).join('')}</div><div class="popup"></div></div><div role="alert" jsname="Rfh2Tc"></div></div><button>제출</button></form>
+      <script>
+      window.openClicks=0;window.optionClicks=0;window.posts=0;
+      const mode=${JSON.stringify(mode)}, list=document.querySelector('[role=listbox]'), popup=list.querySelector('.popup');
+      function open(){
+        popup.innerHTML=list.querySelector('[jsname=d9BH4c]').innerHTML;
+        list.querySelector('[jsname=d9BH4c]').setAttribute('aria-hidden','true');
+        list.querySelectorAll('[jsname=d9BH4c] [data-value]').forEach(o=>o.removeAttribute('role'));
+        if(mode==='changed')document.querySelector('#region').textContent='배송 희망 지역';
+        if(mode==='duplicate')popup.append(popup.querySelector('[data-value="경기"]').cloneNode(true));
+        list.setAttribute('aria-expanded','true');
+      }
+      if(mode==='already-open')open();
+      list.onclick=e=>{
+        if(list.getAttribute('aria-expanded')!=='true'){
+          window.openClicks++;
+          if(mode!=='never-opens')setTimeout(open,180);
+        }else if(e.target.closest('.popup [role=option]')){
+          window.optionClicks++;
+          const text=e.target.textContent;
+          document.querySelector('[role=alert]').textContent='필수 질문입니다.';
+          if(mode!=='selection-not-applied')setTimeout(()=>{
+            list.querySelectorAll('[jsname=d9BH4c] [data-value]').forEach(o=>{o.setAttribute('aria-selected',String(o.textContent===text));o.setAttribute('role','option')});
+            list.querySelector('[jsname=d9BH4c]').removeAttribute('aria-hidden');
+            list.setAttribute('aria-expanded','false');
+            setTimeout(()=>document.querySelector('[role=alert]').textContent='',50);
+          },120);
+        }
+      };
+      document.querySelector('form').onsubmit=e=>{e.preventDefault();window.posts++};
+      </script>`,
+      async (page) => {
+        const { view } = await inspectForm(page);
+        let fields = 0;
+        const run = () =>
+          applyAnswers(
+            page,
+            view,
+            new Map([[view.questions[0]!.id, ['경기']]]),
+            () => fields++,
+            signal(),
+          );
+        if (mode === 'delayed' || mode === 'already-open') {
+          await run();
+          assert.equal(fields, 1);
+          // A resume with the same verified selection does not toggle it back.
+          await run();
+          assert.equal(await page.evaluate(() => (window as any).optionClicks), 1);
+        } else {
+          await assert.rejects(run, {
+            code:
+              mode === 'changed'
+                ? 'form_structure_changed'
+                : mode === 'duplicate'
+                  ? 'ambiguous_form_options'
+                  : mode === 'selection-not-applied'
+                    ? 'field_verification_failed'
+                    : 'form_controls_not_ready',
+          });
+          assert.equal(fields, 0);
+          assert.equal(
+            await page.evaluate(() => (window as any).optionClicks),
+            mode === 'selection-not-applied' ? 1 : 0,
+          );
+        }
+        assert.equal(
+          await page.evaluate(() => (window as any).openClicks),
+          mode === 'already-open' ? 0 : 1,
+        );
+        assert.equal(await page.evaluate(() => (window as any).posts), 0);
+      },
+      'https://docs.google.com/forms/d/e/fixture_delayed_dropdown/viewform',
+    ));
+}
+
 test('nested checkbox option listitems bind to their labelled question list and preserve separate groups', async () =>
   fixture(
     `<form>${['처음 알게 된 경로', '더 필요한 서비스']

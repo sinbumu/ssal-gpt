@@ -11,6 +11,12 @@ import { join } from 'node:path';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+import {
+  observationErrorCode,
+  transientObservation,
+  type ObservationDiagnostic,
+} from './job-notice.js';
 import { privateDirectory } from './config.js';
 import { maskPrivateText } from './private-text.js';
 import { ServiceError } from './auth.js';
@@ -131,6 +137,8 @@ export class Browser {
   private manual = true;
   private jobPages = new Map<string, Page>();
   private attached = new WeakSet<Page>();
+  private documentEpoch = new WeakMap<Page, number>();
+  observationContext?: { signal: AbortSignal; report: (event: ObservationDiagnostic) => void };
   private readOnlyPages = new WeakSet<Page>();
   private readOnlyMode = false;
   private readOnlyBlocks = 0;
@@ -447,6 +455,12 @@ export class Browser {
     this.latest = undefined;
     if (this.attached.has(page)) return;
     this.attached.add(page);
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) {
+        this.documentEpoch.set(page, (this.documentEpoch.get(page) || 0) + 1);
+        if (this.page === page) this.invalidate();
+      }
+    });
     // Manual login must leave native confirmation dialogs to the person at the browser.
     page.on('dialog', (dialog) => {
       if (!this.manual) void dialog.dismiss().catch(() => {});
@@ -482,8 +496,63 @@ export class Browser {
     secrets: string[] = [],
     instagram?: InstagramTarget,
   ): Promise<Observation> {
+    const context = this.observationContext;
+    context?.signal.throwIfAborted();
+    await this.open();
+    const intendedPage = this.page;
+    let lastCode = '';
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      context?.signal.throwIfAborted();
+      const progress: { stage: ObservationDiagnostic['stage'] } = { stage: 'ready' };
+      this.invalidate();
+      try {
+        if (!intendedPage || intendedPage.isClosed()) throw new ServiceError('browser_closed');
+        if (this.page !== intendedPage) throw new ServiceError('observation_target_changed');
+        const observation = await this.observeOnce(fullPage, secrets, instagram, progress);
+        context?.signal.throwIfAborted();
+        if (attempt)
+          context?.report({
+            at: Date.now(),
+            stage: 'finalize',
+            code: lastCode,
+            attempt,
+            outcome: 'recovered',
+          });
+        return observation;
+      } catch (error) {
+        this.invalidate();
+        context?.signal.throwIfAborted();
+        const code = observationErrorCode(error);
+        const retry = transientObservation(code) && attempt < 2;
+        context?.report({
+          at: Date.now(),
+          stage: progress.stage,
+          code,
+          attempt: attempt + 1,
+          outcome: retry ? 'retrying' : 'stopped',
+        });
+        if (!retry)
+          throw new ServiceError(
+            transientObservation(code) ? 'browser_observation_unstable' : code,
+          );
+        lastCode = code;
+        // Read again in the same tab, never reload, navigate or replay an action.
+        await delay(250 * (attempt + 1), undefined, { signal: context?.signal });
+      }
+    }
+    throw new ServiceError('browser_observation_unstable');
+  }
+  private async observeOnce(
+    fullPage: boolean,
+    secrets: string[],
+    instagram: InstagramTarget | undefined,
+    progress: { stage: ObservationDiagnostic['stage'] },
+  ): Promise<Observation> {
     await this.open();
     const page = this.page!;
+    const epoch = this.documentEpoch.get(page) || 0;
+    if (!(await page.evaluate(() => !!document.body && document.readyState !== 'loading')))
+      throw new ServiceError('observation_document_not_ready');
     if (page.isClosed()) throw new ServiceError('browser_closed');
     if (instagram) await waitForInstagram(page, instagram, observableControls);
     const url = page.url();
@@ -509,6 +578,7 @@ export class Browser {
     for (const handle of this.handles.values()) await handle.dispose().catch(() => {});
     this.handles.clear();
     const id = randomUUID();
+    progress.stage = 'controls';
     const handles = await page.locator(observableControls).elementHandles();
     const elements: VisibleElement[] = [];
     const social = instagram
@@ -769,7 +839,9 @@ export class Browser {
       ),
     );
     for (const frame of frames) elements.push({ ref: `frame${elements.length + 1}`, ...frame });
+    progress.stage = 'text';
     let text = await page.evaluate((fullPage) => {
+      if (!document.body) return null;
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const lines: string[] = [];
       while (walker.nextNode()) {
@@ -797,6 +869,7 @@ export class Browser {
       }
       return lines.join('\n').slice(0, 18000);
     }, fullPage);
+    if (text === null) throw new ServiceError('observation_document_not_ready');
     text = maskPrivateText(text, secrets);
     for (const element of elements) {
       element.label = maskPrivateText(element.label, secrets);
@@ -804,6 +877,7 @@ export class Browser {
     }
     if (fullPage && (await page.evaluate(() => document.documentElement.scrollHeight)) > 12000)
       throw new ServiceError('form_page_too_large');
+    progress.stage = 'screenshot';
     const image = await page.screenshot({
       type: 'png',
       animations: 'disabled',
@@ -819,6 +893,7 @@ export class Browser {
       timeout: 10_000,
     });
     // Playwright temporarily adds screenshot masking styles; capture revision after cleanup.
+    progress.stage = 'finalize';
     const revision = await page.evaluate(() => Number((window as any).__ssalRevision || 0));
     const screenshot = `${id}.png`;
     await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
@@ -860,6 +935,9 @@ export class Browser {
       image,
       capturedAt: Date.now(),
     };
+    if (this.page !== page) throw new ServiceError('observation_target_changed');
+    if (page.url() !== url || (this.documentEpoch.get(page) || 0) !== epoch)
+      throw new ServiceError('observation_navigation_changed');
     this.latest = observation;
     return observation;
   }

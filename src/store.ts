@@ -10,6 +10,7 @@ import type { SourceEvidence } from './evidence.js';
 import type { EntryTask } from './tasks.js';
 import type { DiscoveryState } from './discovery.js';
 import type { ReadTraceSummary } from './read-trace.js';
+import type { JobNotice, ObservationDiagnostic } from './job-notice.js';
 import { winnerNotice } from './notifications.js';
 import type {
   SubmissionResponse,
@@ -38,6 +39,8 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  stopReason?: JobNotice;
+  observationDiagnostics?: ObservationDiagnostic[];
   retryEventId?: string;
   retryFromJobId?: string;
   readTraces?: ReadTraceSummary[];

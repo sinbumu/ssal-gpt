@@ -248,7 +248,7 @@ test('manual reconciliation keeps the paused job visible and resumes its live pa
     const card = page.locator(`#active-jobs #job-${job.id}`);
     page.on('dialog', (dialog) => void dialog.accept());
     await card.getByRole('button', { name: '미제출 직접 확인', exact: true }).click();
-    await card.getByText('일시정지', { exact: true }).waitFor();
+    await card.getByText('정상 중단', { exact: true }).waitFor();
     assert.equal(await page.locator(`#jobs #job-${job.id}`).count(), 0);
     assert.equal(await page.locator('#pending-count').innerText(), '1');
     assert.equal(app.store.job(job.id)!.uncertain, false);

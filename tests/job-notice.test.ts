@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { errorNotice, jobNotice, observationErrorCode } from '../src/job-notice.js';
+import { ServiceError } from '../src/auth.js';
+import type { Job } from '../src/store.js';
+
+test('stop categories separate limits, user authentication and technical errors without persisting raw messages', () => {
+  assert.equal(errorNotice(new ServiceError('selection_call_limit'), 'model').category, 'normal');
+  assert.equal(errorNotice(new ServiceError('needs_login_manual'), 'observation').category, 'user');
+  const error = new Error(
+    'Execution context was destroyed private-password https://example.org/?token=secret',
+  );
+  assert.equal(observationErrorCode(error), 'observation_navigation_changed');
+  const notice = errorNotice(error, 'observation');
+  assert.equal(notice.category, 'technical');
+  assert.doesNotMatch(JSON.stringify(notice), /password|https|token=|secret/);
+  assert.equal(
+    errorNotice(new ServiceError('browser_observation_unstable'), 'observation:text').phase,
+    'observation:text',
+  );
+});
+test('legacy errors are not guessed; submission uncertainty takes precedence over technical diagnostics', () => {
+  const j = {
+    status: 'needs_user',
+    note: '작업을 완료하지 못했습니다. 연결 상태와 실행 기록을 확인해 주세요.',
+  } as Job;
+  assert.equal(jobNotice(j)?.code, 'legacy_error_without_diagnostics');
+  assert.equal(jobNotice(j)?.category, 'technical');
+  j.uncertain = true;
+  j.stopReason = errorNotice(new Error(), 'action');
+  assert.equal(jobNotice(j)?.category, 'user');
+  assert.match(jobNotice(j)!.nextAction, /자동 재시도하지/);
+  j.uncertain = false;
+  j.status = 'running';
+  assert.equal(jobNotice(j), undefined);
+});
+
+test('an old observation failure does not replace a new user question with a technical notice', () => {
+  const j = {
+    status: 'needs_user',
+    note: '실제 이용 경험을 확인해 주세요.',
+    observationDiagnostics: [
+      {
+        at: 1,
+        stage: 'text',
+        code: 'observation_navigation_changed',
+        attempt: 3,
+        outcome: 'stopped',
+      },
+    ],
+    autonomy: { inbox: {} },
+  } as Job;
+  assert.equal(jobNotice(j)?.category, 'user');
+  j.note = 'browser_observation_unstable';
+  assert.equal(jobNotice(j)?.category, 'technical');
+  assert.equal(jobNotice(j)?.at, 1, 'projected notices remain stable across polling');
+});

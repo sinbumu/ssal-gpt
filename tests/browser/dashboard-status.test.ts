@@ -199,3 +199,55 @@ test('a stop racing an inbox submission returns a useful message and refreshes o
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('dashboard separates expected stops, technical faults and actionable user inboxes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-notices-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  const ui = await chromium.launch({ headless: true });
+  try {
+    const normal = waitingJob(app, 'paused'),
+      technical = waitingJob(app),
+      user = waitingJob(app),
+      unknown = waitingJob(app, 'submission_unknown');
+    delete normal.autonomy;
+    normal.note = '행동 한도에 도달했습니다. 실행 기록을 확인하세요.';
+    delete technical.autonomy;
+    technical.kind = 'discover';
+    technical.note = '작업을 완료하지 못했습니다. 연결 상태와 실행 기록을 확인해 주세요.';
+    technical.observationDiagnostics = [
+      {
+        at: Date.now(),
+        stage: 'text',
+        code: 'observation_navigation_changed',
+        attempt: 1,
+        outcome: 'retrying',
+      },
+    ];
+    app.store.saveJob(normal);
+    app.store.saveJob(technical);
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    const root = (j: Job) => page.locator(`#active-jobs #job-${j.id}`);
+    await root(technical).waitFor();
+    assert.match(await root(technical).innerText(), /기술 오류/);
+    assert.match(await root(technical).innerText(), /당시 세부 원인은 기록되지 않았습니다/);
+    assert.equal(await root(technical).locator('[data-job-context]').count(), 0);
+    assert.match(
+      await root(technical).locator('[data-action=resume]').innerText(),
+      /남은 24회로 탐색 재개/,
+    );
+    await root(technical).locator('.job-diagnostics summary').click();
+    assert.match(await root(technical).innerText(), /observation_navigation_changed/);
+    assert.match(await root(normal).innerText(), /정상 중단/);
+    assert.equal(await root(normal).locator('[data-job-context]').count(), 0);
+    assert.match(await root(user).innerText(), /사용자 확인 필요/);
+    assert.equal(await root(user).locator('[data-inbox]').count(), 1);
+    assert.match(await root(unknown).innerText(), /자동 재시도하지 않습니다/);
+    assert.equal(await root(unknown).locator('[data-action=verify-result]').count(), 1);
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

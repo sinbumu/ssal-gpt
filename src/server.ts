@@ -9,6 +9,7 @@ import { openExternalBrowser } from './external-browser.js';
 import { Model } from './model.js';
 import { Store, deadlineState, scoreCandidate, type Job } from './store.js';
 import { Runner } from './runner.js';
+import { jobNotice } from './job-notice.js';
 import { demoPage } from './demo.js';
 import {
   SettingsSchema,
@@ -259,6 +260,7 @@ export async function createApp(options: {
         auth: auth.publicInfo(),
         jobs: store.jobs().map((job) => ({
           ...job,
+          notice: jobNotice(job),
           tasks: job.tasks?.map((task) => ({
             ...task,
             permitted: taskPermission(store, task, job.autonomy?.synthetic),

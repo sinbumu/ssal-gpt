@@ -4,6 +4,7 @@ import { Browser, validateUrl, type Observation } from './browser.js';
 import { type ModelClient, type Step } from './model.js';
 import { Store, canonicalUrl, type Job, type Approval } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
+import { errorNotice } from './job-notice.js';
 import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
@@ -195,10 +196,18 @@ export class Runner {
       throw new ServiceError('job_browser_profile_mismatch');
     this.browser.setManual(false);
     this.controller = new AbortController();
+    this.browser.observationContext = {
+      signal: this.controller.signal,
+      report: (event) => {
+        job.observationDiagnostics = [...(job.observationDiagnostics || []), event].slice(-30);
+        this.store.saveJob(job);
+      },
+    };
     this.activeId = id;
     job.status = 'running';
     job.note = '화면을 확인하고 있습니다.';
     delete job.approval;
+    delete job.stopReason;
     this.store.saveJob(job);
     this.work = this.browser
       .selectJob(job.id)
@@ -206,9 +215,16 @@ export class Runner {
         this.browser.setReadOnlyMode(['discover', 'result'].includes(job.kind));
         return this.run(job, this.controller!.signal, approved);
       })
-      .catch(() => {
-        job.status = job.uncertain ? 'submission_unknown' : 'failed';
-        job.note = '작업 기록 처리 중 오류가 발생했습니다.';
+      .catch((error) => {
+        job.stopReason = errorNotice(error, 'worker');
+        job.status = job.uncertain
+          ? 'submission_unknown'
+          : this.controller?.signal.aborted || job.stopReason.category === 'normal'
+            ? 'paused'
+            : job.stopReason.category === 'user'
+              ? 'needs_user'
+              : 'failed';
+        job.note = job.stopReason.reason;
         try {
           this.store.saveJob(job);
         } catch {
@@ -218,6 +234,7 @@ export class Runner {
       .finally(() => {
         const mayContinue = !this.controller?.signal.aborted;
         this.browser.setManual(true);
+        this.browser.observationContext = undefined;
         if (job.status === 'completed' && !job.uncertain) this.browser.releaseCompletedJob(job.id);
         this.work = undefined;
         this.controller = undefined;
@@ -250,6 +267,7 @@ export class Runner {
         ? '작업을 중지했습니다. 추가 답변이나 재개 없이 실행 기록만 보관합니다.'
         : '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.';
     delete job.approval;
+    delete job.stopReason;
     this.browser.invalidate();
     this.browser.setReadOnlyMode(false);
     this.store.saveJob(job);
@@ -333,12 +351,17 @@ export class Runner {
       if (
         job.kind === 'discover' &&
         error instanceof ServiceError &&
-        ['verification_required_manual', 'needs_login_manual'].includes(error.code) &&
+        [
+          'verification_required_manual',
+          'needs_login_manual',
+          'browser_observation_unstable',
+        ].includes(error.code) &&
         !signal.aborted &&
         !job.uncertain
       ) {
         // An authentication wall on a discarded discovery source is not an entry login need.
         // Selected candidates register their own evidenced requirements after recording.
+        const unstable = error.code === 'browser_observation_unstable';
         const engine = searchLocation(url)?.engine;
         if (engine)
           discoveryState(job).blockedEngines = [
@@ -347,7 +370,9 @@ export class Runner {
         rejectSource(
           job,
           url,
-          '로그인 또는 추가 인증이 필요한 출처입니다. 인증을 우회하지 않고 제외합니다.',
+          unstable
+            ? '화면 전환 중 읽기 실패가 반복됐습니다. 이 탐색에서만 제외하고 다른 출처를 확인합니다.'
+            : '로그인 또는 추가 인증이 필요한 출처입니다. 인증을 우회하지 않고 제외합니다.',
         );
         const route = nextDiscoveryRoute(job, undefined, engine);
         await this.recoverDiscovery(job, route, signal);
@@ -485,6 +510,7 @@ export class Runner {
     let candidateRepairs = 0;
     let stalePage = '';
     let staleFailures = 0;
+    let executionPhase = 'navigation';
     try {
       if (
         job.uncertain &&
@@ -502,6 +528,7 @@ export class Runner {
       await this.browser.open();
       signal.throwIfAborted();
       if (approved) {
+        executionPhase = 'observation';
         const o = await this.snapshot(job, signal);
         const form = await this.browser.formSnapshot();
         if (
@@ -513,6 +540,7 @@ export class Runner {
         const step = { ...approved.action, observationId: o.id };
         if (actionPolicy(job, step, o) === 'block') throw new ServiceError('action_scope_changed');
         if (step.action === 'type' && step.text) job.approvedTexts.push(step.text);
+        executionPhase = 'action';
         await this.execute(job, step, o, signal);
       } else if (!job.currentUrl) {
         await this.browser.navigate(job.startUrl);
@@ -529,6 +557,7 @@ export class Runner {
       while (job.steps < job.maxSteps) {
         signal.throwIfAborted();
         if (Date.now() - started > 15 * 60_000) throw new ServiceError('session_time_limit');
+        executionPhase = 'observation';
         const o = await this.snapshot(job, signal);
         unchangedObservations =
           o.fingerprint === previousFingerprint ? unchangedObservations + 1 : 0;
@@ -599,7 +628,9 @@ export class Runner {
                       Date.parse(past.updatedAt) > Date.now() - 86400000,
                   )
                   .flatMap((past) => past.discovery?.rejected || [])
-                  .filter((r) => !/인증|로그인|보안 확인/.test(r.reason))
+                  .filter(
+                    (r) => !/인증|로그인|보안 확인|읽기 실패|접근 실패|접속 실패/.test(r.reason),
+                  )
                   .slice(-20)
                   .map((r) => ({ url: discoveryPageKey(r.url), reason: r.reason }))
               : undefined,
@@ -627,6 +658,7 @@ export class Runner {
                 Object.values(settings(this.store).profile),
               )
             : undefined;
+        executionPhase = 'model';
         const result = await model.decide(job.provider, INSTRUCTIONS, submitted, image, signal);
         signal.throwIfAborted();
         job.steps++;
@@ -636,6 +668,7 @@ export class Runner {
         trace?.proposed(step);
         job.note = step.reason;
         this.store.saveJob(job);
+        executionPhase = 'action';
         try {
           // Discovery links are opened as validated URLs, never by executing a
           // possibly changed DOM target or its click handler (see execute).
@@ -1065,12 +1098,24 @@ export class Runner {
         discovery_no_alternative: `현재 읽을 수 있는 관측 출처를 찾지 못해 탐색을 보관합니다. 새 검색 재계획 ${job.discovery?.replans || 0}/2회.`,
       };
       const exhausted = error instanceof ServiceError ? discoveryStops[error.code] : undefined;
+      if (!signal.aborted) {
+        const diagnostic = job.observationDiagnostics?.at(-1);
+        job.stopReason = errorNotice(
+          error,
+          executionPhase === 'observation' && diagnostic?.outcome === 'stopped'
+            ? `observation:${diagnostic.stage}`
+            : executionPhase,
+        );
+        if (exhausted) job.stopReason.reason = exhausted;
+      }
       job.status = job.uncertain
         ? 'submission_unknown'
-        : signal.aborted || exhausted
+        : signal.aborted || job.stopReason?.category === 'normal'
           ? 'paused'
-          : 'needs_user';
-      job.note = exhausted || safeMessage(error);
+          : job.stopReason?.category === 'technical'
+            ? 'failed'
+            : 'needs_user';
+      job.note = signal.aborted ? '사용자 요청으로 일시정지했습니다.' : job.stopReason!.reason;
       this.store.note(job.id, job.note);
     } finally {
       job.activeMs = (job.activeMs || 0) + Date.now() - started;

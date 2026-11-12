@@ -908,3 +908,22 @@ dialog#entry-manager::backdrop {
 .entry-reason {
   overflow-wrap: anywhere;
 }
+.job-notice {
+  border-left: 4px solid #6b7280;
+  padding: 10px 14px;
+  margin: 12px 0;
+  background: #f5f6f8;
+}
+.job-notice.technical {
+  border-color: #c43d35;
+}
+.job-notice.user {
+  border-color: #b57b16;
+}
+.job-notice.normal {
+  border-color: #52755c;
+}
+.job-diagnostics {
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}

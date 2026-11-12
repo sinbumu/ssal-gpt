@@ -55,3 +55,31 @@ test('an old observation failure does not replace a new user question with a tec
   assert.equal(jobNotice(j)?.category, 'technical');
   assert.equal(jobNotice(j)?.at, 1, 'projected notices remain stable across polling');
 });
+
+test('form parser/input failures are technical, while scoped review and live page recovery belong to the user', () => {
+  for (const code of [
+    'ambiguous_form_questions',
+    'ambiguous_form_options',
+    'form_structure_changed',
+    'field_verification_failed',
+  ]) {
+    const notice = errorNotice(new ServiceError(code), 'form_input');
+    assert.equal(notice.category, 'technical');
+    assert.match(notice.nextAction, /직접 제출했다면 재개하지/);
+    assert.equal(jobNotice({ status: 'needs_user', note: code } as Job)?.category, 'technical');
+  }
+  for (const code of [
+    'autonomy_live_page_required',
+    'final_review_changed',
+    'form_validation_failed',
+  ])
+    assert.equal(errorNotice(new ServiceError(code), 'form_input').category, 'user');
+  assert.equal(
+    jobNotice({
+      status: 'needs_user',
+      note: '동의를 확인해 주세요.',
+      autonomy: { inbox: {} },
+    } as Job)?.category,
+    'user',
+  );
+});

@@ -91,6 +91,37 @@ function makeJob(origin: string): Job {
     autonomy: createAutonomy(syntheticSettings, origin, true),
   };
 }
+test('autonomous form parser failures persist a technical cause without consuming model calls or creating submission intent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-form-errors-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  try {
+    const job = makeJob(app.origin);
+    await app.browser.navigate(job.startUrl);
+    await app.browser.page!.setContent(
+      '<form><div role="radiogroup" aria-label="동일 질문"><div role="radio" aria-checked="false">만족</div></div><div role="radiogroup" aria-label="동일 질문"><div role="radio" aria-checked="false">만족</div></div></form>',
+    );
+    job.currentUrl = job.startUrl;
+    app.browser.ownerJobId = job.id;
+    app.store.saveJob(job);
+    const runner = new Runner(app.store, app.browser, syntheticModel(), app.origin);
+    runner.start(job.id);
+    await runner.finished();
+    const result = app.store.job(job.id)!;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.stopReason?.category, 'technical');
+    assert.equal(result.stopReason?.code, 'ambiguous_form_questions');
+    assert.equal(result.stopReason?.phase, 'form_inspection');
+    assert.equal(result.steps, 0);
+    assert.equal(result.intent, undefined);
+    assert.equal(result.uncertain, false);
+    const state = await fetch(app.origin + '/api/state').then((r) => r.json());
+    assert.equal(state.jobs.find((j: Job) => j.id === job.id).notice.category, 'technical');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('batch plans traverse changed layouts, conditional fields and receipts without runtime edits', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-autonomy-'));
   const app = await createApp({ dir, port: 0, headless: true });
@@ -347,7 +378,8 @@ test('final review is bound to actual values; manual edits cannot be silently ov
     await app.runner.finished();
     const changed = app.store.job(j.id)!;
     assert.equal(changed.status, 'needs_user');
-    assert.equal(changed.note, 'final_review_changed');
+    assert.equal(changed.stopReason?.code, 'final_review_changed');
+    assert.equal(changed.stopReason?.category, 'user');
     assert.equal(await app.browser.page!.locator('input[type=tel]').inputValue(), '010-1111-1111');
     assert.equal(demoState(app.store, j.id).posts, 4);
     // A fresh review must be generated and explicitly accepted before submission.

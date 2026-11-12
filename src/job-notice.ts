@@ -53,7 +53,7 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       code,
     );
   const user =
-    /login|verification_required|auth_|oauth_|api_key|credential|consent|approval|delegation|account_not_identified|browser_reconnect|selection_changed|cost_rate_required|unreported_usage_requires_review/.test(
+    /login|verification_required|auth_|oauth_|api_key|credential|consent|approval|delegation|account_not_identified|browser_reconnect|selection_changed|cost_rate_required|unreported_usage_requires_review|autonomy_live_page_required|final_review_changed|multiple_forms_require_manual_selection|privacy_notice_not_accepted|form_validation_failed/.test(
       code,
     );
   const messages: Record<string, string> = {
@@ -64,6 +64,18 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     browser_closed: '작업에 연결된 브라우저나 탭이 닫혔습니다.',
     observation_target_changed: '관찰 중 작업 대상 탭이 바뀌어 기존 화면을 사용하지 않았습니다.',
     unclassified_error: '분류되지 않은 기술 오류로 작업을 중단했습니다.',
+    ambiguous_form_questions:
+      '서로 다른 문항을 구별하지 못해 입력 전에 멈췄습니다. 문항 인식의 기술 오류입니다.',
+    ambiguous_form_options: '선택지의 연결을 명확히 구별하지 못해 입력을 중단했습니다.',
+    form_structure_changed: '입력 중 폼 구조가 달라졌고 허용된 자동 복구로 해결하지 못했습니다.',
+    field_verification_failed: '입력 후 실제 값이나 선택 상태를 검증하지 못했습니다.',
+    form_destination_outside_grant:
+      '허용된 출처 안에서 제출 대상을 확인하지 못해 전송하지 않았습니다.',
+    autonomy_live_page_required:
+      '작성 중인 원래 화면이 필요합니다. 새 페이지로 되돌려 다시 전송하지 않았습니다.',
+    final_review_changed:
+      '최종 검토 이후 입력 내용이나 질문이 바뀌어 기존 제출 승인을 사용하지 않았습니다.',
+    form_validation_failed: '사이트의 입력 검사에서 누락 또는 형식 오류가 발견됐습니다.',
   };
   return {
     category: normal ? 'normal' : user ? 'user' : 'technical',
@@ -77,7 +89,9 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       ? '중단 조건과 남은 한도를 확인하세요. 이 기록을 보관하거나 다른 후보를 선택할 수 있습니다.'
       : user
         ? '연결 또는 확인함의 요청을 처리한 뒤 재개하세요.'
-        : '원인 기록을 확인하세요. 탐색은 남은 한도로 새 화면에서 재개할 수 있습니다. 같은 오류가 반복되면 이 기록을 보관하세요.',
+        : phase.startsWith('form_')
+          ? '문항 인식·입력 오류 기록을 확인하세요. 미제출 작업은 수정 후 남은 한도로 기존 화면에서 재개할 수 있습니다. 직접 제출했다면 재개하지 말고 수동 완료로 기록하세요.'
+          : '원인 기록을 확인하세요. 탐색은 남은 한도로 새 화면에서 재개할 수 있습니다. 같은 오류가 반복되면 이 기록을 보관하세요.',
     code,
     phase,
     at: Date.now(),
@@ -94,6 +108,13 @@ export function jobNotice(job: Job): JobNotice | undefined {
     };
   if (['running', 'queued', 'completed'].includes(job.status)) return;
   if (job.stopReason) return job.stopReason;
+  if (
+    job.status === 'needs_user' &&
+    /^(ambiguous_form_questions|ambiguous_form_options|form_structure_changed|field_verification_failed)$/.test(
+      job.note,
+    )
+  )
+    return { ...errorNotice(new ServiceError(job.note), 'form_legacy'), at: undefined };
   const diagnostic = job.observationDiagnostics?.at(-1);
   if (
     diagnostic?.outcome === 'stopped' &&

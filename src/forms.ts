@@ -43,6 +43,17 @@ export async function inspectForm(page: Page) {
         return !!el.getClientRects().length && s.display !== 'none' && s.visibility !== 'hidden';
       },
       label(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) {
+        // Some legacy lists have duplicated/broken for/id pairs. A sole visible
+        // label next to a sole choice still has an unambiguous rendered owner.
+        const item = el.closest('li');
+        const localLabels = item?.querySelectorAll('label');
+        const localChoice =
+          ['radio', 'checkbox'].includes(el.type) &&
+          item?.querySelectorAll('input,textarea,select').length === 1 &&
+          localLabels?.length === 1 &&
+          helpers.visible(localLabels[0]!)
+            ? localLabels[0]!.textContent?.trim()
+            : '';
         return (
           el.getAttribute('aria-label') ||
           (el.getAttribute('aria-labelledby') || '')
@@ -50,11 +61,35 @@ export async function inspectForm(page: Page) {
             .map((id) => document.getElementById(id)?.textContent || '')
             .join(' ')
             .trim() ||
+          localChoice ||
           [...(el.labels || [])].map((l) => l.textContent?.trim()).join(' ') ||
           el.getAttribute('placeholder') ||
           el.getAttribute('title') ||
           el.name
         );
+      },
+    };
+    // Definition text excludes input values and control chrome. Keep visible
+    // instructions/consent, including the outer question card, in the signature.
+    const definitions = {
+      text(root: Element) {
+        const parts: string[] = [];
+        const nodes = {
+          walk(node: Node) {
+            if (
+              node instanceof Element &&
+              (!helpers.visible(node) ||
+                node.matches(
+                  'input,textarea,select,output,button,[role=button],script,style,[aria-hidden=true]',
+                ))
+            )
+              return;
+            if (node.nodeType === Node.TEXT_NODE) parts.push(node.textContent || '');
+            else node.childNodes.forEach((child) => nodes.walk(child));
+          },
+        };
+        nodes.walk(root);
+        return parts.join(' ').replace(/\s+/g, ' ').trim();
       },
     };
     const groups: {
@@ -182,6 +217,46 @@ export async function inspectForm(page: Page) {
       const fieldset = el.closest(
         'fieldset,[role=group],[role=radiogroup],[role=listitem]' + (moa ? ',.js-question' : ''),
       );
+      const dl = el.closest('dl');
+      const dd = el.closest('dd');
+      const term =
+        dd?.parentElement === dl
+          ? dd.previousElementSibling
+          : el.parentElement === dl
+            ? el.previousElementSibling
+            : null;
+      const termHeading =
+        term?.matches('dt') && helpers.visible(term) ? definitions.text(term) : '';
+      // Three adjacent, length-bounded phone inputs are distinct parts, not
+      // three copies of the full phone. Never infer parts from index alone.
+      let phonePart = '';
+      let phoneBlock = el.parentElement;
+      for (
+        let depth = 0;
+        kind === 'text' && phoneBlock && depth < 3;
+        depth++, phoneBlock = phoneBlock.parentElement
+      ) {
+        if (phoneBlock.matches('body,html,main,form,fieldset')) break;
+        const inputs = [
+          ...phoneBlock.querySelectorAll<HTMLInputElement>(
+            'input:not([type=hidden]),textarea,select',
+          ),
+        ].filter(helpers.visible);
+        if (inputs.length !== 3 || !inputs.every((e) => ['text', 'tel'].includes(e.type))) continue;
+        const label = phoneBlock.querySelector('label');
+        if (
+          !label ||
+          !/휴대|전화|phone|mobile/i.test(label.textContent || '') ||
+          !label.control ||
+          !inputs.includes(label.control as HTMLInputElement) ||
+          inputs.map((e) => e.maxLength).join(',') !== '3,4,4'
+        )
+          continue;
+        const ordinal = inputs.indexOf(el as HTMLInputElement);
+        if (ordinal >= 0)
+          phonePart = `${label.textContent?.trim()} ${['첫 번째 3자리', '두 번째 4자리', '세 번째 4자리'][ordinal]}`;
+        break;
+      }
       const describedBy = (el.getAttribute('aria-describedby') || '')
         .split(/\s+/)
         .map((id) => document.getElementById(id))
@@ -200,7 +275,7 @@ export async function inspectForm(page: Page) {
         !localBlock.matches('body,html,main,form') &&
         localBlock.querySelectorAll('input:not([type=hidden]),textarea,select').length === 1 &&
         helpers.visible(localBlock)
-          ? localBlock.innerText.trim().slice(0, 3000)
+          ? definitions.text(localBlock).slice(0, 3000)
           : '';
       let nearbyConsent = '';
       if (kind === 'checkbox' && group.length === 1 && /동의|consent/i.test(helpers.label(el))) {
@@ -224,12 +299,16 @@ export async function inspectForm(page: Page) {
         }
       }
       const questionLabel = (
+        phonePart ||
         (kind === 'text' &&
         fieldset?.matches('fieldset') &&
         fieldset.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1
           ? helpers.label(el)
           : '') ||
         heading ||
+        (kind === 'text' && helpers.label(el) && termHeading
+          ? `${termHeading} — ${helpers.label(el)}`
+          : termHeading) ||
         (group.length > 1 ? fieldset?.getAttribute('aria-label') : '') ||
         helpers.label(el) ||
         `입력 ${index + 1}`
@@ -249,6 +328,9 @@ export async function inspectForm(page: Page) {
           localText && localText !== helpers.label(el) ? localText : '',
           nearbyConsent,
           el.getAttribute('title') || '',
+          el.getAttribute('placeholder') !== helpers.label(el)
+            ? el.getAttribute('placeholder') || ''
+            : '',
           linkedConsent?.element === el ? linkedConsent.text : '',
           linkedConsent &&
           el.form === forms[linkedConsent.form] &&
@@ -271,7 +353,7 @@ export async function inspectForm(page: Page) {
                   fieldset.matches('fieldset') &&
                   fieldset.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1
                 )
-              ? fieldset.innerText
+              ? definitions.text(fieldset)
               : '',
         ]
           .filter(Boolean)
@@ -331,7 +413,7 @@ export async function inspectForm(page: Page) {
       options.forEach((o) => visited.add(o));
       groups.push({
         label,
-        description: (block as HTMLElement).innerText.slice(0, 3000),
+        description: definitions.text(block.closest('[role=listitem]') || block).slice(0, 3000),
         kind,
         required:
           block.getAttribute('aria-required') === 'true' ||
@@ -422,14 +504,29 @@ export async function inspectForm(page: Page) {
     }
     const buttons = [
       ...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
-        'button,input[type=submit],input[type=image],[role=button]',
+        'button,input[type=submit],input[type=image],[role=button],a[onclick]',
       ),
     ]
       .map((b, index) => ({
         index,
-        label: (b.textContent || b.value || b.getAttribute('alt') || '').trim(),
-        action: b.hasAttribute('formaction') ? b.formAction : b.form?.action || location.href,
-        form: forms.indexOf(b.form!),
+        label: (
+          b.textContent?.trim() ||
+          b.value ||
+          b.getAttribute('alt') ||
+          b.querySelector('img')?.alt ||
+          ''
+        ).trim(),
+        action: b.hasAttribute('formaction')
+          ? b.formAction
+          : (b.form || b.closest('form'))?.action || location.href,
+        form: forms.indexOf(b.form || b.closest('form')!),
+        handler: b.getAttribute('onclick'),
+        anchor: b.matches('a'),
+        href: b.matches('a') ? b.getAttribute('href') : undefined,
+        localAnchor:
+          b.matches('a[onclick]') &&
+          b.getAttribute('href')?.startsWith('#') &&
+          (!!b.closest('form') || forms.length === 0),
         visible: helpers.visible(b),
         disabled: b.disabled,
         type: b.type,
@@ -453,10 +550,34 @@ export async function inspectForm(page: Page) {
         (b) =>
           b.visible &&
           !b.disabled &&
-          (['submit', 'image'].includes(b.type) ||
-            /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label)),
+          (b.anchor
+            ? b.localAnchor && /^(참여하기|응모하기|제출하기)$/i.test(b.label)
+            : ['submit', 'image'].includes(b.type) ||
+              /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label)),
       );
-    return { groups, buttons, forms: forms.map((f) => ({ action: f.action, method: f.method })) };
+    return {
+      groups,
+      buttons,
+      forms: forms.map((f) => ({ action: f.action, method: f.method, target: f.target })),
+      constraints: groups.map((g) =>
+        g.custom
+          ? undefined
+          : g.indices.map((i) => {
+              const e = all[i]!;
+              return [
+                'type',
+                'name',
+                'id',
+                'maxlength',
+                'minlength',
+                'pattern',
+                'min',
+                'max',
+                'readonly',
+              ].map((a) => e.getAttribute(a));
+            }),
+      ),
+    };
   });
   const bindings = new Map<string, Binding>();
   const questions: Question[] = raw.groups.map((g, i) => {
@@ -495,8 +616,8 @@ export async function inspectForm(page: Page) {
     throw new ServiceError('ambiguous_form_questions');
   if (new Set(raw.groups.map((g) => g.form)).size > 1)
     throw new ServiceError('multiple_forms_require_manual_selection');
-  const buttons = raw.buttons.map((b) => ({
-    id: `b${b.index}`,
+  const buttons = raw.buttons.map((b, i) => ({
+    id: `b${i}`,
     label: b.label,
     action: b.action,
     form: b.form,
@@ -511,10 +632,18 @@ export async function inspectForm(page: Page) {
       questions,
       buttons,
       forms: raw.forms,
-      bindings: [...bindings],
+      constraints: raw.constraints,
+      buttonHandlers: raw.buttons.map((b) => [b.handler, b.href]),
+      // Bindings are re-read before every action; hidden input insertions and
+      // unrelated ARIA nodes must not invalidate an unchanged question.
+      bindings: [...bindings].map(([id, b]) => [
+        id,
+        b.custom,
+        b.custom === 'aria-choice' || b.custom === 'moa-radio' ? undefined : b.optionValues,
+      ]),
     }),
   };
-  return { view, bindings };
+  return { view, bindings, buttonBindings: new Map(raw.buttons.map((b, i) => [`b${i}`, b.index])) };
 }
 export async function applyAnswers(
   page: Page,
@@ -541,6 +670,12 @@ export async function applyAnswers(
     if (fresh.view.fingerprint !== expected.fingerprint)
       throw new ServiceError('form_structure_changed');
     const binding = fresh.bindings.get(question.id)!;
+    const rebind = async () => {
+      const current = await inspectForm(page);
+      if (current.view.fingerprint !== expected.fingerprint)
+        throw new ServiceError('form_structure_changed');
+      return current.bindings.get(question.id)!;
+    };
     if (binding.custom === 'notice') continue;
     if (binding.custom === 'rank') {
       await applyRank(page, binding.indices[0]!, answer, signal);
@@ -566,16 +701,15 @@ export async function applyAnswers(
         );
       for (const i of order) {
         signal.throwIfAborted();
-        if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
-          throw new ServiceError('form_structure_changed');
-        const control = controls.nth(binding.indices[i]!);
+        const control = controls.nth((await rebind()).indices[i]!);
         const desired = answer.includes(question.options[i]!.id);
         const checked = (await control.getAttribute('aria-checked')) === 'true';
         if (desired !== checked && (question.multiple || desired)) await control.click();
       }
       for (let i = 0; i < binding.indices.length; i++) {
         if (
-          ((await controls.nth(binding.indices[i]!).getAttribute('aria-checked')) === 'true') !==
+          ((await controls.nth((await rebind()).indices[i]!).getAttribute('aria-checked')) ===
+            'true') !==
           answer.includes(question.options[i]!.id)
         )
           throw new ServiceError('field_verification_failed');
@@ -597,7 +731,7 @@ export async function applyAnswers(
         await target.click({ timeout: 3000 });
       for (let i = 0; i < binding.indices.length; i++) {
         const checked = await options
-          .nth(binding.indices[i]!)
+          .nth((await rebind()).indices[i]!)
           .evaluate(
             (e) => e.classList.contains('clicked') && !!e.querySelector('.fi-radio-btn-yes-dot'),
           );
@@ -610,9 +744,8 @@ export async function applyAnswers(
     for (let i = 0; i < binding.indices.length; i++) {
       signal.throwIfAborted();
       // Every action rebinds and checks structure; never replay stale element references.
-      if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
-        throw new ServiceError('form_structure_changed');
-      const control = controls.nth(binding.indices[i]!);
+      const currentBinding = await rebind();
+      let control = controls.nth(currentBinding.indices[i]!);
       if (question.kind === 'file') {
         if (!answer.length) continue;
         if (!attachment) throw new ServiceError('attachment_resolver_required');
@@ -665,13 +798,15 @@ export async function applyAnswers(
           throw new ServiceError('field_verification_failed');
       } else if (question.kind === 'text') {
         if ((await control.inputValue()) !== answer[0]) await control.fill(answer[0] || '');
+        control = controls.nth((await rebind()).indices[i]!);
         if ((await control.inputValue()) !== answer[0])
           throw new ServiceError('field_verification_failed');
       } else if (question.kind === 'select') {
         const values = answer.map(
-          (a) => binding.optionValues[question.options.findIndex((o) => o.id === a)]!,
+          (a) => currentBinding.optionValues[question.options.findIndex((o) => o.id === a)]!,
         );
         await control.selectOption(values);
+        control = controls.nth((await rebind()).indices[i]!);
         const selected = await control.evaluate((el) =>
           [...(el as HTMLSelectElement).selectedOptions].map((o) => o.value),
         );
@@ -685,6 +820,7 @@ export async function applyAnswers(
             await control.setChecked(checked, { timeout: 1200 });
           } catch {
             // A styled input can be covered by its label. Check state before fallback.
+            control = controls.nth((await rebind()).indices[i]!);
             if ((await control.isChecked()) !== checked) {
               if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
                 throw new ServiceError('form_structure_changed');
@@ -701,6 +837,7 @@ export async function applyAnswers(
             }
           }
         }
+        control = controls.nth((await rebind()).indices[i]!);
         if ((await control.isChecked()) !== checked)
           throw new ServiceError('field_verification_failed');
       }
@@ -708,7 +845,7 @@ export async function applyAnswers(
     if (question.kind === 'radio' && !binding.custom) {
       for (let i = 0; i < binding.indices.length; i++)
         if (
-          (await controls.nth(binding.indices[i]!).isChecked()) !==
+          (await controls.nth((await rebind()).indices[i]!).isChecked()) !==
           answer.includes(question.options[i]!.id)
         )
           throw new ServiceError('field_verification_failed');
@@ -827,15 +964,16 @@ export async function advanceForm(
   signal: AbortSignal,
 ) {
   signal.throwIfAborted();
-  if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
+  const fresh = await inspectForm(page);
+  if (fresh.view.fingerprint !== expected.fingerprint)
     throw new ServiceError('form_structure_changed');
   const button = expected.buttons.find((b) => b.id === buttonId);
   if (!button) throw new ServiceError('unobserved_form_button');
   const locator = page
-    .locator('button,input[type=submit],input[type=image],[role=button]')
-    .nth(Number(buttonId.slice(1)));
+    .locator('button,input[type=submit],input[type=image],[role=button],a[onclick]')
+    .nth(fresh.buttonBindings.get(buttonId)!);
   const valid = await locator.evaluate(
-    (el) => !(el as HTMLButtonElement).form || (el as HTMLButtonElement).form!.checkValidity(),
+    (el) => ((el as HTMLButtonElement).form || el.closest('form'))?.checkValidity() ?? true,
   );
   if (!valid) throw new ServiceError('form_validation_failed');
   await locator.click({ timeout: 6000 });

@@ -515,7 +515,14 @@ export class Browser {
       ? await inspectInstagram(page, instagram, observableControls, handles)
       : undefined;
     const socialRefs: InstagramView['controls'] = {};
-    for (const [index, handle] of handles.slice(0, 500).entries()) {
+    // Count only controls that serialize inside the viewport. Hidden navigation
+    // trees and offscreen elements must not exhaust the visible control budget.
+    // Preserve the exact indexes inspected for Instagram and release every handle.
+    for (const [index, handle] of handles.entries()) {
+      if (elements.length >= 500) {
+        await handle.dispose().catch(() => {});
+        continue;
+      }
       const serialized = await handle
         .evaluate((el: HTMLElement) => {
           const box = el.getBoundingClientRect();

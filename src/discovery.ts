@@ -210,6 +210,7 @@ function nextPageLink(raw: string, label: string, source?: string) {
 export function promotionalLink(raw: string, label = '') {
   const u = new URL(raw);
   return (
+    u.hostname === 'ader.naver.com' ||
     (/^(www\.)?suto\.co\.kr$/.test(u.hostname) && /^\/membership\/?$/.test(u.pathname)) ||
     /(?:^|\/)(?:advertise|advertising|ads)(?:\/|$)/i.test(u.pathname) ||
     /광고\s*(?:문의|상품|단가|집행)|이벤트\s*홍보가\s*필요|추천\s*캠페인\s*집행|매체\s*소개서|advertis(?:e with us|ing rates)/i.test(
@@ -233,7 +234,10 @@ function formLinkScore(link: { url: string; label: string; context?: string }) {
   return (
     (directForm(link.url) ? 30 : 0) +
     (/네이버\s*폼|naver\s*form/i.test(link.label) ? 12 : 0) +
-    (/설문|만족도|의견\s*조사|survey/i.test(link.label + ' ' + (link.context || '')) ? 10 : 0)
+    (/설문|만족도|의견\s*조사|survey/i.test(link.label + ' ' + (link.context || '')) ? 10 : 0) -
+    // Administrative documents may describe surveys but are not participation
+    // notices. Lower their priority without excluding other pages on the host.
+    (/추진\s*계획|결재\s*문서|입찰\s*공고|과업\s*지시서|용역\s*계약/.test(link.label) ? 40 : 0)
   );
 }
 export function noteDiscoveryDestination(job: Job, requested: string, resolved: string) {

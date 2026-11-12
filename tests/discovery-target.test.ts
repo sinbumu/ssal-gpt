@@ -30,6 +30,8 @@ test('form discovery retains survey rows and direct links ahead of social bonuse
   observeDiscovery(j, {
     url: j.startUrl,
     elements: [
+      { href: 'https://opengov.example.org/plan', label: '홈페이지 만족도 조사 추진계획 결재문서' },
+      { href: 'https://ader.naver.com/v1/example', label: '만족도 조사 이벤트' },
       { href: 'https://www.instagram.com/p/Social/', label: '새 이벤트' },
       {
         href: 'https://example.org/events/row',
@@ -47,6 +49,9 @@ test('form discovery retains survey rows and direct links ahead of social bonuse
   assert.equal(discoveryState(j).frontier[0]!.url, form);
   assert.ok(discoveryState(j).frontier.some((f) => f.label === '설문 참여'));
   assert.ok(!discoveryState(j).frontier.some((f) => f.url.includes('/membership/')));
+  assert.ok(!discoveryState(j).frontier.some((f) => f.url.includes('ader.naver.com')));
+  assert.ok(excludedSource(j, 'https://ader.naver.com/v1/example'));
+  assert.equal(discoveryState(j).frontier.at(-1)!.url, 'https://opengov.example.org/plan');
   assert.equal(
     nextDiscoveryRoute(j)?.url,
     form,

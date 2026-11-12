@@ -9,6 +9,48 @@ import { actionPolicy } from '../../src/runner.js';
 import type { Job } from '../../src/store.js';
 import { readDecision } from '../../src/read-trace.js';
 
+test('hidden and offscreen menu trees do not exhaust the visible control budget', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-visible-budget-'));
+  const browser = new Browser(dir, undefined, true);
+  const origin = 'https://example.org';
+  const visits: string[] = [];
+  try {
+    await browser.open();
+    browser.setManual(false);
+    browser.setReadOnlyMode(true);
+    await browser.context!.route(origin + '/**', async (route) => {
+      assert.equal(route.request().method(), 'GET');
+      visits.push(route.request().url());
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: route.request().url().endsWith('/form')
+          ? '<h1>설문 1/2</h1>'
+          : `<nav style="display:none">${'<a href="/hidden">숨은 메뉴</a>'.repeat(550)}</nav>
+          <nav style="position:absolute;top:10000px">${'<a href="/offscreen">화면 밖 메뉴</a>'.repeat(550)}</nav>
+          <main><h1>공개 설문</h1><a href="/form">[링크]</a></main>`,
+      });
+    });
+    await browser.navigate(origin + '/event');
+    const observation = await browser.observe();
+    const link = observation.elements.find((e) => e.label === '[링크]');
+    assert.ok(link, 'the visible article link after 1100 menu controls is observed');
+    assert.equal(observation.elements.length, 1);
+    const step = {
+      action: 'click' as const,
+      observationId: observation.id,
+      ref: link.ref,
+      reason: '설문 원문 읽기',
+    };
+    assert.equal(actionPolicy({ kind: 'discover' } as Job, step, observation), 'allow');
+    await browser.act(step);
+    assert.equal((await browser.observe()).url, origin + '/form');
+    assert.deepEqual(visits, [origin + '/event', origin + '/form']);
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('page-defined Map does not break observation or change page globals', async () => {
   const server = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');

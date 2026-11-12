@@ -448,7 +448,8 @@ export function resolveAnswer(
   if (exact) return { answer: validateAnswer(q, exact.answer), source: 'memory' };
   if (
     state.entryChannel &&
-    /참여\s*경로|알게\s*된\s*경로|어떻게\s*알|접한\s*경로|유입\s*경로/.test(q.label)
+    (/참여\s*경로|유입\s*경로/.test(q.label) ||
+      /(?:이벤트|행사|설문|조사).{0,20}(?:알게\s*된\s*경로|어떻게\s*알|접한\s*경로)/.test(q.label))
   ) {
     const channel = state.entryChannel;
     const aliases =
@@ -457,7 +458,9 @@ export function resolveAnswer(
         : channel === '네이버'
           ? /네이버|naver/i
           : /구글|google/i;
-    const options = q.options.filter((o) => aliases.test(o.label));
+    const options = q.options.filter(
+      (o) => aliases.test(o.label) && !/이용증|회원가입|앱\s*이용|결제/.test(o.label),
+    );
     const answer =
       q.kind === 'text' ? [channel] : options.length === 1 ? [options[0]!.id] : undefined;
     if (answer) return { answer: validateAnswer(q, answer), source: 'observed_entry_channel' };

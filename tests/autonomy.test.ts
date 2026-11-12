@@ -404,4 +404,17 @@ test('public evidence and observed route are reusable, but never authorize inven
     resolveAnswer(q('평소 이용하는 SNS', 'text'), undefined, a, [], '').answer,
     undefined,
   );
+  a.entryChannel = '네이버';
+  const route = {
+    ...q('서비스를 알게 된 경로'),
+    options: [
+      { id: 'app', label: '모바일 이용증 제공 앱 (네이버)' },
+      { id: 'new', label: '이번 설문을 통해 처음 알게 되었다' },
+    ],
+  };
+  assert.equal(resolveAnswer(route, undefined, a, [], '').answer, undefined);
+  route.label = '이번 이벤트를 알게 된 경로';
+  assert.equal(resolveAnswer(route, undefined, a, [], '').answer, undefined);
+  route.options = [{ id: 'blog', label: '네이버 블로그' }];
+  assert.deepEqual(resolveAnswer(route, undefined, a, [], '').answer, ['blog']);
 });

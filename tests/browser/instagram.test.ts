@@ -1316,6 +1316,73 @@ test('read refusal is replayable and recovers without widening click permissions
   }
 });
 
+test('a legacy prefixed-post read failure resumes through real media controls with prior usage preserved', async () => {
+  const f = await fixture();
+  try {
+    f.data.carousel = true;
+    const j = f.make(['comment']);
+    j.startUrl = j.tasks![0]!.url = 'https://www.instagram.com/fixture_host/p/fixture/';
+    delete j.tasks![0]!.draft;
+    j.tasks![0]!.draftPreparation = {
+      version: DRAFT_VERSION,
+      calls: 4,
+      readRefusals: 3,
+      state: 'needs_input',
+      failureKind: 'read_control',
+      reason: 'legacy read failure',
+      researched: true,
+    };
+    j.steps = 10;
+    j.inputTokens = 1000;
+    f.app.store.saveJob(j);
+    const execute = f.app.runner.model.decide.bind(f.app.runner.model);
+    f.app.runner.model.decide = async (provider, instruction, c: any, image, signal) => {
+      if (c.phase !== 'comment_draft') return execute(provider, instruction, c, image, signal);
+      const o = c.observation;
+      assert.ok(o.url.includes('/fixture_host/p/'));
+      assert.equal(c.researchAvailable, false);
+      const next = o.elements.find((e: any) => e.mediaNavigation === 'next');
+      return {
+        step: next
+          ? { action: 'click', observationId: o.id, ref: next.ref, reason: '카드 읽기' }
+          : {
+              action: 'done',
+              observationId: o.id,
+              text: '정답은 1=O, 2=X입니다!',
+              draftBasis: 'source_text',
+              evidenceQuote: '정답: 1=O, 2=X',
+              draftRequirementsMet: true,
+              reason: '공개 카드의 정답 확인',
+            },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const ready = f.app.store.job(j.id)!;
+    assert.equal(ready.status, 'needs_user', ready.note);
+    assert.equal(ready.steps, 14);
+    assert.equal(ready.inputTokens, 1004);
+    assert.equal(ready.maxSteps, 20);
+    assert.equal(ready.tasks![0]!.draftPreparation!.readPathRepair!.calls, 4);
+    assert.equal(ready.tasks![0]!.draftPreparation!.readPathRepair!.readRefusals, 3);
+    assert.equal(ready.tasks![0]!.draftPreparation!.calls, 4);
+    assert.equal(ready.history.filter((h) => h.action === 'comment_read_path_repair').length, 1);
+    assert.equal(f.data.posts, 0);
+    f.approve(j.id);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.equal(done.steps, 16);
+    assert.equal(done.maxSteps, 20);
+    assert.equal(f.data.posts, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 test('unverifiable quiz score skips only before approval under configured candidate policy', async () => {
   const f = await fixture();
   try {

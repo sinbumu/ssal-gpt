@@ -135,11 +135,28 @@ test('collapsed reel caption is a scoped read control; form, toggles and nested 
       () => browser.act({ ...step, observationId: prior.id, ref: target.ref }),
       /stale_observation/,
     );
-    await browser.navigate('https://www.instagram.com/synthetic_profile/');
-    assert.equal(
-      (await browser.observe()).elements.some((e) => e.readDisclosure),
-      false,
-    );
+    for (const path of [
+      'brand.name/p/synthetic',
+      'brand_name/reel/synthetic',
+      'brand_name/reels/synthetic',
+    ]) {
+      await browser.navigate(`https://www.instagram.com/${path}/?img_index=2`);
+      const prefixed = await browser.observe();
+      const caption = prefixed.elements.filter((e) => e.readDisclosure);
+      assert.equal(caption.length, 1, path);
+      const expand = { ...step, observationId: prefixed.id, ref: caption[0]!.ref };
+      assert.equal(readDecision(prefixed, expand, []), 'allowed');
+      await browser.act(expand);
+      assert.equal(await browser.page!.locator('#caption').getAttribute('role'), null);
+    }
+    for (const path of ['synthetic_profile', 'brand/p/synthetic/comments', 'one/two/p/synthetic']) {
+      await browser.navigate(`https://www.instagram.com/${path}/`);
+      assert.equal(
+        (await browser.observe()).elements.some((e) => e.readDisclosure),
+        false,
+        path,
+      );
+    }
     assert.equal(writes, 0);
   } finally {
     await browser.close();
@@ -293,8 +310,31 @@ test('post media arrows are read controls while forms, outside arrows, stale ref
       () => browser.act({ ...step, observationId: changed.id, ref: arrow.ref }),
       /stale_observation/,
     );
-    await browser.navigate('https://www.instagram.com/fixture_profile/');
-    assert.ok((await browser.observe()).elements.every((e) => !e.mediaNavigation));
+    for (const path of [
+      'brand.name/p/media-fixture',
+      'brand_name/reel/media-fixture',
+      'brand_name/reels/media-fixture',
+    ]) {
+      await browser.navigate(`https://www.instagram.com/${path}/?img_index=2`);
+      const prefixed = await browser.observe();
+      const arrows = prefixed.elements.filter((e) => e.mediaNavigation);
+      assert.equal(arrows.length, 1, path);
+      const move = { ...step, observationId: prefixed.id, ref: arrows[0]!.ref };
+      assert.equal(readDecision(prefixed, move, []), 'allowed');
+      await browser.act(move);
+      assert.match((await browser.observe()).text, /second card/);
+    }
+    for (const path of [
+      'fixture_profile',
+      'brand/p/media-fixture/comments',
+      'one/two/p/media-fixture',
+    ]) {
+      await browser.navigate(`https://www.instagram.com/${path}/`);
+      assert.ok(
+        (await browser.observe()).elements.every((e) => !e.mediaNavigation),
+        path,
+      );
+    }
     assert.equal(writes, 0);
   } finally {
     await browser.close();

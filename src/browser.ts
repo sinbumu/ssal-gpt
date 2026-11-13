@@ -650,11 +650,15 @@ export class Browser {
               ? 'previous'
               : undefined;
           let mediaIdentity: string | undefined;
+          // Both observed permalink forms address a post. Keep this shared by
+          // carousel and caption reading so preparation matches discovery.
+          const instagramPost =
+            /^(www\.)?instagram\.com$/.test(location.hostname) &&
+            /^\/(?:[\w.]+\/)?(?:p|reel|reels)\/[\w-]+\/?$/.test(location.pathname);
           // Instagram reels expose the collapsed caption itself as a button.
           // Classify the clipping structure, not words such as "like" in its text.
           const clippedCaption =
-            /^(www\.)?instagram\.com$/.test(location.hostname) &&
-            /^\/(p|reel|reels)\/[^/]+\/?$/.test(location.pathname) &&
+            instagramPost &&
             el.matches('button,[role=button]') &&
             !el.closest('form,[contenteditable=true]') &&
             !el.hasAttribute('aria-pressed') &&
@@ -699,8 +703,7 @@ export class Browser {
             : undefined;
           const mediaNavigation: 'next' | 'previous' | undefined =
             direction &&
-            /^(www\.)?instagram\.com$/.test(location.hostname) &&
-            /^\/(p|reel|reels)\/[^/]+\/?$/.test(location.pathname) &&
+            instagramPost &&
             el.matches('button,[role=button]') &&
             !el.closest('form') &&
             !el.hasAttribute('aria-pressed') &&

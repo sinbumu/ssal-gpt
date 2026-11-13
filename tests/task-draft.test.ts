@@ -1,7 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { draftProblem } from '../src/task-draft.js';
+import { draftProblem, prepareCommentDraft, DRAFT_VERSION } from '../src/task-draft.js';
 import type { Step } from '../src/model.js';
+import type { EntryTask } from '../src/tasks.js';
+import type { Job } from '../src/store.js';
+
+test('prefixed read repair never restarts new failures, personal answers, evidence gaps or transmitted tasks', async () => {
+  for (const scenario of [
+    'new_version',
+    'personal',
+    'evidence',
+    'plain_path',
+    'other_host',
+    'transmitted',
+    'uncertain',
+  ]) {
+    const task = {
+      kind: 'comment',
+      state: 'review',
+      url: 'https://www.instagram.com/brand/p/fixture/',
+      draftPreparation: {
+        version: DRAFT_VERSION,
+        state: 'needs_input',
+        failureKind: 'read_control',
+        calls: 4,
+      },
+    } as EntryTask;
+    const job = { steps: 10, maxSteps: 20, history: [] } as unknown as Job;
+    if (scenario === 'new_version') task.draftPreparation!.readPathVersion = 1;
+    if (scenario === 'personal') task.draftPreparation!.failureKind = 'personal_fact';
+    if (scenario === 'evidence') task.draftPreparation!.failureKind = 'public_evidence';
+    if (scenario === 'plain_path') task.url = 'https://www.instagram.com/p/fixture/';
+    if (scenario === 'other_host') task.url = 'https://example.org/brand/p/fixture/';
+    if (scenario === 'transmitted') job.transmitted = true;
+    if (scenario === 'uncertain') job.uncertain = true;
+    const unused = new Proxy(
+      {},
+      {
+        get() {
+          throw Error('no I/O expected: ' + scenario);
+        },
+      },
+    ) as any;
+    assert.equal(
+      await prepareCommentDraft(unused, unused, unused, job, task, new AbortController().signal),
+      false,
+    );
+    assert.equal(task.draftPreparation!.calls, 4);
+    assert.equal(task.draftPreparation!.readPathRepair, undefined);
+    assert.equal(job.steps, 10);
+    assert.equal(job.maxSteps, 20);
+  }
+});
 
 test('mandatory quiz answers cannot be replaced by cheering or an unverified score', () => {
   const task = {

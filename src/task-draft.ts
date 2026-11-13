@@ -89,6 +89,8 @@ export type DraftPreparation = {
   failureKind?: 'personal_fact' | 'public_evidence' | 'read_control';
   quiz?: QuizAttempt[];
   superseded?: { draft?: string; reason?: string; calls: number };
+  readPathRepair?: { at: number; calls: number; readRefusals: number; reason?: string };
+  readPathVersion?: number;
   calls: number;
   researched?: boolean;
   researchUrls?: string[];
@@ -131,6 +133,40 @@ export async function prepareCommentDraft(
   });
   preparation.startedAt ??= Date.now();
   if (task.draft?.trim() || task.approval || task.attempt) return true;
+  // One migration for drafts stopped by the formerly unsupported account-prefixed
+  // permalink. Preserve usage and prior failures; do not reset the job budget or
+  // retry personal questions, missing evidence, or any approved/attempted action.
+  const target = new URL(task.url);
+  if (
+    preparation.state === 'needs_input' &&
+    preparation.failureKind === 'read_control' &&
+    !preparation.readPathVersion &&
+    !preparation.readPathRepair &&
+    !job.transmitted &&
+    !job.uncertain &&
+    /^(www\.)?instagram\.com$/.test(target.hostname) &&
+    /^\/[\w.]+\/(?:p|reel|reels)\/[\w-]+\/?$/.test(target.pathname)
+  ) {
+    preparation.readPathRepair = {
+      at: Date.now(),
+      calls: preparation.calls,
+      readRefusals: preparation.readRefusals || 0,
+      reason: preparation.reason,
+    };
+    preparation.calls = 0;
+    preparation.readRefusals = 0;
+    preparation.state = 'reading';
+    delete preparation.failureKind;
+    delete preparation.reason;
+    job.history.push({
+      action: 'comment_read_path_repair',
+      reason:
+        '계정명이 포함된 게시물 주소의 읽기 지원 수정 후 초안을 한 번 다시 준비합니다. 이전 실패와 사용량·작업 한도는 유지합니다.',
+      url: task.url,
+    });
+    store.saveJob(job);
+  }
+  preparation.readPathVersion = 1;
   if (preparation.state === 'needs_input') return false;
   const state = job.autonomy!;
   const secrets = [...Object.values(state.profile), ...(state.privateAnswers || [])];

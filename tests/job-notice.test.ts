@@ -115,3 +115,20 @@ test('unverified Google Next shows a page transition issue instead of final rece
   job.intent!.kind = 'submission';
   assert.notEqual(jobNotice(job)?.code, 'form_step_unverified');
 });
+test('comment read-control failure is technical while personal review and unknown receipt retain priority', () => {
+  const job = {
+    status: 'paused',
+    note: '읽기 동작을 차단했습니다.',
+    tasks: [
+      { state: 'review', draftPreparation: { state: 'needs_input', failureKind: 'read_control' } },
+    ],
+  } as Job;
+  assert.equal(jobNotice(job)?.category, 'technical');
+  assert.equal(jobNotice(job)?.code, 'comment_read_control_unsupported');
+  job.uncertain = true;
+  assert.equal(jobNotice(job)?.category, 'user');
+  job.uncertain = false;
+  job.status = 'needs_user';
+  job.tasks![0]!.draftPreparation!.failureKind = 'personal_fact';
+  assert.equal(jobNotice(job)?.category, 'user');
+});

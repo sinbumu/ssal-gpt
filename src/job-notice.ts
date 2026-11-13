@@ -167,6 +167,24 @@ export function jobNotice(job: Job): JobNotice | undefined {
   if (['running', 'queued', 'completed'].includes(job.status)) return;
   if (job.stopReason) return job.stopReason;
   if (
+    job.tasks?.some(
+      (t) =>
+        t.draftPreparation?.failureKind === 'read_control' &&
+        t.draftPreparation.state === 'needs_input' &&
+        !t.approval &&
+        !t.attempt,
+    )
+  )
+    return {
+      category: 'technical',
+      title: '기술 오류 · 댓글 근거 읽기 중단',
+      code: 'comment_read_control_unsupported',
+      phase: 'comment_draft',
+      reason: job.note,
+      nextAction:
+        '이미지·본문 읽기 지원과 거절 기록을 확인하세요. 수정 후 기존 작업을 재개할 수 있으며, 승인 전에는 댓글을 게시하지 않습니다.',
+    };
+  if (
     job.status === 'needs_user' &&
     /^(ambiguous_form_questions|ambiguous_form_options|form_structure_changed|field_verification_failed)$/.test(
       job.note,

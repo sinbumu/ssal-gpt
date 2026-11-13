@@ -90,7 +90,18 @@ function guard(fn) {
       await refresh();
     } catch (error) {
       await refresh().catch(() => {});
-      toast(error.message, true);
+      const commentErrors = {
+        comment_contains_guidance:
+          '댓글에 앱 안내문이 섞여 있습니다. 게시할 본문에서 승인·대시보드 조작 안내를 지워 주세요. 아직 게시하지 않았습니다.',
+        comment_unresolved_placeholder:
+          '댓글에 미완성 표시가 남아 있습니다. 실제 답변으로 바꿔 주세요.',
+        comment_personal_answer_required: '댓글에 필요한 개인 의견만 선택하거나 입력해 주세요.',
+        comment_personal_answer_mismatch:
+          '선택한 개인 답변과 댓글이 다릅니다. ‘선택한 답변으로 댓글 다시 만들기’를 누르거나 본문을 맞춰 주세요.',
+        comment_plan_invalid:
+          '댓글 질문 구성이 올바르지 않아 게시하지 않았습니다. 초안을 다시 준비해야 합니다.',
+      };
+      toast(commentErrors[error.message] || error.message, true);
     }
   };
 }
@@ -1416,8 +1427,55 @@ function renderDraftPreparation(task) {
     inference: '공개 단서에 따른 AI 추론',
     suggestion: 'AI 문구 제안',
   };
-  return `<div class="hint draft-preparation"><strong>${draft.state === 'ready' ? 'AI 권장 댓글 · ' + (basis[draft.basis] || '초안') : '댓글 준비 확인 필요'}</strong><p>${esc(draft.reason || '')}</p>${draft.evidenceQuote ? `<blockquote>${esc(draft.evidenceQuote)}</blockquote>` : ''}${draft.sourceUrl ? safeLink(draft.sourceUrl, '답안 근거 열기') : ''}${draft.quiz?.length ? `<details><summary>AI 풀이 기록 · ${draft.quiz.length}문항</summary><ul>${draft.quiz.map((q) => `<li>${esc(q.question)} — 먼저 푼 답: ${esc(q.answer)} · ${q.key ? `공개 정답: ${esc(q.key.answer)} (${q.answer === q.key.answer ? '일치' : '불일치'})` : '정답 확인 전'}</li>`).join('')}</ul></details>` : ''}</div>`;
+  return `<div class="hint draft-preparation"><strong>${draft.commentPlan ? 'AI 부분 초안 · 개인 답변만 확인' : draft.state === 'ready' ? 'AI 권장 댓글 · ' + (basis[draft.basis] || '초안') : '댓글 준비 확인 필요'}</strong><p>${esc(draft.reason || '')}</p>${draft.evidenceQuote ? `<blockquote>${esc(draft.evidenceQuote)}</blockquote>` : ''}${draft.sourceUrl ? safeLink(draft.sourceUrl, '답안 근거 열기') : ''}${draft.quiz?.length ? `<details><summary>AI 풀이 기록 · ${draft.quiz.length}문항</summary><ul>${draft.quiz.map((q) => `<li>${esc(q.question)} — 먼저 푼 답: ${esc(q.answer)} · ${q.key ? `공개 정답: ${esc(q.key.answer)} (${q.answer === q.key.answer ? '일치' : '불일치'})` : '정답 확인 전'}</li>`).join('')}</ul></details>` : ''}</div>`;
 }
+function composeCommentPreview(plan, answers) {
+  return plan.parts
+    .map((p) => {
+      if ('text' in p) return p.text;
+      const q = plan.inputs.find((i) => i.id === p.inputId);
+      const answer = Object.hasOwn(answers, p.inputId) ? answers[p.inputId].trim() : '';
+      const text = q.kind === 'choice' ? q.options.find((o) => o.id === answer)?.text : answer;
+      return text ? p.prefix + text + p.suffix : '';
+    })
+    .join('')
+    .trim();
+}
+function renderCommentEditor(task) {
+  const plan = task.draftPreparation?.commentPlan;
+  const answers = task.draftPreparation?.personalAnswers || {};
+  return `${renderDraftPreparation(task)}<div data-comment-editor="${esc(task.id)}" data-generated="${esc(plan ? composeCommentPreview(plan, answers) : task.draft || '')}">${plan ? `<div class="comment-personal"><strong>본인만 답할 수 있는 부분 · ${plan.inputs.length}개</strong><p class="hint">공개 답안은 AI가 준비했습니다. 아래 답변을 고르면 댓글 본문에 합쳐집니다.</p>${plan.inputs.map((q) => `<label>${esc(q.label)}${q.kind === 'choice' ? `<select data-comment-input="${esc(q.id)}" name="personal-${esc(task.id)}-${esc(q.id)}" required><option value="">직접 선택</option>${q.options.map((o) => `<option value="${esc(o.id)}" ${answers[q.id] === o.id ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>` : `<input data-comment-input="${esc(q.id)}" name="personal-${esc(task.id)}-${esc(q.id)}" required maxlength="600" value="${esc(answers[q.id] || '')}">`}</label>`).join('')}</div>` : ''}<label>게시할 댓글 본문 · 수정 가능<textarea name="text-${esc(task.id)}" required maxlength="2000" rows="3">${esc(task.draft || '')}</textarea></label><p class="hint">이 입력칸의 내용만 공개됩니다. 위 설명이나 승인 안내는 복사하지 마세요.</p>${plan ? '<button type="button" data-compose-comment hidden>선택한 답변으로 댓글 다시 만들기</button>' : ''}</div>`;
+}
+function updateCommentPreview(editor, force = false) {
+  const form = editor.closest('[data-task-review]');
+  const task = state.jobs
+    .find((j) => j.id === form.dataset.taskReview)
+    ?.tasks.find((t) => t.id === editor.dataset.commentEditor);
+  const plan = task?.draftPreparation?.commentPlan;
+  if (!plan) return;
+  const answers = Object.fromEntries(
+    [...editor.querySelectorAll('[data-comment-input]')].map((el) => [
+      el.dataset.commentInput,
+      el.value,
+    ]),
+  );
+  const copy = composeCommentPreview(plan, answers);
+  const textarea = editor.querySelector('textarea');
+  const button = editor.querySelector('[data-compose-comment]');
+  if (force || textarea.value === editor.dataset.generated) {
+    textarea.value = copy;
+    editor.dataset.generated = copy;
+    button.hidden = true;
+  } else button.hidden = false;
+}
+document.addEventListener('input', (e) => {
+  if (e.target.matches('[data-comment-input]'))
+    updateCommentPreview(e.target.closest('[data-comment-editor]'));
+});
+document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-compose-comment]'))
+    updateCommentPreview(e.target.closest('[data-comment-editor]'), true);
+});
 function renderTasks(job) {
   if (!job.tasks?.length) return '';
   const labels = {
@@ -1436,7 +1494,7 @@ function renderTasks(job) {
     manual_reported: '사용자 완료 보고',
   };
   const pending = job.tasks.filter((t) => ['review', 'attempted'].includes(t.state));
-  return `<div class="inbox"><h4>참여 과제</h4><ol>${job.tasks.map((t) => `<li>${esc(labels[t.kind])} · ${esc(status[t.state])} — ${esc(t.instruction)}${t.proof ? `<small> · ${esc(t.proof.quote)}</small>` : ''}</li>`).join('')}</ol>${!job.archivedAt && ['needs_user', 'submission_unknown'].includes(job.status) && pending.length ? `<form data-task-review="${esc(job.id)}">${pending.map((t) => `<fieldset><legend>${esc(labels[t.kind])} · ${esc(t.instruction)}</legend>${safeLink(t.url, '과제 대상 열기')}<blockquote>${esc(t.quote)}</blockquote>${t.permitted && !t.attempt ? `<p class="hint">${t.route === 'instagram_browser' ? '인스타 브라우저 대행입니다. 이 작업에서 확인한 계정·대상·문구만 실행하며 플랫폼 공식 승인으로 표시하지 않습니다.' : '자동 실행 허용 근거가 등록된 경로입니다. 아래 내용은 이 작업·대상에만 적용합니다.'}</p>${t.preview ? `<p><strong>실행 계정</strong> @${esc(t.preview.actor)} · <strong>대상 계정</strong> @${esc(t.preview.subject)}</p>` : t.route === 'instagram_browser' ? '<p class="hint">현재 계정·대상 확인이 필요합니다. 아래 ‘새 화면에서 재개’를 눌러 다시 확인하세요.</p>' : ''}<input type="hidden" name="mode-${esc(t.id)}" value="approve">${t.kind === 'comment' ? `${renderDraftPreparation(t)}<label>게시할 정확한 내용<textarea name="text-${esc(t.id)}" required maxlength="2000">${esc(t.draft || '')}</textarea></label>` : ''}` : `<p class="hint">자동 실행 ${t.attempt ? '결과가 불명확합니다' : '허용 경로가 확인되지 않았습니다'}. 직접 확인한 결과만 기록하세요.</p><input type="hidden" name="mode-${esc(t.id)}" value="manual"><label>직접 수행·확인한 결과<textarea name="evidence-${esc(t.id)}" required maxlength="2000"></textarea></label>`}</fieldset>`).join('')}<button type="submit" ${state.busy || pending.some((t) => t.route === 'instagram_browser' && t.permitted && !t.attempt && !t.preview) ? 'disabled' : ''}>과제 확인을 한 번에 저장하고 계속</button></form>` : ''}</div>`;
+  return `<div class="inbox"><h4>참여 과제</h4><ol>${job.tasks.map((t) => `<li>${esc(labels[t.kind])} · ${esc(status[t.state])} — ${esc(t.instruction)}${t.proof ? `<small> · ${esc(t.proof.quote)}</small>` : ''}</li>`).join('')}</ol>${!job.archivedAt && ['needs_user', 'submission_unknown'].includes(job.status) && pending.length ? `<form data-task-review="${esc(job.id)}">${pending.map((t) => `<fieldset><legend>${esc(labels[t.kind])} · ${esc(t.instruction)}</legend>${safeLink(t.url, '과제 대상 열기')}<blockquote>${esc(t.quote)}</blockquote>${t.permitted && !t.attempt ? `<p class="hint">${t.route === 'instagram_browser' ? '인스타 브라우저 대행입니다. 이 작업에서 확인한 계정·대상·문구만 실행하며 플랫폼 공식 승인으로 표시하지 않습니다.' : '자동 실행 허용 근거가 등록된 경로입니다. 아래 내용은 이 작업·대상에만 적용합니다.'}</p>${t.preview ? `<p><strong>실행 계정</strong> @${esc(t.preview.actor)} · <strong>대상 계정</strong> @${esc(t.preview.subject)}</p>` : t.route === 'instagram_browser' ? '<p class="hint">현재 계정·대상 확인이 필요합니다. 아래 ‘새 화면에서 재개’를 눌러 다시 확인하세요.</p>' : ''}<input type="hidden" name="mode-${esc(t.id)}" value="approve">${t.kind === 'comment' ? renderCommentEditor(t) : ''}` : `<p class="hint">자동 실행 ${t.attempt ? '결과가 불명확합니다' : '허용 경로가 확인되지 않았습니다'}. 직접 확인한 결과만 기록하세요.</p><input type="hidden" name="mode-${esc(t.id)}" value="manual"><label>직접 수행·확인한 결과<textarea name="evidence-${esc(t.id)}" required maxlength="2000"></textarea></label>`}</fieldset>`).join('')}<button type="submit" ${state.busy || pending.some((t) => t.route === 'instagram_browser' && t.permitted && !t.attempt && !t.preview) ? 'disabled' : ''}>과제 확인을 한 번에 저장하고 계속</button></form>` : ''}</div>`;
 }
 document.addEventListener('submit', (event) => {
   const form = event.target;
@@ -1452,6 +1510,14 @@ document.addEventListener('submit', (event) => {
           mode: values.get(`mode-${t.id}`),
           text: values.get(`text-${t.id}`) || undefined,
           evidence: values.get(`evidence-${t.id}`) || undefined,
+          personalAnswers: t.draftPreparation?.commentPlan
+            ? Object.fromEntries(
+                t.draftPreparation.commentPlan.inputs.map((q) => [
+                  q.id,
+                  values.get(`personal-${t.id}-${q.id}`) || '',
+                ]),
+              )
+            : undefined,
         })),
     });
   })(event);

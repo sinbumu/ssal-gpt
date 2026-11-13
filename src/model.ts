@@ -3,6 +3,7 @@ import { Auth, ServiceError, type ProviderChoice } from './auth.js';
 import { AnswerPlanSchema } from './autonomy.js';
 import { TaskSpecSchema } from './tasks.js';
 import { WinnerNoticeSchema } from './notifications.js';
+import { CommentPlanSchema } from './comment-content.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -83,6 +84,7 @@ export const StepSchema = z
     receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
     draftBasis: z.enum(['source_text', 'source_image', 'inference', 'suggestion']).optional(),
     draftRequirementsMet: z.boolean().optional(),
+    commentPlan: CommentPlanSchema.optional(),
     draftScore: z
       .object({ correct: z.number().int().min(0).max(20), total: z.number().int().min(1).max(20) })
       .optional(),

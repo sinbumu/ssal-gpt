@@ -1,3 +1,4 @@
+import { commentContentProblem, commentAnswersProblem } from './comment-content.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Job, EventRecord, Store } from './store.js';
@@ -171,7 +172,13 @@ export function taskPermission(store: Store, task: TaskSpec, synthetic = false) 
 export function approveTask(
   store: Store,
   job: Job,
-  input: { taskId: string; mode: 'approve' | 'manual'; text?: string; evidence?: string },
+  input: {
+    taskId: string;
+    mode: 'approve' | 'manual';
+    text?: string;
+    evidence?: string;
+    personalAnswers?: Record<string, string>;
+  },
 ) {
   const task = job.tasks?.find((t) => t.id === input.taskId);
   if (
@@ -191,7 +198,15 @@ export function approveTask(
     if (task.attempt || !taskPermission(store, task, job.autonomy?.synthetic))
       throw new ServiceError('task_route_not_permitted');
     const text = (input.text || '').trim();
-    if (task.kind === 'comment' && !text) throw new ServiceError('comment_content_required');
+    if (task.kind === 'comment') {
+      if (!text) throw new ServiceError('comment_content_required');
+      const plan = task.draftPreparation?.commentPlan;
+      const problem =
+        commentContentProblem(text) ||
+        (plan && commentAnswersProblem(plan, input.personalAnswers || {}, text));
+      if (problem) throw new ServiceError(problem);
+      if (plan) task.draftPreparation!.personalAnswers = input.personalAnswers;
+    }
     if (
       instagramTarget(task.url, task.kind) &&
       (!task.preview || Date.now() - task.preview.observedAt > 24 * 60 * 60_000)
@@ -249,6 +264,39 @@ export async function runTasks(
 ) {
   const started = Date.now();
   try {
+    for (const task of job.tasks || []) {
+      if (
+        task.kind !== 'comment' ||
+        task.attempt ||
+        ['verified', 'manual_reported'].includes(task.state)
+      )
+        continue;
+      if (task.approval) {
+        const plan = task.draftPreparation?.commentPlan;
+        const problem =
+          commentContentProblem(task.approval.text) ||
+          (plan &&
+            commentAnswersProblem(
+              plan,
+              task.draftPreparation?.personalAnswers || {},
+              task.approval.text,
+            ));
+        if (problem) {
+          task.draft = task.approval.text;
+          delete task.approval;
+          task.state = 'review';
+          job.status = 'needs_user';
+          job.note =
+            '댓글에 운영 안내문이나 미확인 답변이 포함되어 게시를 멈췄습니다. 확인함에서 본문을 수정하고 다시 승인해 주세요.';
+          job.history.push({ action: 'comment_content_blocked', reason: problem, url: task.url });
+          store.saveJob(job);
+          return false;
+        }
+      } else if (task.draft && commentContentProblem(task.draft)) {
+        delete task.draft;
+        delete task.draftPreparation;
+      }
+    }
     const pendingForm =
       job.tasks?.findIndex((t) => t.kind === 'form' && t.state !== 'verified') ?? -1;
     for (const [index, task] of (job.tasks || []).entries())
@@ -396,6 +444,10 @@ export async function runTasks(
         await browser.navigate(task.url);
       while (job.steps < job.maxSteps) {
         const assertGrant = () => {
+          if (task.kind === 'comment' && task.approval && !task.attempt) {
+            const problem = commentContentProblem(task.approval!.text);
+            if (problem) throw new ServiceError(problem);
+          }
           const current = settings(store);
           if (
             !task.approval ||

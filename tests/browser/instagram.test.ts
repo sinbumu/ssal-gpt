@@ -1030,13 +1030,33 @@ test('draft inference is labeled, missing personal facts stay with the user, and
         action: 'needs_user',
         observationId: c.observation.id,
         reason: '직접 사용한 경험이 필요한 질문이며 저장된 사실이 없습니다.',
+        draftBasis: 'suggestion',
+        draftRequirementsMet: true,
+        commentPlan: {
+          parts: [
+            { text: '합성 이벤트 응원합니다. ' },
+            { inputId: 'experience', prefix: '', suffix: '' },
+          ],
+          inputs: [
+            {
+              id: 'experience',
+              label: '직접 사용한 경험을 알려주세요.',
+              kind: 'text',
+              options: [],
+            },
+          ],
+        },
       },
       inputTokens: 1,
       outputTokens: 1,
     });
     f.app.runner.start(personal.id);
     await f.app.runner.finished();
-    assert.equal(f.app.store.job(personal.id)!.tasks![0]!.draft, undefined);
+    assert.equal(f.app.store.job(personal.id)!.tasks![0]!.draft, '합성 이벤트 응원합니다.');
+    assert.equal(
+      f.app.store.job(personal.id)!.tasks![0]!.draftPreparation?.commentPlan?.inputs[0]?.kind,
+      'text',
+    );
     assert.match(f.app.store.job(personal.id)!.note, /직접 사용한 경험/);
     assert.equal(f.data.posts, 0);
   } finally {
@@ -1380,6 +1400,129 @@ test('object-count draft resumes an unapproved legacy failure and reaches review
     assert.equal(ready.tasks![0]!.draftPreparation?.superseded?.calls, 6);
     assert.equal(ready.tasks![0]!.draftPreparation?.calls, 1);
     assert.equal(calls, 1);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+  } finally {
+    await f.close();
+  }
+});
+
+test('partial AI comment asks only personal choice, blocks pasted guidance atomically, then posts composed approved copy once', async () => {
+  const f = await fixture(),
+    ui = await chromium.launch({ headless: true });
+  try {
+    const j = f.make(['like', 'follow', 'comment']);
+    delete j.tasks![2]!.draft;
+    f.app.store.saveJob(j);
+    const execute = f.app.runner.model.decide.bind(f.app.runner.model);
+    let calls = 0;
+    f.app.runner.model.decide = async (p, instruction, c: any, image, signal) => {
+      if (c.phase !== 'comment_draft') return execute(p, instruction, c, image, signal);
+      calls++;
+      assert.match(instruction, /commentPlan/);
+      return {
+        step: {
+          action: 'needs_user',
+          observationId: c.observation.id,
+          reason: '공개 정답은 준비했고 수익 선호만 본인 선택이 필요합니다.',
+          draftBasis: 'source_text',
+          draftRequirementsMet: true,
+          evidenceQuote: '합성 이벤트',
+          url,
+          commentPlan: {
+            parts: [{ text: 'Q1 2번' }, { inputId: 'q2', prefix: ' / Q2 ', suffix: '' }],
+            inputs: [
+              {
+                id: 'q2',
+                label: '수익을 언제 받고 싶나요?',
+                kind: 'choice',
+                options: [
+                  { id: 'once', label: '처음 한 번만', text: '1번' },
+                  { id: 'each', label: '판매될 때마다', text: '2번' },
+                ],
+              },
+            ],
+          },
+        },
+        inputTokens: 11,
+        outputTokens: 7,
+      };
+    };
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const ready = f.app.store.job(j.id)!;
+    assert.equal(ready.status, 'needs_user', ready.note);
+    assert.equal(ready.tasks![2]!.draft, 'Q1 2번');
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    const page = await ui.newPage();
+    await page.goto(f.app.origin);
+    const form = page.locator(`[data-task-review="${j.id}"]`);
+    await form.waitFor();
+    assert.equal(await form.locator('[data-comment-input]').count(), 1);
+    assert.equal(await form.locator('textarea').inputValue(), 'Q1 2번');
+    assert.equal(await form.locator('select').inputValue(), '');
+    const csrf = (await (await page.request.get(f.app.origin + '/api/state')).json()).csrf;
+    const items = ready.tasks!.map((t) => ({
+      taskId: t.id,
+      mode: 'approve',
+      text: t.kind === 'comment' ? 'Q1 2번 / Q2 2번' : '',
+    }));
+    const missing = await page.request.post(f.app.origin + `/api/jobs/${j.id}/task`, {
+      headers: { 'X-Ssal-Token': csrf },
+      data: { items },
+    });
+    assert.equal(missing.status(), 400);
+    assert.ok(f.app.store.job(j.id)!.tasks!.every((t) => !t.approval));
+    await form.locator('select').selectOption('each');
+    assert.equal(await form.locator('textarea').inputValue(), 'Q1 2번 / Q2 2번');
+    await form
+      .locator('textarea')
+      .fill('Q1 2번 / Q2 2번. 저장된 개인 의견 직접 확인·게시 문구 승인 정책에 따른 요청입니다');
+    const [blocked] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith(`/api/jobs/${j.id}/task`)),
+      form.getByRole('button', { name: '과제 확인을 한 번에 저장하고 계속' }).click(),
+    ]);
+    assert.equal(blocked.status(), 400);
+    assert.match(await blocked.text(), /comment_contains_guidance/);
+    assert.ok(f.app.store.job(j.id)!.tasks!.every((t) => !t.approval));
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+    await page.getByText('댓글에 앱 안내문이 섞여 있습니다.', { exact: false }).waitFor();
+    // Choice changes do not silently overwrite the owner's edited text.
+    await form.locator('select').selectOption('once');
+    assert.match(await form.locator('textarea').inputValue(), /저장된/);
+    await form.getByRole('button', { name: '선택한 답변으로 댓글 다시 만들기' }).click();
+    assert.equal(await form.locator('textarea').inputValue(), 'Q1 2번 / Q2 1번');
+    const [response] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith(`/api/jobs/${j.id}/task`)),
+      form.getByRole('button', { name: '과제 확인을 한 번에 저장하고 계속' }).click(),
+    ]);
+    assert.equal(response.status(), 200, await response.text());
+    await f.app.runner.finished();
+    assert.equal(f.app.store.job(j.id)!.status, 'completed', f.app.store.job(j.id)!.note);
+    assert.equal(calls, 1);
+    assert.deepEqual(f.data.comments, ['Q1 2번 / Q2 1번']);
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [1, 1, 1]);
+  } finally {
+    await ui.close();
+    await f.close();
+  }
+});
+
+test('legacy approval containing instructions stops the whole phase before any external action', async () => {
+  const f = await fixture();
+  try {
+    const j = f.make(['like', 'follow', 'comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const old = f.app.store.job(j.id)!;
+    old.tasks![2]!.approval!.text = '정답 2번. 대시보드에서 확인해 주세요.';
+    f.app.store.saveJob(old);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'needs_user', stopped.note);
+    assert.equal(stopped.tasks![2]!.approval, undefined);
+    assert.equal(stopped.history.at(-1)?.action, 'comment_content_blocked');
     assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
   } finally {
     await f.close();

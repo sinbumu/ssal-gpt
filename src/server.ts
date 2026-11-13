@@ -807,6 +807,7 @@ export async function createApp(options: {
               mode: z.enum(['approve', 'manual']),
               text: z.string().max(2000).optional(),
               evidence: z.string().max(2000).optional(),
+              personalAnswers: z.record(z.string(), z.string().max(600)).optional(),
             }),
           )
           .min(1)

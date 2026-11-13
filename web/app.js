@@ -516,7 +516,19 @@ function renderOutcome(j) {
   if (!j.uncertain && !j.holdNote && !j.archivedAt) return '';
   return `<div class="outcome-note">${j.archivedAt ? '<strong>보관한 작업 · 자동 실행 안 함</strong>' : ''}${j.uncertain ? '<strong>접수 결과 미확인 · 재응모 잠금 유지</strong><p>완료나 실패가 확정된 상태가 아닙니다. 중복 제출을 막기 위해 자동 재시도하지 않습니다.</p>' : ''}${j.holdNote ? `<p class="consent-notice">${esc(j.holdNote)}</p>` : ''}${j.uncertain ? '<p class="hint">접수 증거를 다시 확인하거나, 실제 미제출을 확인한 뒤 현재 화면에서 이어갈 수 있습니다. 이어갈 화면이 없다면 미확인 상태로 보관할 수 있습니다.</p>' : ''}</div>`;
 }
+function renderJobBudget(j) {
+  const b = j.budget;
+  return `<div class="job-meta">${b ? `AI 호출 ${b.calls}/${b.callLimit}회 · 이 작업 남은 판단 최대 ${b.remainingDecisions}회<br>` : ''}판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${b?.blocked ? `<p class="warning-text">${b.blocked === 'selection_call_limit' ? `운영 설정의 호출 한도 ${b.callLimit}회 소진` : '운영 설정의 토큰 한도 소진'} · 작업 한도 ${j.maxSteps}회와 별도로 적용됩니다. 같은 설정으로는 추가 AI 판단을 실행할 수 없습니다.</p>` : ''}`;
+}
+function renderDiscoveryBudgetHint() {
+  if (!state?.selectionPolicy) return;
+  const requested = Number($('step-limit').value),
+    policy = state.selectionPolicy.discoveryCalls;
+  $('discovery-budget-hint').textContent =
+    `실제 탐색 상한: 최대 ${Math.min(requested, policy)}회 · 이 화면 ${requested}회 / 운영 설정 ${policy}회 중 먼저 도달하는 한도가 적용됩니다. 하루 사용량 한도도 적용됩니다.`;
+}
 function renderJobActions(j) {
+  const budgetBlocked = j.kind === 'discover' && !!j.budget?.blocked;
   const b = (action, label, disabled = false) =>
     `<button data-action="${action}" data-job="${j.id}" ${disabled ? 'disabled' : ''}>${label}</button>`;
   if (j.archivedAt)
@@ -524,9 +536,11 @@ function renderJobActions(j) {
   if (j.status === 'running')
     return `<div class="card-actions">${b('pause', '일시정지 · 직접 조작')}${b('stop', '중지')}</div>`;
   if (['completed', 'stopped'].includes(j.status)) return '';
-  return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : j.autonomy?.inbox ? '' : b('resume', j.steps >= j.maxSteps ? '20회 추가해 재개' : j.kind === 'discover' ? `남은 ${j.maxSteps - j.steps}회로 탐색 재개` : '새 화면에서 재개', state.busy)}${['paused', 'failed', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
+  return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : j.autonomy?.inbox ? '' : b('resume', budgetBlocked ? '운영 한도 소진 · 재개 불가' : j.steps >= j.maxSteps ? '20회 추가해 재개' : j.kind === 'discover' ? `남은 최대 ${j.budget?.remainingDecisions ?? j.maxSteps - j.steps}회로 탐색 재개` : '새 화면에서 재개', state.busy || budgetBlocked)}${['paused', 'failed', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy || budgetBlocked) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
 }
 function render() {
+  renderDiscoveryBudgetHint();
+  if (initial && !state.autonomy.policy.enabled) $('prepare-one').checked = false;
   if (lastInboxAction) {
     const j = state.jobs.find((j) => j.id === lastInboxAction.id);
     if (j && ['stopped', 'failed', 'completed', 'submission_unknown'].includes(j.status)) {
@@ -630,7 +644,7 @@ function render() {
   const cards = state.jobs.length
     ? state.jobs.map(
         (j) =>
-          `<article data-activity-job="${esc(j.id)}" class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(j.notice ? { normal: '정상 중단', technical: '기술 오류', user: '사용자 확인 필요' }[j.notice.category] : statuses[j.status])}</span><h3>${esc({ result: '당첨 발표 확인', discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.notice?.reason || jobNote(j))}</p>${renderJobNotice(j)}${renderFormExecution(j)}${renderOutcome(j)}${renderReceiptCheck(j.receiptCheck)}<div class="job-meta">판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${j.kind === 'discover' ? `<div class="job-meta">자동 출처 전환 ${j.discovery?.switches || 0}/${j.discovery?.switchLimit ?? 6}회</div>` : ''}${renderReadTraces(j)}${renderTasks(j)}${renderInbox(j)}${j.approval && j.status === 'approval' && !j.archivedAt ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && !j.archivedAt && j.notice?.category === 'user' && !j.uncertain && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}${renderJobActions(j)}</article>`,
+          `<article data-activity-job="${esc(j.id)}" class="job" id="job-${esc(j.id)}"><div class="section-head"><div><span class="pill ${j.status === 'running' ? 'active' : j.status === 'submission_unknown' ? 'warning' : ''}">${esc(j.notice ? { normal: '정상 중단', technical: '기술 오류', user: '사용자 확인 필요' }[j.notice.category] : statuses[j.status])}</span><h3>${esc({ result: '당첨 발표 확인', discover: '이벤트 탐색', apply: '이벤트 응모', demo: '합성 화면 테스트', autonomy_demo: '자율 설문 테스트' }[j.kind])}</h3></div><small>${esc(j.provider.kind === 'chatgpt' ? 'ChatGPT 플랜' : 'OpenAI API')} · ${esc(j.provider.model)}</small></div>${j.eventId ? `<p class="job-event-title">${esc(state.events.find((e) => e.id === j.eventId)?.title || '')}</p>` : ''}<p>${esc(j.notice?.reason || jobNote(j))}</p>${renderJobNotice(j)}${renderFormExecution(j)}${renderOutcome(j)}${renderReceiptCheck(j.receiptCheck)}${renderJobBudget(j)}${j.discoveryStart ? `<p class="hint">시작 전략 · ${esc(j.discoveryStart.reason)}${j.discoveryStart.query ? `<br>검색어: ${esc(j.discoveryStart.query)}` : ''}</p>` : ''}${j.kind === 'discover' ? `<div class="job-meta">자동 출처 전환 ${j.discovery?.switches || 0}/${j.discovery?.switchLimit ?? 6}회</div>` : ''}${renderReadTraces(j)}${renderTasks(j)}${renderInbox(j)}${j.approval && j.status === 'approval' && !j.archivedAt ? `<div class="approval"><strong>${j.approval.kind === 'content' ? '입력 내용 확인' : '외부 동작 확인'}</strong><p>${esc(j.approval.url)}</p><p>대상: ${esc(j.approval.target?.label || '화면의 선택 좌표')} ${j.approval.target?.href ? safeLink(j.approval.target.href, '이동 주소') : ''}</p><p>동작: ${esc(j.approval.action.action)} · ${esc(j.approval.action.reason)}</p>${j.approval.action.text ? `<pre>${esc(j.approval.action.text)}</pre>` : ''}${renderFormReview(j.approval.form, j.approval.url)}<p class="hint">이 내용과 현재 화면에 한해 허용됩니다. 화면이 바뀌면 다시 확인합니다.</p><button class="primary" data-action="approve" data-job="${j.id}" data-approval="${j.approval.id}">확인한 동작 실행</button></div>` : ''}<details class="evidence"><summary>관찰 화면과 실행 내역</summary>${j.screenshot ? `<a href="/evidence/${esc(j.screenshot)}" target="_blank"><img loading="lazy" src="/evidence/${esc(j.screenshot)}" alt="이 작업의 최근 브라우저 관찰 화면"></a>` : '<p>아직 관찰 화면이 없습니다.</p>'}<ol>${j.history.map((h) => `<li>${esc(h.reason)} <small>${esc(h.action)}</small></li>`).join('')}</ol></details>${!j.autonomy && !j.archivedAt && j.notice?.category === 'user' && !j.uncertain && ['needs_user', 'paused'].includes(j.status) ? `<details><summary>내 답변 전달하기</summary><form data-job-context="${esc(j.id)}"><p class="hint">현재 질문에 대한 실제 답을 적어주세요. 비밀번호·연락처는 전용 브라우저에 직접 입력하세요.</p><textarea name="text" required maxlength="2000" placeholder="질문과 답변을 함께 적어주세요."></textarea><button type="submit">답변 저장 후 재개</button></form></details>` : ''}${renderJobActions(j)}</article>`,
       )
     : [];
   const active = (j) => !j.archivedAt && !terminalJob(j);
@@ -664,6 +678,7 @@ async function beginLogin(accountId) {
 }
 $('chatgpt-login').onclick = guard(() => beginLogin($('account').value || undefined));
 $('add-account').onclick = guard(() => beginLogin());
+$('step-limit').onchange = renderDiscoveryBudgetHint;
 $('discovery-source').onchange = () => {
   $('source-url-field').hidden = $('discovery-source').value !== 'custom';
 };

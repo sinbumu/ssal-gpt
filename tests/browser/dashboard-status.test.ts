@@ -235,7 +235,7 @@ test('dashboard separates expected stops, technical faults and actionable user i
     assert.equal(await root(technical).locator('[data-job-context]').count(), 0);
     assert.match(
       await root(technical).locator('[data-action=resume]').innerText(),
-      /남은 24회로 탐색 재개/,
+      /남은 최대 24회로 탐색 재개/,
     );
     await root(technical).locator('.job-diagnostics summary').click();
     assert.match(await root(technical).innerText(), /observation_navigation_changed/);

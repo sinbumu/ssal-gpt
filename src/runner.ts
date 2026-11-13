@@ -1,3 +1,4 @@
+import { jobBudget } from './operations.js';
 import { completionMessage } from './completion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { Browser, validateUrl, type Observation } from './browser.js';
@@ -40,6 +41,7 @@ import {
   noteDiscoveryDestination,
   reuseDiscoveryRejections,
   stalledDiscoveryRead,
+  rejectDiscoveryCandidate,
   discoveryNeedsReplan,
   unrelatedDiscoveryLink,
   formDiscovery,
@@ -634,6 +636,7 @@ export class Runner {
         signal.throwIfAborted();
         const { image, ...observation } = o;
         const context = {
+          effectiveBudget: jobBudget(this.store, job),
           today: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }),
           timezone: 'Asia/Seoul',
           goal: job.goal,
@@ -646,9 +649,8 @@ export class Runner {
               : 'disabled',
             youtube: 'unsupported',
           },
-          selectionPolicy: job.prepareOne
-            ? { ...selection(this.store), facts: undefined }
-            : undefined,
+          selectionPolicy:
+            job.kind === 'discover' ? { ...selection(this.store), facts: undefined } : undefined,
           userContext: job.userContext || '',
           mode: job.kind,
           uncertain: job.uncertain,
@@ -675,7 +677,14 @@ export class Runner {
           memory: job.memory || '',
           observedUrls: job.observedUrls || [],
           skippedUrls: job.skippedUrls || [],
-          discovery: job.kind === 'discover' ? discoveryContext(job) : undefined,
+          discovery:
+            job.kind === 'discover'
+              ? {
+                  ...discoveryContext(job),
+                  remainingDecisions:
+                    jobBudget(this.store, job)?.remainingDecisions ?? job.maxSteps - job.steps,
+                }
+              : undefined,
           previousDiscoveryRejections:
             job.kind === 'discover'
               ? this.store
@@ -817,7 +826,7 @@ export class Runner {
           }
           const stalled = stalledDiscoveryRead(job, o, readStep);
           if (stalled) {
-            rejectSource(job, o.url, stalled);
+            rejectDiscoveryCandidate(job, o.url, stalled);
             job.history.push({ action: 'discovery_read_stalled', reason: stalled, url: o.url });
             await this.redirectDiscovery(job, nextDiscoverySource(job), signal, true);
             continue;
@@ -843,8 +852,7 @@ export class Runner {
             // After repeated failures the router must either inspect the remaining
             // direct form or replan; a suggested older list cannot bypass it.
             const selected =
-              !(formDiscovery(job) && (state.rejectedSinceSearch || 0) >= 3) &&
-              selectedDiscoveryLink(job, o, step.url);
+              (state.rejectedSinceSearch || 0) < 3 && selectedDiscoveryLink(job, o, step.url);
             if (selected) {
               step = {
                 action: 'navigate',
@@ -1156,7 +1164,7 @@ export class Runner {
           saveConnection(this.store, this.browser.profileKey(), visible, this.browser.page.url());
       }
       const discoveryStops: Record<string, string> = {
-        selection_call_limit: '선정 설정의 이 작업 AI 호출 상한에 도달했습니다.',
+        selection_call_limit: `운영 설정의 이 작업 AI 호출 한도 ${jobBudget(this.store, job)?.callLimit}회에 도달했습니다. 작업 판단 한도 ${job.maxSteps}회와 별도로 적용됩니다.`,
         selection_token_limit: '선정 설정의 이 작업 보고 토큰 상한에 도달했습니다.',
         discovery_decision_limit: '판단 한도에 도달해 탐색을 보관합니다.',
         discovery_switch_limit: `자동 출처 전환 ${discoverySwitchLimit(job)}회 한도에 도달해 탐색을 보관합니다.`,
@@ -1172,6 +1180,12 @@ export class Runner {
             : executionPhase,
         );
         if (exhausted) job.stopReason.reason = exhausted;
+        if (
+          error instanceof ServiceError &&
+          ['selection_call_limit', 'selection_token_limit'].includes(error.code)
+        )
+          job.stopReason.nextAction =
+            '운영 탭의 이 작업 한도가 소진됐습니다. 같은 설정으로 재개해도 추가 실행되지 않습니다. 기록을 보관하거나 한도 설정을 직접 확인하세요.';
         if (error instanceof ServiceError && error.code === 'discovery_switch_limit')
           job.stopReason.nextAction = `운영탭의 ‘탐색 자동 출처 전환 한도’를 조정한 뒤 재개할 수 있습니다. 판단은 ${job.steps}/${job.maxSteps}회 사용했으며 하루 사용량 한도도 계속 적용됩니다.`;
       }

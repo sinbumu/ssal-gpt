@@ -2,6 +2,7 @@ import type { Observation } from './browser.js';
 import type { Step } from './model.js';
 import { canonicalUrl, type Job } from './store.js';
 import { searchUrl } from './evidence.js';
+import { discoveryQuery } from './discovery-start.js';
 
 type Engine = 'naver' | 'google';
 type DiscoveryLink = { url: string; label: string; source: string; context?: string };
@@ -17,6 +18,8 @@ export type DiscoveryState = {
   switchLimit?: number;
   readCounts?: Record<string, number>;
   navigationCounts?: Record<string, number>;
+  candidateRoots?: Record<string, string>;
+  candidateReads?: Record<string, number>;
   replans?: number;
   needsFreshSearch?: boolean;
   rejectedSinceSearch?: number;
@@ -84,7 +87,7 @@ export function discoveryPageKey(raw: string) {
   }
   if (/\/(sorry|challenge|checkpoint)(\/|$)/.test(u.pathname)) u.search = '';
   for (const key of [...u.searchParams.keys()])
-    if (/^__cf_|^dtm_/i.test(key)) u.searchParams.delete(key);
+    if (/^__cf_|^dtm_|^(?:csrfToken|csrf_token|_csrf)$/i.test(key)) u.searchParams.delete(key);
   return canonicalUrl(u.toString());
 }
 function sourceFamily(raw: string) {
@@ -254,9 +257,15 @@ function preferredForm(job: Pick<Job, 'goal'>) {
 }
 
 export function unrelatedDiscoveryLink(job: Job, link: Pick<DiscoveryLink, 'url' | 'label'>) {
-  if (!formDiscovery(job) || directForm(link.url)) return;
+  if (directForm(link.url)) return;
   const u = new URL(link.url);
   const path = u.pathname;
+  if (
+    /^(?:cr\d+\.shopping|search\.shopping)\.naver\.com$/.test(u.hostname) ||
+    (u.hostname === 'smartstore.naver.com' && /\/products?\/\d+/.test(path)) ||
+    /^(?:adcr|adclick|ad)\.naver\.com$/.test(u.hostname)
+  )
+    return '응모 안내가 아닌 쇼핑 상품·광고 이동 주소입니다.';
   if (
     (u.hostname === 'workspace.google.com' && /\/products\/forms\/?$/.test(path)) ||
     (/^(www\.)?google\.com$/.test(u.hostname) && /\/forms\/about\/?$/.test(path)) ||
@@ -298,9 +307,13 @@ function eligibleFrontier(job: Job) {
 export function discoveryNeedsReplan(job: Job) {
   const s = discoveryState(job);
   return (
-    formDiscovery(job) &&
     (s.rejectedSinceSearch || 0) >= 3 &&
-    !eligibleFrontier(job).some((v) => directForm(v.url) && formLinkScore(v, job) >= 30)
+    !eligibleFrontier(job).some((v) =>
+      formDiscovery(job)
+        ? directForm(v.url) && formLinkScore(v, job) >= 30
+        : (directForm(v.url) || /instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(v.url)) &&
+          !excludedSource(job, v.url),
+    )
   );
 }
 export function noteDiscoveryDestination(job: Job, requested: string, resolved: string) {
@@ -308,6 +321,7 @@ export function noteDiscoveryDestination(job: Job, requested: string, resolved: 
     from = discoveryPageKey(requested),
     to = discoveryPageKey(resolved);
   if (!s.visited.includes(to) && !searchLocation(resolved)) s.lastProgressStep = job.steps;
+  if (s.candidateRoots?.[from]) (s.candidateRoots ??= {})[to] = s.candidateRoots[from]!;
   s.needsFreshSearch = false;
   s.visited = [...new Set([...s.visited, from, to])].slice(-200);
   if (from !== to && !(s.redirects || []).some((r) => r.requested === from && r.resolved === to))
@@ -449,10 +463,61 @@ export function selectedDiscoveryLink(job: Job, o: Observation, url?: string) {
     ? url
     : undefined;
 }
+function entryPage(raw: string) {
+  const u = new URL(raw);
+  return (
+    !!directForm(raw) ||
+    /\/(?:quizReq|survey|surveyReq|form|questionnaire)(?:\/|\.|$)/i.test(u.pathname)
+  );
+}
+function listPage(raw: string) {
+  const u = new URL(raw);
+  return (
+    !!searchLocation(raw) ||
+    /^\/cpevent\/?$/.test(u.pathname) ||
+    /(?:\/list(?:\.|\/|$)|List\.\w+$)/i.test(u.pathname) ||
+    u.pathname === '/'
+  );
+}
+function distinctEntry(a: string, b: string) {
+  const x = new URL(a),
+    y = new URL(b);
+  return ['quiz_idx', 'search_quiz_month', 'search_quiz_year', 'surveyId', 'formId', 'id'].some(
+    (k) =>
+      x.searchParams.has(k) &&
+      y.searchParams.has(k) &&
+      x.searchParams.get(k) !== y.searchParams.get(k),
+  );
+}
+export function rejectDiscoveryCandidate(job: Job, url: string, reason: string) {
+  const s = discoveryState(job),
+    key = discoveryPageKey(url),
+    root = s.candidateRoots?.[key] || key;
+  for (const [page, group] of Object.entries(s.candidateRoots || {}))
+    if (group === root) rejectSource(job, page, reason);
+  rejectSource(job, url, reason);
+}
 export function noteDiscoveryRead(job: Job, source: string, step: Step) {
   const s = discoveryState(job),
     key = discoveryPageKey(source);
-  if (['scroll', 'wait', 'navigate'].includes(step.action))
+  if (!listPage(source) && ['scroll', 'wait', 'navigate', 'click'].includes(step.action)) {
+    const roots = (s.candidateRoots ??= {}),
+      root = (roots[key] ??= key);
+    (s.candidateReads ??= {})[root] = (s.candidateReads?.[root] || 0) + 1;
+    if (
+      step.action === 'navigate' &&
+      step.url &&
+      !searchLocation(step.url) &&
+      entryPage(step.url) &&
+      !distinctEntry(source, step.url)
+    ) {
+      const target = discoveryPageKey(step.url);
+      if (!roots[target]) roots[target] = root;
+    }
+    s.candidateRoots = Object.fromEntries(Object.entries(roots).slice(-200));
+    s.candidateReads = Object.fromEntries(Object.entries(s.candidateReads).slice(-100));
+  }
+  if (['scroll', 'wait', 'navigate', 'click'].includes(step.action))
     (s.readCounts ??= {})[key] = (s.readCounts?.[key] || 0) + 1;
   if (step.action === 'navigate' && step.url && !searchLocation(step.url)) {
     const target = JSON.stringify([key, discoveryPageKey(step.url)]);
@@ -462,6 +527,21 @@ export function noteDiscoveryRead(job: Job, source: string, step: Step) {
 export function stalledDiscoveryRead(job: Job, o: Observation, step: Step) {
   const s = discoveryState(job),
     key = discoveryPageKey(o.url);
+  const root = s.candidateRoots?.[key] || key;
+  // A bounded candidate can still be left for a genuinely different observed source.
+  const leaving =
+    step.action === 'navigate' &&
+    step.url &&
+    (searchLocation(step.url) ||
+      (discoveryPageKey(step.url) !== key &&
+        !entryPage(step.url) &&
+        (s.candidateRoots?.[discoveryPageKey(step.url)] || discoveryPageKey(step.url)) !== root));
+  if (
+    !leaving &&
+    ['scroll', 'wait', 'navigate', 'click'].includes(step.action) &&
+    (s.candidateReads?.[root] || 0) >= 10
+  )
+    return '같은 행사의 안내·응모 화면을 10회 확인했지만 후보를 확정하지 못해 다른 행사로 전환합니다.';
   if (['scroll', 'wait'].includes(step.action) && (s.readCounts?.[key] || 0) >= 8)
     return '새 행사 링크 확보 없이 같은 출처를 8회 읽어 다른 출처로 전환합니다.';
   if (
@@ -500,6 +580,12 @@ export function discoveryContext(job: Job) {
     replans: s.replans || 0,
     needsFreshSearch: !!s.needsFreshSearch,
     remainingDecisions: job.maxSteps - job.steps,
+    candidateReads:
+      s.candidateReads?.[
+        s.candidateRoots?.[discoveryPageKey(job.currentUrl || job.startUrl)] ||
+          discoveryPageKey(job.currentUrl || job.startUrl)
+      ] || 0,
+    candidateReadLimit: 10,
     readsWithoutNewLinks: s.readCounts?.[discoveryPageKey(job.currentUrl || job.startUrl)] || 0,
   };
 }
@@ -509,7 +595,14 @@ export function nextDiscoverySource(job: Job): DiscoveryRoute | undefined {
     return;
   // General/SNS discovery keeps its observed-link-first fallback. Form goals
   // must pass the relevance and replan checks rather than draining every link.
-  const link = !formDiscovery(job) && eligibleFrontier(job)[0];
+  const fresh = eligibleFrontier(job);
+  const link =
+    !formDiscovery(job) &&
+    !discoveryNeedsReplan(job) &&
+    (fresh.find(
+      (v) => directForm(v.url) || /instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\//.test(v.url),
+    ) ||
+      fresh[0]);
   return link
     ? { url: link.url, reason: `관측된 다음 출처를 확인합니다: ${link.label.slice(0, 100)}` }
     : nextDiscoveryRoute(job);
@@ -539,7 +632,7 @@ export function nextDiscoveryRoute(
       url: relevantForm.url,
       reason: `관측한 폼·설문 후보를 우선 확인합니다: ${relevantForm.label.slice(0, 100)}`,
     };
-  const q = query || s.searches.at(-1)?.query || job.goal.slice(0, 500);
+  const q = query || s.searches.at(-1)?.query || discoveryQuery(job.goal);
   const alternate: Engine = current === 'naver' ? 'google' : 'naver';
   if (
     !s.blockedEngines.includes(alternate) &&

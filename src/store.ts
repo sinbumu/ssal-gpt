@@ -39,6 +39,12 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  discoveryStart?: {
+    mode: import('./discovery-start.js').DiscoverySource;
+    url: string;
+    query?: string;
+    reason: string;
+  };
   formExecution?: import('./form-execution.js').FormExecution;
   stopReason?: JobNotice;
   observationDiagnostics?: ObservationDiagnostic[];

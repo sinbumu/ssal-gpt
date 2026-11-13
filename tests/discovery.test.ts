@@ -207,5 +207,9 @@ test('stalled reading and failed navigation counters survive resume but do not b
     ...o,
     elements: [{ href: 'https://example.org/event/new', label: '새 행사 이벤트' }],
   } as Observation);
-  assert.equal(stalledDiscoveryRead(resumed, o, scroll), undefined);
+  assert.match(stalledDiscoveryRead(resumed, o, scroll)!, /같은 행사/);
+  assert.equal(
+    stalledDiscoveryRead(resumed, o, { ...navigate, url: 'https://example.org/new-event' }),
+    undefined,
+  );
 });

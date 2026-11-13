@@ -1,3 +1,5 @@
+import { discoveryStart, DiscoverySources } from './discovery-start.js';
+import { jobBudget } from './operations.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -32,7 +34,6 @@ import {
   addDriveSelection,
 } from './attachments.js';
 import { inspectForm } from './forms.js';
-import { searchUrl } from './evidence.js';
 import {
   OutcomeSchema,
   saveOutcome,
@@ -98,7 +99,7 @@ const JobSchema = z.object({
   maxSteps: z.number().int().min(5).max(300).default(40),
   routeConfirmed: z.boolean().optional(),
   layout: z.enum(['normal', 'shift']).optional(),
-  discoverySource: z.enum(['culture', 'google', 'naver', 'custom']).default('culture'),
+  discoverySource: z.enum(DiscoverySources).default('auto'),
   sourceUrl: z.string().url().optional(),
   userContext: z.string().max(6000).optional(),
 });
@@ -276,6 +277,7 @@ export async function createApp(options: {
                 pages: job.formExecution.pages.map((p) => ({ ...p, definition: undefined })),
               }
             : undefined,
+          budget: jobBudget(store, job),
           tasks: job.tasks?.map((task) => ({
             ...task,
             permitted: taskPermission(store, task, job.autonomy?.synthetic),
@@ -452,7 +454,11 @@ export async function createApp(options: {
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/schedules') {
-      const input = ScheduleSchema.parse(data);
+      const source = discoveryStart(store, {
+        ...data,
+        discoverySource: data.discoverySource || 'custom',
+      });
+      const input = ScheduleSchema.parse({ ...data, sourceUrl: source.url });
       await validateUrl(input.sourceUrl, origin);
       if (input.prepareOne && !settings(store).policy.enabled)
         throw new ServiceError('delegation_not_enabled');
@@ -689,20 +695,13 @@ export async function createApp(options: {
         throw new ServiceError('event_qualification_review_required');
       const id = randomUUID();
       const now = new Date().toISOString();
+      const plannedSource = input.kind === 'discover' ? discoveryStart(store, input) : undefined;
       const startUrl =
         input.kind === 'autonomy_demo'
           ? `${origin}/demo/autonomy?run=${id}`
           : input.kind === 'demo'
             ? `${origin}/demo/event?run=${id}&layout=${input.layout || 'normal'}`
-            : event?.entryUrl ||
-              (input.discoverySource === 'culture'
-                ? 'https://www.culture.go.kr/portal/bbs/B0000101/list.do?menuNo=200031'
-                : input.discoverySource === 'custom'
-                  ? z.string().url().parse(input.sourceUrl)
-                  : searchUrl(
-                      `${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })} ${input.goal}`,
-                      input.discoverySource === 'google' ? 'google' : 'naver',
-                    ));
+            : event?.entryUrl || plannedSource?.url || discoveryStart(store, input).url;
       const job: Job = {
         id,
         kind: input.kind,
@@ -710,6 +709,7 @@ export async function createApp(options: {
         provider: input.provider,
         browserEngine: browser.engine,
         startUrl,
+        discoveryStart: plannedSource,
         status: 'queued',
         createdAt: now,
         updatedAt: now,
@@ -1139,6 +1139,8 @@ export async function createApp(options: {
         if (job.autonomy?.inbox && data.useCurrentPage !== true)
           throw new ServiceError('answer_inbox_first');
         if (runner.isBusy()) throw new ServiceError('browser_busy', 409);
+        const budget = jobBudget(store, job);
+        if (job.kind === 'discover' && budget?.blocked) throw new ServiceError(budget.blocked);
         if (data.useCurrentPage === true) {
           const current = browser.page?.url();
           if (!current || !job.allowedOrigins.includes(new URL(current).origin))

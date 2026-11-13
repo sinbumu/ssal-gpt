@@ -1048,3 +1048,35 @@ test('dashboard operations increase resumes the same exhausted discovery with co
       s.operations,
     );
   }));
+
+test('generic discovery rejects a model-selected shopping bridge before navigation and switches to the observed event', async () =>
+  fixture(async (app, visits) => {
+    const source = app.origin + '/demo/catalog',
+      product = 'https://cr3.shopping.naver.com/v2/bridge/searchGate?query=event',
+      event = app.origin + '/demo/event';
+    await app.browser.context!.route('**/demo/catalog', (r) =>
+      r.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<a href="${product}">무료 이벤트 상품</a><a href="${event}">온라인 응모 이벤트</a>`,
+      }),
+    );
+    const j = job(source);
+    j.goal = '누구나 참여 가능한 온라인 이벤트';
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      model((c) =>
+        c.observation.url === source ? { action: 'navigate', url: product } : { action: 'done' },
+      ),
+      app.origin,
+    );
+    app.store.saveJob(j);
+    runner.start(j.id);
+    await runner.finished();
+    const result = app.store.job(j.id)!;
+    assert.equal(result.status, 'completed', result.note);
+    assert.ok(!visits.includes(product));
+    assert.ok(visits.includes(event));
+    assert.ok(result.discovery?.filteredLinks?.some((l) => l.url === product));
+    assert.equal(result.maxSteps, 10);
+  }));

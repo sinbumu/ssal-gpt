@@ -1,3 +1,4 @@
+import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { ServiceError, safeMessage } from './auth.js';
@@ -41,6 +42,7 @@ export const ScheduleSchema = z.object({
   maxRunsPerDay: z.number().int().min(1).max(24).default(2),
   goal: z.string().min(1).max(2000),
   sourceUrl: z.string().url(),
+  discoverySource: z.enum(DiscoverySources).default('custom'),
   provider: ProviderSchema,
   browserEngine: z.enum(['chromium', 'chrome']).default('chromium'),
   maxSteps: z.number().int().min(5).max(300).default(60),
@@ -93,25 +95,44 @@ export function budgetReason(store: Store, provider: Job['provider'], now = Date
   }
   return undefined;
 }
+export function jobBudget(store: Store, job: Job) {
+  const scoped = job.kind === 'discover' || job.kind === 'apply';
+  if (!scoped) return undefined;
+  const policy = selection(store);
+  const total = store.db
+    .prepare(
+      'SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens+output_tokens),0) AS tokens FROM usage WHERE job_id=?',
+    )
+    .get(job.id)!;
+  const calls = Number(total.calls),
+    tokens = Number(total.tokens);
+  const callLimit = job.kind === 'discover' ? policy.discoveryCalls : policy.maxCalls;
+  const tokenLimit = job.kind === 'discover' ? policy.discoveryTokens : policy.entryTokens;
+  const blocked =
+    calls >= callLimit
+      ? 'selection_call_limit'
+      : tokenLimit !== null && tokens >= tokenLimit
+        ? 'selection_token_limit'
+        : undefined;
+  return {
+    calls,
+    tokens,
+    callLimit,
+    tokenLimit,
+    remainingCalls: Math.max(0, callLimit - calls),
+    remainingDecisions: blocked
+      ? 0
+      : Math.max(0, Math.min(job.maxSteps - job.steps, callLimit - calls)),
+    blocked,
+  };
+}
 // All model paths (research, recovery, receipt checks included) pass this boundary.
 export function meteredModel(store: Store, model: ModelClient, job: Job): ModelClient {
   return {
     async decide(...args) {
       args[4].throwIfAborted();
-      const policy = selection(store);
-      const scoped = job.kind === 'discover' || job.kind === 'apply';
-      if (scoped) {
-        const total = store.db
-          .prepare(
-            'SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens+output_tokens),0) AS tokens FROM usage WHERE job_id=?',
-          )
-          .get(job.id)!;
-        const callLimit = job.kind === 'discover' ? policy.discoveryCalls : policy.maxCalls;
-        const tokenLimit = job.kind === 'discover' ? policy.discoveryTokens : policy.entryTokens;
-        if (Number(total.calls) >= callLimit) throw new ServiceError('selection_call_limit');
-        if (tokenLimit !== null && Number(total.tokens) >= tokenLimit)
-          throw new ServiceError('selection_token_limit');
-      }
+      const budget = jobBudget(store, job);
+      if (budget?.blocked) throw new ServiceError(budget.blocked);
       const reason = budgetReason(store, args[0]);
       if (reason) throw new ServiceError(reason);
       const id = randomUUID(),
@@ -246,6 +267,11 @@ export class Scheduler {
         }
         const id = randomUUID(),
           at = new Date(now).toISOString();
+        const plannedSource = discoveryStart(
+          this.store,
+          { ...s, discoverySource: s.discoverySource || 'custom' },
+          now,
+        );
         const job: Job = {
           id,
           kind: 'discover',
@@ -253,7 +279,8 @@ export class Scheduler {
           provider: s.provider,
           browserEngine: s.browserEngine,
           goal: s.goal,
-          startUrl: s.sourceUrl,
+          startUrl: plannedSource.url,
+          discoveryStart: plannedSource,
           status: 'queued',
           createdAt: at,
           updatedAt: at,
@@ -264,10 +291,10 @@ export class Scheduler {
           outputTokens: 0,
           note: '예약된 탐색이 대기 중입니다.',
           uncertain: false,
-          allowedOrigins: [new URL(s.sourceUrl).origin],
+          allowedOrigins: [new URL(plannedSource.url).origin],
           approvedTexts: [],
           history: [],
-          searchEngine: 'naver',
+          searchEngine: s.discoverySource === 'google' ? 'google' : 'naver',
           prepareOne: s.prepareOne ? { revision: s.revision, expires: now + 86400000 } : undefined,
         };
         // Queue insertion and next due time commit together. Missed intervals coalesce to one run.

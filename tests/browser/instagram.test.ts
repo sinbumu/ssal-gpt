@@ -1419,6 +1419,7 @@ test('partial AI comment asks only personal choice, blocks pasted guidance atomi
       if (c.phase !== 'comment_draft') return execute(p, instruction, c, image, signal);
       calls++;
       assert.match(instruction, /commentPlan/);
+      if (calls > 1) assert.match(c.lastActions.at(-1).reason, /evidenceQuote.*일치하지/);
       return {
         step: {
           action: 'needs_user',
@@ -1426,7 +1427,7 @@ test('partial AI comment asks only personal choice, blocks pasted guidance atomi
           reason: '공개 정답은 준비했고 수익 선호만 본인 선택이 필요합니다.',
           draftBasis: 'source_text',
           draftRequirementsMet: true,
-          evidenceQuote: '합성 이벤트',
+          evidenceQuote: calls === 1 ? '관찰 원문에 없는 요약' : '합성 이벤트',
           url,
           commentPlan: {
             parts: [{ text: 'Q1 2번' }, { inputId: 'q2', prefix: ' / Q2 ', suffix: '' }],
@@ -1498,7 +1499,7 @@ test('partial AI comment asks only personal choice, blocks pasted guidance atomi
     assert.equal(response.status(), 200, await response.text());
     await f.app.runner.finished();
     assert.equal(f.app.store.job(j.id)!.status, 'completed', f.app.store.job(j.id)!.note);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     assert.deepEqual(f.data.comments, ['Q1 2번 / Q2 1번']);
     assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [1, 1, 1]);
   } finally {

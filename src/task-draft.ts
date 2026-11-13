@@ -18,7 +18,7 @@ import {
   type CommentPlan,
 } from './comment-content.js';
 
-export const DRAFT_VERSION = 7;
+export const DRAFT_VERSION = 8;
 type QuizAttempt = {
   number: number;
   question: string;
@@ -250,20 +250,48 @@ Prepare a Korean comment SUGGESTION for this event before user review. Read the 
                   ? 'comment_plan_private_data'
                   : undefined))) ||
             draftProblem(task, { ...step, text }, quiz);
-          if (
+          const invalid =
             problem ||
-            (!text && !partial) ||
-            (text?.length || 0) > 2000 ||
-            (text !== undefined && text !== clean(text)) ||
-            !basis ||
-            (basis === 'source_text' && !source) ||
-            (['source_image', 'inference'].includes(basis) &&
-              (!currentImage || !step.evidenceQuote?.trim()))
-          ) {
-            trace.finish('rejected', problem ? 'draft_requirements' : 'draft_evidence');
+            (!text && !partial
+              ? 'draft_text_missing'
+              : (text?.length || 0) > 2000
+                ? 'draft_text_too_long'
+                : text !== undefined && text !== clean(text)
+                  ? 'draft_private_data'
+                  : !basis
+                    ? 'draft_basis_missing'
+                    : basis === 'source_text' && !source
+                      ? 'draft_source_quote_unmatched'
+                      : ['source_image', 'inference'].includes(basis) && !currentImage
+                        ? 'draft_image_source_mismatch'
+                        : ['source_image', 'inference'].includes(basis) &&
+                            !step.evidenceQuote?.trim()
+                          ? 'draft_image_clue_missing'
+                          : undefined);
+          if (invalid) {
+            const explanation: Record<string, string> = {
+              draft_source_quote_unmatched:
+                'source_text의 evidenceQuote가 관찰한 원문 텍스트와 일치하지 않습니다. observation.text에서 실제 연속된 짧은 문구를 그대로 인용하세요. 여러 부분을 합치거나 요약하지 마세요. 단서가 이미지에만 있다면 현재 이미지의 실제 단서로 source_image를 사용하세요. 개인 선택 문안은 유지하고 근거만 수정하세요.',
+              draft_image_source_mismatch:
+                '이미지 근거 URL이 현재 관찰 URL과 다릅니다. 실제 원문으로 이동해 다시 관찰하세요.',
+              draft_image_clue_missing: '이미지에서 실제로 본 단서를 evidenceQuote에 설명하세요.',
+              draft_basis_missing: 'draftBasis로 공개 근거 또는 일반 제안 여부를 구분하세요.',
+              draft_text_missing:
+                '게시할 초안이 비어 있습니다. 개인 답변이 필요하면 commentPlan으로 공개 부분과 질문을 분리하세요.',
+              draft_text_too_long: '완성 댓글은 2000자 이내여야 합니다.',
+              draft_private_data: '공개 댓글에 저장된 개인정보가 포함돼 차단했습니다.',
+            };
+            trace.finish('rejected', /^[a-z_]+$/.test(invalid) ? invalid : 'draft_requirements', {
+              basis,
+              sourceMatched: !!source,
+              currentImage,
+              quotePresent: !!step.evidenceQuote?.trim(),
+              partial,
+              planPresent: !!plan,
+            });
             job.history.push({
               action: 'comment_draft_rejected',
-              reason: problem || '댓글 문구·공개 근거를 확인하지 못해 다시 읽습니다.',
+              reason: explanation[invalid] || invalid,
               url: o.url,
             });
             store.saveJob(job);

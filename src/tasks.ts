@@ -70,6 +70,7 @@ export type EntryTask = TaskSpec & {
   rejections?: TaskRejection[];
   receiptReads?: number;
   receiptScanStartedAt?: number;
+  receiptReloadedAt?: number;
   attempt?: { at: number; beforeText: string };
   proof?: {
     quote: string;
@@ -549,6 +550,32 @@ export async function runTasks(
             (task.receiptReads || 0) < 20 &&
             (!task.receiptScanStartedAt || Date.now() - task.receiptScanStartedAt < 30_000)
           ) {
+            // Instagram can return a stale comment snapshot immediately after posting.
+            // Scrolling that snapshot cannot reveal a newly saved comment. Read the
+            // same public post once more, within the existing scan/time budget. Persist
+            // the refresh before navigation so restarting never repeats this recovery.
+            if (
+              task.kind === 'comment' &&
+              (task.receiptReads || 0) >= 3 &&
+              !task.receiptReloadedAt &&
+              o.instagram?.editorEmpty
+            ) {
+              task.receiptReloadedAt = Date.now();
+              task.receiptReads = (task.receiptReads || 0) + 1;
+              job.history.push({
+                action: 'task_receipt_refresh',
+                reason:
+                  '첫 댓글 목록에 승인한 본인 댓글이 없어 같은 게시물의 최신 목록을 한 번 다시 읽습니다. 댓글은 다시 게시하지 않습니다.',
+                url: task.url,
+              });
+              job.note = '게시물의 최신 댓글 목록을 다시 확인하고 있습니다. 재게시하지 않습니다.';
+              store.saveJob(job);
+              signal.throwIfAborted();
+              assertGrant();
+              await browser.navigate(task.url);
+              await browser.page!.waitForTimeout(1000);
+              continue;
+            }
             const moved =
               task.kind === 'comment' &&
               (await moveInstagramReceiptView(
@@ -557,7 +584,14 @@ export async function runTasks(
                 task.approval.actor!,
                 'advance',
               ));
-            if (moved || !task.receiptReads) {
+            if (
+              moved ||
+              !task.receiptReads ||
+              (task.kind === 'comment' &&
+                !task.receiptReloadedAt &&
+                o.instagram?.editorEmpty &&
+                task.receiptReads < 3)
+            ) {
               task.receiptScanStartedAt ||= Date.now();
               task.receiptReads = (task.receiptReads || 0) + 1;
               if (task.receiptReads === 1)
@@ -574,7 +608,10 @@ export async function runTasks(
             }
           }
           job.status = 'submission_unknown';
-          job.note = 'SNS 동작 결과가 불명확합니다. 재실행하지 않고 현재 상태 확인을 기다립니다.';
+          job.note =
+            task.kind === 'comment' && isInstagram
+              ? `댓글 게시를 시도했으나 ${task.receiptReloadedAt ? '최신 목록 재조회 후에도' : '읽은 목록에서'} 승인한 본인 댓글을 확인하지 못했습니다. 게시 실패가 확정된 것은 아니며 재게시하지 않습니다.`
+              : 'SNS 동작 결과가 불명확합니다. 재실행하지 않고 현재 상태 확인을 기다립니다.';
           return false;
         }
         if (!isInstagram && task.kind === 'comment' && o.text.includes(task.approval.text))

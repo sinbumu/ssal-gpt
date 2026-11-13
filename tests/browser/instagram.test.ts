@@ -34,6 +34,8 @@ async function fixture() {
     revealedQuiz: false,
     imageQuiz: false,
     shifted: false,
+    staleCommentSnapshot: false,
+    commentPageLoads: 0,
   };
   app.store.setSettings('autonomy', syntheticSettings);
   app.store.setSettings('instagramBrowser', { enabled: true, revision: 'fixture-route' });
@@ -65,14 +67,19 @@ async function fixture() {
     const carousel = data.carousel
       ? `<div style="position:relative;width:${data.imageQuiz ? 640 : 360}px;height:${data.imageQuiz ? 300 : 180}px"><img id="card" width="${data.imageQuiz ? 640 : 360}" height="${data.imageQuiz ? 300 : 180}" alt="합성 카드" src="${quizImage(data.imageQuiz ? cards[0]! : '')}">${data.imageQuiz ? '' : '<p id="card-label" style="position:absolute;top:30px;left:20px">퀴즈 표지</p>'}<button id="next-card" aria-label="다음" style="position:absolute;right:4px;top:60px">→</button></div><script>let card=0;document.querySelector('#next-card').onclick=()=>{card++;${data.imageQuiz ? `document.querySelector('#card').src=${JSON.stringify(cards.map(quizImage))}[card]` : `document.querySelector('#card-label').textContent=['퀴즈 표지','문제 1: 1+1=2','문제 2: 2+2=5','정답: 1=O, 2=X'][card]`};if(card===3)document.querySelector('#next-card').remove()};</script>`
       : '';
-    const comments = data.hideOwn
-      ? ''
-      : data.comments
-          .map(
-            (text) =>
-              `<div class="row"><a href="/fixture_user/">fixture_user</a><span>${text}</span><button>${icon('좋아요')}</button></div>`,
-          )
-          .join('');
+    if (data.posts) data.commentPageLoads++;
+    // Both the site's reload and our first persistence read can return an older
+    // snapshot. Scrolling it never adds the just-posted comment.
+    const staleSnapshot = data.staleCommentSnapshot && data.commentPageLoads <= 2;
+    const comments =
+      data.hideOwn || staleSnapshot
+        ? ''
+        : data.comments
+            .map(
+              (text) =>
+                `<div class="row"><a href="/fixture_user/">fixture_user</a><span>${text}</span><button>${icon('좋아요')}</button></div>`,
+            )
+            .join('');
     const receiptScript = data.receiptPages
       ? `<script>let receiptPage=0;const pane=document.querySelector('#receipt-pane');pane.onscroll=()=>{if(receiptPage>=${data.receiptPages} || pane.scrollTop+pane.clientHeight<pane.scrollHeight-2)return;setTimeout(()=>{receiptPage++;pane.insertAdjacentHTML('beforeend',receiptPage>=${data.receiptPages} ? ${JSON.stringify(comments)} : '<p style="height:400px">다음 댓글 묶음</p>');},100)};</script>`
       : '';
@@ -814,6 +821,62 @@ test('Instagram reads paginated comment receipt and reveals its own row without 
   }
 });
 
+test('Instagram refreshes a stale post-click comment snapshot once without reposting or extra AI calls', async () => {
+  const f = await fixture();
+  try {
+    f.data.staleCommentSnapshot = true;
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    const grant = f.app.store.job(j.id)!.tasks![0]!.approval;
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const done = f.app.store.job(j.id)!;
+    assert.equal(done.status, 'completed', done.note);
+    assert.equal(f.data.posts, 1);
+    assert.equal(done.steps, 2);
+    assert.ok(done.tasks![0]!.receiptReloadedAt);
+    assert.equal(done.tasks![0]!.receiptReads, 4);
+    assert.deepEqual(done.tasks![0]!.approval, grant);
+    assert.equal(done.history.filter((h) => h.action === 'task_receipt_refresh').length, 1);
+    assert.equal(f.data.commentPageLoads, 3);
+  } finally {
+    await f.close();
+  }
+});
+
+test('Instagram missing receipt refresh stays unknown and its saved refresh is not repeated on resume', async () => {
+  const f = await fixture();
+  try {
+    f.data.hideOwn = true;
+    const j = f.make(['comment']);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    f.approve(j.id);
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const stopped = f.app.store.job(j.id)!;
+    assert.equal(stopped.status, 'submission_unknown');
+    assert.match(stopped.note, /최신 목록 재조회 후에도/);
+    const reads = stopped.tasks![0]!.receiptReads;
+    const refreshed = stopped.tasks![0]!.receiptReloadedAt;
+    assert.ok(refreshed);
+    const loads = f.data.commentPageLoads;
+    f.app.runner.start(j.id);
+    await f.app.runner.finished();
+    const resumed = f.app.store.job(j.id)!;
+    assert.equal(resumed.status, 'submission_unknown');
+    assert.equal(resumed.tasks![0]!.receiptReads, reads);
+    assert.equal(resumed.tasks![0]!.receiptReloadedAt, refreshed);
+    assert.equal(f.data.commentPageLoads, loads);
+    assert.equal(f.data.posts, 1);
+    assert.equal(resumed.steps, 2);
+  } finally {
+    await f.close();
+  }
+});
+
 test('Instagram bounds persisted receipt scans and never sends an uncertain comment again', async () => {
   const f = await fixture();
   try {
@@ -843,6 +906,49 @@ test('Instagram bounds persisted receipt scans and never sends an uncertain comm
     }
   } finally {
     await f.close();
+  }
+});
+
+test('Instagram receipt refresh preserves a changed editor and rejects a changed account after rereading', async () => {
+  for (const changed of ['editor', 'account'] as const) {
+    const f = await fixture();
+    try {
+      f.data.hideOwn = true;
+      const j = f.make(['comment']);
+      f.app.runner.start(j.id);
+      await f.app.runner.finished();
+      f.approve(j.id);
+      const pending = f.app.store.job(j.id)!;
+      pending.tasks![0]!.attempt = { at: Date.now(), beforeText: 'previous view' };
+      pending.tasks![0]!.state = 'attempted';
+      pending.tasks![0]!.receiptReads = 3;
+      pending.tasks![0]!.receiptScanStartedAt = Date.now();
+      pending.uncertain = true;
+      pending.status = 'submission_unknown';
+      f.app.store.saveJob(pending);
+      f.data.posts = 1;
+      if (changed === 'editor')
+        await f.app.browser.page!.locator('textarea').fill('사용자 작성 중');
+      else f.data.actor = 'different_user'; // Appears only on the next GET.
+      f.app.runner.start(j.id);
+      await f.app.runner.finished();
+      const stopped = f.app.store.job(j.id)!;
+      assert.equal(stopped.status, 'submission_unknown');
+      assert.equal(stopped.steps, 0);
+      assert.equal(f.data.posts, 1);
+      assert.equal(stopped.tasks![0]!.proof, undefined);
+      if (changed === 'editor') {
+        assert.equal(stopped.tasks![0]!.receiptReloadedAt, undefined);
+        assert.equal(await f.app.browser.page!.locator('textarea').inputValue(), '사용자 작성 중');
+        assert.equal(f.data.commentPageLoads, 0);
+      } else {
+        assert.ok(stopped.tasks![0]!.receiptReloadedAt);
+        assert.match(stopped.note, /계정.*바뀌/);
+        assert.equal(f.data.commentPageLoads, 1);
+      }
+    } finally {
+      await f.close();
+    }
   }
 });
 

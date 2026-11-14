@@ -13,6 +13,7 @@ import { createApp } from '../../src/server.js';
 import { approveTask, type EntryTask } from '../../src/tasks.js';
 import { journeyState } from '../../src/journey-demo.js';
 import { prepareDiscoveredEntry } from '../../src/workflow.js';
+import { applyPicker } from '../../src/complex-controls.js';
 
 const rankHtml = `<form><fieldset><legend>경품 우선순위</legend><ol aria-label="경품 우선순위"><li draggable="true" aria-label="커피">커피</li><li draggable="true" aria-label="차">차</li><li draggable="true" aria-label="쿠폰">쿠폰</li></ol></fieldset><button>제출</button></form><script>let dragged; document.querySelectorAll('li').forEach(el=>{el.ondragstart=e=>{dragged=el;e.dataTransfer.setData('text/plain',el.textContent)};el.ondragover=e=>e.preventDefault();el.ondrop=e=>{e.preventDefault();el.parentElement.insertBefore(dragged,el)}})</script>`;
 test('rank drag uses rendered order, preserves question identity, invalidates review and rejects partial order', async () => {
@@ -55,6 +56,19 @@ test('Google picker upload and exact Drive selection bind recipient/file, verify
     page = await browser.newPage();
   const host = 'https://docs.google.com';
   let uploads = 0;
+  let pendingFrameReads = 0;
+  // Deterministically reproduce the CI race between frame attachment and URL commit.
+  page.on('frameattached', (frame) => {
+    const url = frame.url.bind(frame);
+    let reads = 0;
+    frame.url = () => {
+      if (reads++ < 2) {
+        pendingFrameReads++;
+        return reads === 1 ? '' : 'about:blank';
+      }
+      return url();
+    };
+  });
   try {
     await page.route('https://docs.google.com/**', (route) => {
       if (route.request().url().includes('/picker'))
@@ -163,12 +177,66 @@ test('Google picker upload and exact Drive selection bind recipient/file, verify
     );
     assert.equal(await page.locator('#files').innerText(), 'proof.png');
     assert.equal(uploads, 2);
+    assert.ok(pendingFrameReads >= 4, 'both upload and Drive picker waited for a committed URL');
   } finally {
     await browser.close();
     store.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const [name, frameUrl, error] of [
+  ['empty URL', '', /picker_not_visible/],
+  ['blank document', 'about:blank', /picker_not_visible/],
+  ['lookalike origin', 'https://docs.google.com.example.test/picker', /picker_not_visible/],
+  ['insecure picker', 'http://docs.google.com/picker', /picker_not_visible/],
+  ['login', 'https://accounts.google.com/login', /picker_login_required/],
+  ['cancelled wait', '', /picker_test_cancelled/],
+] as const) {
+  test(`picker ${name}: does not disclose files or retry opening the picker`, async () => {
+    const browser = await chromium.launch(),
+      page = await browser.newPage(),
+      controller = new AbortController();
+    let uploads = 0;
+    try {
+      await page.route('https://docs.google.com/**', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `<fieldset><button type="button" onclick="window.opens=(window.opens||0)+1;document.body.append(document.createElement('iframe'))">Add file</button></fieldset>`,
+        }),
+      );
+      await page.goto('https://docs.google.com/forms/picker-boundary');
+      page.on('frameattached', (frame) => {
+        frame.url = () => {
+          if (name === 'cancelled wait') controller.abort(new Error('picker_test_cancelled'));
+          return frameUrl;
+        };
+      });
+      await assert.rejects(
+        applyPicker(
+          page,
+          0,
+          {
+            id: 'fixture',
+            name: 'proof.txt',
+            mimeType: 'text/plain',
+            buffer: Buffer.from('fixture'),
+            allowPicker: true,
+            beforeUpload() {
+              uploads++;
+            },
+          },
+          controller.signal,
+        ),
+        error,
+      );
+      assert.equal(uploads, 0);
+      assert.equal(await page.evaluate(() => (window as any).opens), 1);
+    } finally {
+      await browser.close();
+    }
+  });
+}
 
 test('social chain verifies existing state and executes only reviewed follow/comment without duplication', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-tasks-')),

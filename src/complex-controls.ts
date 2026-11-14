@@ -56,8 +56,9 @@ export async function pickerContainer(page: Page, buttonIndex: number) {
   if ((await container.count()) !== 1) throw new ServiceError('unlabelled_file_picker');
   return { button, container };
 }
-async function pickerFrame(page: Page) {
+async function pickerFrame(page: Page, signal: AbortSignal) {
   for (let n = 0; n < 20; n++) {
+    signal.throwIfAborted();
     for (const frame of page.frames()) {
       if (frame === page.mainFrame()) {
         if (
@@ -67,12 +68,22 @@ async function pickerFrame(page: Page) {
           return frame;
         continue;
       }
-      const url = new URL(frame.url());
-      const owner = await frame.frameElement();
-      if (!(await owner.isVisible())) continue;
+      // Attachment can precede URL commit. Never resolve an empty URL against the
+      // parent: wait within the existing budget for the frame's own destination.
+      const raw = frame.url();
+      const url = URL.parse(raw);
+      if (!url || url.protocol !== 'https:' || frame.isDetached()) continue;
+      try {
+        const owner = await frame.frameElement();
+        if (!(await owner.isVisible())) continue;
+      } catch (error) {
+        if (frame.isDetached()) continue;
+        throw error;
+      }
+      signal.throwIfAborted();
+      if (frame.isDetached() || frame.url() !== raw) continue;
       if (url.hostname === 'accounts.google.com') throw new ServiceError('picker_login_required');
       if (
-        url.protocol === 'https:' &&
         ['docs.google.com', 'drive.google.com'].includes(url.hostname) &&
         /picker/.test(url.pathname)
       )
@@ -110,7 +121,7 @@ export async function applyPicker(
     throw new ServiceError('picker_control_changed');
   signal.throwIfAborted();
   await button.click();
-  const frame: Frame = await pickerFrame(page);
+  const frame: Frame = await pickerFrame(page, signal);
   if (file.fromDrive) {
     const search = await singleVisible(
       frame.getByRole('searchbox').or(frame.getByRole('textbox', { name: /검색|search/i })),

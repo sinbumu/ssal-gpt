@@ -24,7 +24,7 @@ for (const scenario of [
   'popup',
   'popup-close-parent',
 ] as const) {
-  test(`submission ownership ${scenario}: first popup/nested provider response, scoped capture and retained diagnostics`, async () => {
+  test(`submission ownership ${scenario}: first popup/nested provider response, scoped capture and retained diagnostics`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ssal-scope-'));
     const app = await createApp({ dir, port: 0, headless: true });
     app.scheduler.stop();
@@ -62,6 +62,19 @@ for (const scenario of [
     try {
       await app.browser.open();
       const context = app.browser.context!;
+      if (scenario === 'naver-unavailable') {
+        // Reload alone is not deterministic: Playwright may read the body first.
+        // Exercise actual body loss in both readers, not a timing assumption.
+        t.mock.method(context, 'newCDPSession', async () => {
+          throw new Error('fixture_buffer_unavailable');
+        });
+        context.on('response', (response) => {
+          if (response.url() === target && response.request().method() === 'POST')
+            t.mock.method(response, 'body', async () => {
+              throw new Error('fixture_body_unavailable');
+            });
+        });
+      }
       await context.route('**/*', async (r) => {
         if (r.request().method() === 'POST') {
           posts++;
@@ -116,12 +129,17 @@ for (const scenario of [
         values,
       );
       let child;
+      const reloaded =
+        scenario === 'naver-unavailable'
+          ? original.waitForEvent('framenavigated', (frame) => frame === original.mainFrame())
+          : undefined;
       if (popup) {
         const created = context.waitForEvent('page');
         await original.locator('button').click();
         child = await created;
         if (scenario === 'popup-close-parent') await original.close();
       } else await (extra || original).locator('#send').click();
+      if (reloaded) await reloaded;
       await watcher.settle(new AbortController().signal);
       watcher.close();
       assert.equal(posts, 1);

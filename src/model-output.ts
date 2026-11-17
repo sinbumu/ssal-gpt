@@ -25,7 +25,7 @@ export type OutputDetails = {
   callCount: number;
   functionName: 'missing' | 'step' | 'qualified_step' | 'unexpected';
   namespace: 'missing' | 'expected' | 'unexpected';
-  issues?: { code: string; path: (string | number)[] }[];
+  issues?: { code: string; path: (string | number)[]; expected?: string[] }[];
   stream?: StreamSummary;
 };
 export type ReportedUsage = { inputTokens: number; outputTokens: number };
@@ -118,16 +118,49 @@ export function schemaIssues(issues: { code: string; path: PropertyKey[] }[], sc
     'invalid_value',
     'custom',
   ]);
-  return issues.slice(0, 12).map((issue) => ({
-    code: codes.has(issue.code) ? issue.code : 'other',
-    path: issue.path
-      .slice(0, 8)
-      .map((p) =>
-        typeof p === 'number' && Number.isInteger(p) && p >= 0 && p < 10000
-          ? p
-          : typeof p === 'string' && keys.has(p)
+  return issues.slice(0, 12).map((issue) => {
+    let node: any = schema;
+    for (const p of issue.path)
+      node = typeof p === 'number' ? node?.items : node?.properties?.[String(p)];
+    // Expected enum values come from our schema, never from the rejected value.
+    const expected =
+      issue.code === 'invalid_value' && Array.isArray(node?.enum)
+        ? (node.enum.filter((v: unknown) => typeof v === 'string').slice(0, 30) as string[])
+        : undefined;
+    return {
+      code: codes.has(issue.code) ? issue.code : 'other',
+      path: issue.path
+        .slice(0, 8)
+        .map((p) =>
+          typeof p === 'number' && Number.isInteger(p) && p >= 0 && p < 10000
             ? p
-            : '<unknown>',
-      ),
-  }));
+            : typeof p === 'string' && keys.has(p)
+              ? p
+              : '<unknown>',
+        ),
+      expected,
+    };
+  });
+}
+
+export function repairFeedback(
+  last?: ModelDiagnostic,
+  schema?: unknown,
+): OutputDetails | undefined {
+  if (
+    !last ||
+    !['stopped', 'rejected'].includes(last.outcome) ||
+    !['expected_one_browser_step', 'invalid_action_json', 'invalid_action_schema'].includes(
+      last.code,
+    )
+  )
+    return;
+  return {
+    reason: last.reason,
+    outputTypes: last.outputTypes,
+    callCount: last.callCount,
+    functionName: last.functionName,
+    namespace: last.namespace,
+    issues: schema && last.issues ? schemaIssues(last.issues, schema) : last.issues,
+  };
 }

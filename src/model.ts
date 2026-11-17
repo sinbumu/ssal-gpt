@@ -9,6 +9,8 @@ import {
   outputDetails,
   reportedUsage,
   schemaIssues,
+  repairFeedback,
+  type ModelDiagnostic,
   type StreamSummary,
 } from './model-output.js';
 const streamSummaries = new WeakMap<object, StreamSummary>();
@@ -120,6 +122,8 @@ export const StepSchema = z
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;
+export const modelRepairFeedback = (last?: ModelDiagnostic) =>
+  repairFeedback(last, z.toJSONSchema(StepSchema, { target: 'draft-7' }));
 export type Inference = {
   step: Step;
   inputTokens: number;

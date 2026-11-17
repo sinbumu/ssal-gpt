@@ -151,3 +151,34 @@ test('stream diagnostics preserve finalized items when the terminal output is em
   });
   assert.ok(!JSON.stringify(parsed.streamRecovery).includes('private-'));
 });
+
+test('enum repair guidance contains only schema values and survives a later resume without raw arguments', async () => {
+  const { schemaIssues, repairFeedback } = await import('../src/model-output.js');
+  const issues = schemaIssues([{ code: 'invalid_value', path: ['candidate', 'entryType'] }], {
+    properties: {
+      candidate: {
+        properties: { entryType: { enum: ['survey', 'quiz', 'social', 'mixed', 'other'] } },
+      },
+    },
+  });
+  assert.deepEqual(issues[0].expected, ['survey', 'quiz', 'social', 'mixed', 'other']);
+  const last = {
+    id: 'id',
+    at: 1,
+    code: 'invalid_action_schema',
+    elapsedMs: 1,
+    outcome: 'stopped' as const,
+    reason: 'arguments_schema' as const,
+    outputTypes: ['function_call'],
+    callCount: 1,
+    functionName: 'step' as const,
+    namespace: 'expected' as const,
+    issues,
+  };
+  assert.deepEqual(repairFeedback(last)?.issues, issues);
+  assert.equal(repairFeedback({ ...last, outcome: 'recovered' }), undefined);
+  assert.equal(
+    repairFeedback({ ...last, code: 'model_output_refused', reason: 'refusal' }),
+    undefined,
+  );
+});

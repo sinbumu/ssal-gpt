@@ -337,3 +337,50 @@ test('empty terminal output resumes discovery from finalized stream with one met
     assert.equal(usage(app.store).calls, 1);
     assert.equal(usage(app.store).tokens, 12);
   }));
+
+test('resume supplies the last validation feedback while preserving exhausted automatic retries', async () =>
+  fixture(async (app, job) => {
+    job.modelFormatRetries = 2;
+    job.modelDiagnostics = [
+      {
+        id: 'previous',
+        at: 1,
+        code: 'invalid_action_schema',
+        elapsedMs: 1,
+        outcome: 'stopped',
+        reason: 'arguments_schema',
+        outputTypes: ['function_call'],
+        callCount: 1,
+        functionName: 'step',
+        namespace: 'expected',
+        issues: [{ code: 'invalid_value', path: ['candidate', 'entryType'] }],
+      },
+    ];
+    app.store.saveJob(job);
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      {
+        async decide(_p, _i, ctx: any) {
+          assert.deepEqual(ctx.modelOutputRepair.failure.issues[0].expected, [
+            'survey',
+            'quiz',
+            'social',
+            'mixed',
+            'other',
+          ]);
+          return parseModelOutput(
+            output({ action: 'done', observationId: ctx.observation.id, reason: 'synthetic' }),
+            10,
+          );
+        },
+      },
+      app.origin,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.status, 'completed');
+    assert.equal(saved.modelFormatRetries, 2);
+    assert.equal(usage(app.store).calls, 1);
+  }));

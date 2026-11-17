@@ -2,7 +2,7 @@ import { jobBudget } from './operations.js';
 import { completionMessage } from './completion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { Browser, validateUrl, type Observation } from './browser.js';
-import { type ModelClient, type Step } from './model.js';
+import { modelRepairFeedback, type ModelClient, type Step } from './model.js';
 import { Store, canonicalUrl, type Job, type Approval } from './store.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { errorNotice } from './job-notice.js';
@@ -573,7 +573,8 @@ export class Runner {
     let stalePage = '';
     let staleFailures = 0;
     let executionPhase = 'navigation';
-    let formatFeedback: OutputDetails | undefined;
+    let formatFeedback: OutputDetails | undefined =
+      job.kind === 'discover' ? modelRepairFeedback(job.modelDiagnostics?.at(-1)) : undefined;
     let formatRetry: ModelDiagnostic | undefined;
     try {
       if (

@@ -660,7 +660,7 @@ export class Runner {
           modelOutputRepair: formatFeedback
             ? {
                 instruction:
-                  'The previous response was rejected before any browser action. Use this NEW observationId and return exactly one ssal_browser.step call with valid schema fields. Do not repeat or infer any executed action. Do not bypass a refusal or approval.',
+                  'An earlier response was rejected before any browser action. Keep these schema corrections for subsequent decisions, including after one valid response. Use this NEW observationId and return exactly one ssal_browser.step call with valid schema fields. Do not repeat or infer any executed action. Do not bypass a refusal or approval.',
                 failure: formatFeedback,
               }
             : undefined,
@@ -776,7 +776,9 @@ export class Runner {
         signal.throwIfAborted();
         if (formatRetry) formatRetry.outcome = 'recovered';
         formatRetry = undefined;
-        formatFeedback = undefined;
+        // Field/enum corrections remain applicable to later candidate repairs.
+        // Dropping them after one valid reply can reintroduce the same bad field.
+        if (!formatFeedback?.issues?.length) formatFeedback = undefined;
         job.steps++;
         job.inputTokens += result.inputTokens;
         job.outputTokens += result.outputTokens;

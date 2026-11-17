@@ -384,3 +384,44 @@ test('resume supplies the last validation feedback while preserving exhausted au
     assert.equal(saved.modelFormatRetries, 2);
     assert.equal(usage(app.store).calls, 1);
   }));
+
+test('field guidance remains for subsequent decisions after a valid repair', async () =>
+  fixture(async (app, job) => {
+    let calls = 0;
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      {
+        async decide(_p, _i, ctx: any) {
+          calls++;
+          if (calls === 1)
+            return parseModelOutput(
+              output({
+                action: 'scroll',
+                observationId: ctx.observation.id,
+                reason: 'synthetic',
+                delta: 1001,
+              }),
+              10,
+            );
+          assert.equal(ctx.modelOutputRepair.failure.issues[0].path[0], 'delta');
+          return parseModelOutput(
+            output({
+              action: calls === 2 ? 'scroll' : 'done',
+              observationId: ctx.observation.id,
+              reason: 'synthetic',
+              ...(calls === 2 ? { delta: 300 } : {}),
+            }),
+            10,
+          );
+        },
+      },
+      app.origin,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.status, 'completed');
+    assert.equal(calls, 3);
+    assert.equal(saved.modelFormatRetries, 1);
+  }));

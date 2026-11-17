@@ -11,8 +11,9 @@ import {
   symlinkSync,
   unlinkSync,
   readFileSync,
+  readlinkSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Store, type Job } from '../src/store.js';
@@ -187,5 +188,46 @@ test('cache cleanup is closed-profile only, allowlisted, and never follows symli
   } finally {
     f.close();
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+test('stale Chromium locks permit cache cleanup only when the local PID is confirmed absent', (t) => {
+  const f = fixture();
+  try {
+    f.storage.save({ cacheLimitMiB: 128 });
+    const profile = join(f.dir, 'browser'),
+      cache = join(profile, 'Default', 'Cache'),
+      lock = join(profile, 'SingletonLock');
+    mkdirSync(cache, { recursive: true });
+    const payload = join(cache, 'payload');
+    writeFileSync(payload, '');
+    truncateSync(payload, 129 * MiB);
+    symlinkSync(`${hostname()}-${process.pid}`, lock);
+    f.storage.cleanupCache('browser');
+    assert.ok(existsSync(payload));
+    assert.equal(f.storage.summary().caches[0].open, true);
+    const probe = t.mock.method(process, 'kill', () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+    });
+    f.storage.cleanupCache('browser');
+    assert.ok(existsSync(payload));
+    probe.mock.mockImplementation(() => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    });
+    for (const target of ['another-host-12345', 'unknown-lock', `${hostname()}-999999999999`]) {
+      unlinkSync(lock);
+      symlinkSync(target, lock);
+      f.storage.cleanupCache('browser');
+      assert.ok(existsSync(payload));
+      assert.equal(f.storage.summary().caches[0].open, true);
+    }
+    unlinkSync(lock);
+    symlinkSync(`${hostname()}-12345`, lock);
+    f.storage.cleanupCache('browser');
+    assert.ok(!existsSync(payload));
+    assert.equal(f.storage.summary().caches[0].open, false);
+    assert.equal(readlinkSync(lock), `${hostname()}-12345`);
+    assert.equal(f.storage.summary().lastCacheCleanup.bytes, 129 * MiB);
+  } finally {
+    f.close();
   }
 });

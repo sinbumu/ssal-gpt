@@ -1,4 +1,12 @@
-import { lstatSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { ServiceError } from './auth.js';
@@ -223,6 +231,28 @@ export class StorageManager {
       return path ? filesUnder(path) : [];
     });
   }
+  private profileOpen(profile: 'browser' | 'browser-chrome') {
+    const lock = join(this.store.dir, profile, 'SingletonLock');
+    const info = stat(lock);
+    if (!info) return false;
+    if (!info.isSymbolicLink()) return true;
+    try {
+      // Chromium can leave its host-PID lock after exit. Only a confirmed absent
+      // local process makes it stale; unknown hosts, formats or permissions defer cleanup.
+      const match = /^(.*)-([1-9]\d*)$/.exec(readlinkSync(lock));
+      if (!match || match[1] !== hostname()) return true;
+      const pid = Number(match[2]);
+      if (!Number.isSafeInteger(pid) || pid > 2147483647) return true;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+      }
+    } catch {
+      return true;
+    }
+  }
   cleanupCache(profile: 'browser' | 'browser-chrome') {
     try {
       this.cleanupClosedCache(profile);
@@ -235,8 +265,7 @@ export class StorageManager {
   }
   private cleanupClosedCache(profile: 'browser' | 'browser-chrome') {
     const config = this.settings();
-    // A normal browser close releases this lock. Never clear an open profile.
-    if (!config.cacheCleanup || stat(join(this.store.dir, profile, 'SingletonLock'))) return;
+    if (!config.cacheCleanup || this.profileOpen(profile)) return;
     const files = this.caches(profile);
     const bytes = files.reduce((n, f) => n + f.bytes, 0);
     if (bytes <= config.cacheLimitMiB * MiB) return;
@@ -271,7 +300,7 @@ export class StorageManager {
       caches: (['browser', 'browser-chrome'] as const).map((profile) => ({
         profile,
         bytes: this.caches(profile).reduce((n, f) => n + f.bytes, 0),
-        open: !!stat(join(this.store.dir, profile, 'SingletonLock')),
+        open: this.profileOpen(profile),
       })),
       lastCleanup: this.store.settings('storageLastCleanup', null),
       lastCacheCleanup: this.store.settings('storageLastCacheCleanup', null),

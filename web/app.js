@@ -55,6 +55,8 @@ function renderModelDiagnostics(j) {
     arguments_json: '명령 JSON 해석 실패',
     arguments_schema: '명령 항목·형식 불일치',
     refusal: '모델의 명시적 거절',
+    stream_structure: '스트림 완료 항목 불일치',
+    stream_reconstructed: '스트림 완료 항목 복원',
   };
   const outcomes = {
     rejected: '검증 거절',
@@ -62,7 +64,7 @@ function renderModelDiagnostics(j) {
     recovered: '재요청 응답 검증 통과',
     stopped: '해당 응답 복구 중단',
   };
-  return `<details class="model-diagnostics"><summary>AI 응답 검증 기록 · ${j.modelDiagnostics.length}건 · 탐색 자동 재요청 ${j.modelFormatRetries || 0}/2회</summary><ul>${j.modelDiagnostics.map((d) => `<li><strong>${esc(reasons[d.reason] || d.code)}</strong> · ${esc(outcomes[d.outcome] || d.outcome)}<p>반환 동작 ${esc(d.callCount)}개 · 응답 종류 ${esc(d.outputTypes.join(', ') || '없음')} · ${(d.elapsedMs / 1000).toFixed(1)}초 · ${d.usage ? `${esc(d.usage.inputTokens.toLocaleString())} 입력 / ${esc(d.usage.outputTokens.toLocaleString())} 출력 토큰` : '토큰 미보고'}</p>${d.issues?.length ? `<ul>${d.issues.map((i) => `<li>${esc(i.path.join('.') || '최상위')} · ${esc(i.code)}</li>`).join('')}</ul>` : ''}<small>${esc(new Date(d.at).toLocaleString())} · ${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">형식 검증에서 거절된 응답의 동작은 실행하지 않았습니다. 재요청도 기존 사용량 한도에 포함합니다. 원본 응답·개인정보는 기록하지 않습니다.</p></details>`;
+  return `<details class="model-diagnostics"><summary>AI 응답 검증 기록 · ${j.modelDiagnostics.length}건 · 탐색 자동 재요청 ${j.modelFormatRetries || 0}/2회 · 스트림 복원 ${j.modelStreamRecoveries || 0}회</summary><ul>${j.modelDiagnostics.map((d) => `<li><strong>${esc(reasons[d.reason] || d.code)}</strong> · ${esc(d.reason === 'stream_reconstructed' ? '추가 AI 요청 없이 복원' : outcomes[d.outcome] || d.outcome)}<p>반환 동작 ${esc(d.callCount)}개 · 응답 종류 ${esc(d.outputTypes.join(', ') || '없음')} · ${(d.elapsedMs / 1000).toFixed(1)}초 · ${d.usage ? `${esc(d.usage.inputTokens.toLocaleString())} 입력 / ${esc(d.usage.outputTokens.toLocaleString())} 출력 토큰` : '토큰 미보고'}</p>${d.stream ? `<p>스트림에서 완료된 동작 ${esc(d.stream.functionCallsDone)}개 · 마지막 완료 메시지의 출력 ${esc(d.stream.completedOutputCount)}개</p>` : ''}${d.issues?.length ? `<ul>${d.issues.map((i) => `<li>${esc(i.path.join('.') || '최상위')} · ${esc(i.code)}</li>`).join('')}</ul>` : ''}<small>${esc(new Date(d.at).toLocaleString())} · ${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">형식 검증에서 거절된 응답의 동작은 실행하지 않았습니다. 재요청도 기존 사용량 한도에 포함합니다. 원본 응답·개인정보는 기록하지 않습니다.</p></details>`;
 }
 function toast(message, error = false) {
   const el = $('toast');

@@ -287,3 +287,53 @@ test('an execution failure with the same code never enters model format recovery
     assert.equal(app.store.job(job.id)!.modelFormatRetries || 0, 0);
     assert.equal(app.store.job(job.id)!.stopReason?.phase, 'action');
   }));
+
+test('empty terminal output resumes discovery from finalized stream with one metered call and no re-request', async () =>
+  fixture(async (app, job) => {
+    const { readSSE } = await import('../../src/model.js');
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      {
+        async decide(_p, _i, ctx: any) {
+          const item = {
+            id: 'fc',
+            type: 'function_call',
+            name: 'step',
+            namespace: 'ssal_browser',
+            arguments: JSON.stringify({
+              action: 'done',
+              observationId: ctx.observation.id,
+              reason: 'synthetic',
+            }),
+          };
+          const events = [
+            {
+              type: 'response.output_item.added',
+              output_index: 0,
+              item: { ...item, arguments: '' },
+            },
+            { type: 'response.output_item.done', output_index: 0, item },
+            { type: 'response.completed', response: { status: 'completed', ...output() } },
+          ];
+          return parseModelOutput(
+            await readSSE(
+              new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')),
+            ),
+            10,
+          );
+        },
+      },
+      app.origin,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.status, 'completed');
+    assert.equal(saved.steps, 1);
+    assert.equal(saved.modelFormatRetries || 0, 0);
+    assert.equal(saved.modelStreamRecoveries, 1);
+    assert.equal(saved.modelDiagnostics?.[0].reason, 'stream_reconstructed');
+    assert.equal(usage(app.store).calls, 1);
+    assert.equal(usage(app.store).tokens, 12);
+  }));

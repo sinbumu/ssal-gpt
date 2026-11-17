@@ -12,6 +12,7 @@ import {
   type StreamSummary,
 } from './model-output.js';
 const streamSummaries = new WeakMap<object, StreamSummary>();
+import { StreamOutput } from './stream-output.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -124,6 +125,7 @@ export type Inference = {
   inputTokens: number;
   outputTokens: number;
   requestId?: string;
+  streamRecovery?: { details: import('./model-output.js').OutputDetails; elapsedMs: number };
 };
 
 export function parseModelOutput(result: any, elapsedMs: number): Inference {
@@ -139,6 +141,8 @@ export function parseModelOutput(result: any, elapsedMs: number): Inference {
   ) => {
     throw new ModelOutputError(code, reason, elapsedMs, usage);
   };
+  if (details.stream?.invalid)
+    fail('invalid_response_output_stream', { ...details, reason: 'stream_structure' });
   if (
     output.some(
       (o: any) =>
@@ -181,6 +185,9 @@ export function parseModelOutput(result: any, elapsedMs: number): Inference {
     step: parsed.data,
     inputTokens: usage?.inputTokens || 0,
     outputTokens: usage?.outputTokens || 0,
+    streamRecovery: details.stream?.reconstructed
+      ? { details: { ...details, reason: 'stream_reconstructed' }, elapsedMs }
+      : undefined,
   };
 }
 
@@ -191,6 +198,8 @@ export async function readSSE(response: Response) {
   let buffer = '';
   let completed: Record<string, any> | undefined;
   let bytes = 0;
+  const items = new StreamOutput();
+  let completedCount = 0;
   const stream: StreamSummary = {
     events: 0,
     itemsAdded: 0,
@@ -224,6 +233,7 @@ export async function readSSE(response: Response) {
           throw new ServiceError('invalid_response_stream', 502);
         }
         stream.events++;
+        items.observe(event);
         if (event.type === 'response.output_item.added') stream.itemsAdded++;
         if (event.type === 'response.output_item.done') {
           stream.itemsDone++;
@@ -237,7 +247,10 @@ export async function readSSE(response: Response) {
             502,
           );
         }
-        if (event.type === 'response.completed') completed = event.response;
+        if (event.type === 'response.completed') {
+          completed = event.response;
+          completedCount++;
+        }
       }
     }
   } finally {
@@ -247,6 +260,13 @@ export async function readSSE(response: Response) {
   if (!completed || completed.status !== 'completed')
     throw new ServiceError('inference_stream_interrupted', 502);
   stream.completedOutputCount = Array.isArray(completed.output) ? completed.output.length : 0;
+  const collected = items.finish(completed.output);
+  if (completedCount !== 1) stream.invalid = 'conflicting';
+  else if (collected.invalid) stream.invalid = collected.invalid;
+  else if (collected.reconstructed) {
+    completed.output = collected.output;
+    stream.reconstructed = true;
+  }
   streamSummaries.set(completed, stream);
   return completed;
 }

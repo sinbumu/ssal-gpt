@@ -53,6 +53,7 @@ export type Job = {
   readTraces?: ReadTraceSummary[];
   modelDiagnostics?: import('./model-output.js').ModelDiagnostic[];
   modelFormatRetries?: number;
+  modelStreamRecoveries?: number;
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
   prepareOne?: { revision: string; expires: number; childId?: string; switches?: number };

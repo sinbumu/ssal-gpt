@@ -160,6 +160,22 @@ export function meteredModel(store: Store, model: ModelClient, job: Job): ModelC
       try {
         const result = await model.decide(...args);
         report(result);
+        if (result.streamRecovery) {
+          job.modelStreamRecoveries = (job.modelStreamRecoveries || 0) + 1;
+          job.modelDiagnostics = [
+            ...(job.modelDiagnostics || []),
+            {
+              ...result.streamRecovery.details,
+              id,
+              at: Date.now(),
+              code: 'stream_output_reconstructed',
+              elapsedMs: result.streamRecovery.elapsedMs,
+              usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+              outcome: 'recovered' as const,
+            },
+          ].slice(-30);
+          store.saveJob(job);
+        }
         return result;
       } catch (error) {
         if (error instanceof ModelOutputError) {

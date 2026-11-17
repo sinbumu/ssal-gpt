@@ -7,6 +7,8 @@ export type StreamSummary = {
   functionCallsDone: number;
   argumentsDone: number;
   completedOutputCount: number;
+  reconstructed?: boolean;
+  invalid?: 'incomplete' | 'conflicting';
 };
 
 export type OutputDetails = {
@@ -16,7 +18,9 @@ export type OutputDetails = {
     | 'namespace'
     | 'arguments_json'
     | 'arguments_schema'
-    | 'refusal';
+    | 'refusal'
+    | 'stream_structure'
+    | 'stream_reconstructed';
   outputTypes: string[];
   callCount: number;
   functionName: 'missing' | 'step' | 'qualified_step' | 'unexpected';
@@ -39,7 +43,8 @@ export class ModelOutputError extends ServiceError {
       | 'expected_one_browser_step'
       | 'invalid_action_json'
       | 'invalid_action_schema'
-      | 'model_output_refused',
+      | 'model_output_refused'
+      | 'invalid_response_output_stream',
     readonly details: OutputDetails,
     readonly elapsedMs: number,
     readonly usage?: ReportedUsage,
@@ -47,7 +52,7 @@ export class ModelOutputError extends ServiceError {
     super(code, 502);
   }
   get retryable() {
-    return this.code !== 'model_output_refused';
+    return !['model_output_refused', 'invalid_response_output_stream'].includes(this.code);
   }
 }
 

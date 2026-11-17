@@ -56,6 +56,7 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       'invalid_action_json',
       'invalid_action_schema',
       'model_output_refused',
+      'invalid_response_output_stream',
     ].includes(code) &&
     (phase === 'model' || error instanceof ModelOutputError)
   )
@@ -63,9 +64,11 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       category: 'technical',
       title: '기술 오류 · AI 응답 확인 중단',
       reason:
-        code === 'model_output_refused'
-          ? '모델이 응답을 거절했습니다. 자동 재요청하지 않습니다.'
-          : 'AI 응답을 실행 명령으로 검증하지 못했습니다. 해당 동작은 실행하지 않았습니다.',
+        code === 'invalid_response_output_stream'
+          ? '스트리밍 응답의 완료 항목이 누락되거나 서로 충돌합니다. 부분 명령을 실행하지 않습니다.'
+          : code === 'model_output_refused'
+            ? '모델이 응답을 거절했습니다. 자동 재요청하지 않습니다.'
+            : 'AI 응답을 실행 명령으로 검증하지 못했습니다. 해당 동작은 실행하지 않았습니다.',
       nextAction:
         'AI 응답 검증 기록에서 동작 개수·형식·실패 항목과 재요청 결과를 확인하세요. 기존 제출 결과가 미확인인 경우 재제출하지 마세요.',
       code,

@@ -1,5 +1,14 @@
 import { ServiceError } from './auth.js';
 
+export type StreamSummary = {
+  events: number;
+  itemsAdded: number;
+  itemsDone: number;
+  functionCallsDone: number;
+  argumentsDone: number;
+  completedOutputCount: number;
+};
+
 export type OutputDetails = {
   reason:
     | 'call_count'
@@ -13,6 +22,7 @@ export type OutputDetails = {
   functionName: 'missing' | 'step' | 'qualified_step' | 'unexpected';
   namespace: 'missing' | 'expected' | 'unexpected';
   issues?: { code: string; path: (string | number)[] }[];
+  stream?: StreamSummary;
 };
 export type ReportedUsage = { inputTokens: number; outputTokens: number };
 export type ModelDiagnostic = OutputDetails & {

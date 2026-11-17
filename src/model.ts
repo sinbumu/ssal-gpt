@@ -4,7 +4,14 @@ import { AnswerPlanSchema } from './autonomy.js';
 import { TaskSpecSchema } from './tasks.js';
 import { WinnerNoticeSchema } from './notifications.js';
 import { CommentPlanSchema } from './comment-content.js';
-import { ModelOutputError, outputDetails, reportedUsage, schemaIssues } from './model-output.js';
+import {
+  ModelOutputError,
+  outputDetails,
+  reportedUsage,
+  schemaIssues,
+  type StreamSummary,
+} from './model-output.js';
+const streamSummaries = new WeakMap<object, StreamSummary>();
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -120,7 +127,10 @@ export type Inference = {
 };
 
 export function parseModelOutput(result: any, elapsedMs: number): Inference {
-  const details = outputDetails(result),
+  const details = {
+      ...outputDetails(result),
+      stream: result && typeof result === 'object' ? streamSummaries.get(result) : undefined,
+    },
     usage = reportedUsage(result);
   const output = Array.isArray(result?.output) ? result.output : [];
   const fail = (
@@ -181,6 +191,14 @@ export async function readSSE(response: Response) {
   let buffer = '';
   let completed: Record<string, any> | undefined;
   let bytes = 0;
+  const stream: StreamSummary = {
+    events: 0,
+    itemsAdded: 0,
+    itemsDone: 0,
+    functionCallsDone: 0,
+    argumentsDone: 0,
+    completedOutputCount: 0,
+  };
   try {
     while (true) {
       const chunk = await reader.read();
@@ -205,6 +223,13 @@ export async function readSSE(response: Response) {
         } catch {
           throw new ServiceError('invalid_response_stream', 502);
         }
+        stream.events++;
+        if (event.type === 'response.output_item.added') stream.itemsAdded++;
+        if (event.type === 'response.output_item.done') {
+          stream.itemsDone++;
+          if (event.item?.type === 'function_call') stream.functionCallsDone++;
+        }
+        if (event.type === 'response.function_call_arguments.done') stream.argumentsDone++;
         if (['response.failed', 'response.incomplete', 'error'].includes(event.type)) {
           const code = event.response?.error?.code || event.error?.code;
           throw new ServiceError(
@@ -221,6 +246,8 @@ export async function readSSE(response: Response) {
   }
   if (!completed || completed.status !== 'completed')
     throw new ServiceError('inference_stream_interrupted', 502);
+  stream.completedOutputCount = Array.isArray(completed.output) ? completed.output.length : 0;
+  streamSummaries.set(completed, stream);
   return completed;
 }
 

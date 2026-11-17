@@ -122,3 +122,32 @@ test('real SSE model boundary preserves invalid response usage, and missing usag
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('stream diagnostics distinguish finished incremental calls from an empty terminal output without saving arguments', async () => {
+  const { readSSE } = await import('../src/model.js');
+  const events = [
+    { type: 'response.output_item.added', item: { id: 'fc', type: 'function_call' } },
+    { type: 'response.function_call_arguments.done', arguments: 'private-arguments' },
+    { type: 'response.output_item.done', item: { id: 'fc', ...call() } },
+    { type: 'response.completed', response: { status: 'completed', ...response([]) } },
+  ];
+  const result = await readSSE(
+    new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')),
+  );
+  assert.throws(
+    () => parseModelOutput(result, 5),
+    (e: unknown) => {
+      assert.ok(e instanceof ModelOutputError);
+      assert.deepEqual(e.details.stream, {
+        events: 4,
+        itemsAdded: 1,
+        itemsDone: 1,
+        functionCallsDone: 1,
+        argumentsDone: 1,
+        completedOutputCount: 0,
+      });
+      assert.ok(!JSON.stringify(e).includes('private-'));
+      return true;
+    },
+  );
+});

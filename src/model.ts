@@ -4,6 +4,7 @@ import { AnswerPlanSchema } from './autonomy.js';
 import { TaskSpecSchema } from './tasks.js';
 import { WinnerNoticeSchema } from './notifications.js';
 import { CommentPlanSchema } from './comment-content.js';
+import { ModelOutputError, outputDetails, reportedUsage, schemaIssues } from './model-output.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -118,6 +119,61 @@ export type Inference = {
   requestId?: string;
 };
 
+export function parseModelOutput(result: any, elapsedMs: number): Inference {
+  const details = outputDetails(result),
+    usage = reportedUsage(result);
+  const output = Array.isArray(result?.output) ? result.output : [];
+  const fail = (
+    code: ConstructorParameters<typeof ModelOutputError>[0],
+    reason: typeof details & { reason: import('./model-output.js').OutputDetails['reason'] },
+  ) => {
+    throw new ModelOutputError(code, reason, elapsedMs, usage);
+  };
+  if (
+    output.some(
+      (o: any) =>
+        o?.type === 'message' &&
+        Array.isArray(o.content) &&
+        o.content.some((c: any) => c?.type === 'refusal'),
+    )
+  )
+    fail('model_output_refused', { ...details, reason: 'refusal' });
+  if (details.callCount !== 1)
+    fail('expected_one_browser_step', { ...details, reason: 'call_count' });
+  if (!['step', 'qualified_step'].includes(details.functionName))
+    fail('expected_one_browser_step', { ...details, reason: 'function_name' });
+  if (details.namespace === 'unexpected')
+    fail('expected_one_browser_step', { ...details, reason: 'namespace' });
+  const call = output.find((o: any) => o?.type === 'function_call');
+  let args: unknown;
+  try {
+    if (typeof call.arguments !== 'string') throw new Error('not_json_string');
+    args = JSON.parse(call.arguments);
+  } catch {
+    fail('invalid_action_json', { ...details, reason: 'arguments_json' });
+  }
+  const parsed = StepSchema.safeParse(args);
+  if (!parsed.success)
+    throw new ModelOutputError(
+      'invalid_action_schema',
+      {
+        ...details,
+        reason: 'arguments_schema',
+        issues: schemaIssues(
+          parsed.error.issues,
+          z.toJSONSchema(StepSchema, { target: 'draft-7' }),
+        ),
+      },
+      elapsedMs,
+      usage,
+    );
+  return {
+    step: parsed.data,
+    inputTokens: usage?.inputTokens || 0,
+    outputTokens: usage?.outputTokens || 0,
+  };
+}
+
 export async function readSSE(response: Response) {
   if (!response.body) throw new ServiceError('empty_response_stream', 502);
   const reader = response.body.getReader();
@@ -199,6 +255,7 @@ export class Model {
   ): Promise<Inference> {
     if (!choice.model) throw new ServiceError('model_required');
     const token = await this.auth.bearer(choice);
+    const started = Date.now();
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
@@ -254,26 +311,8 @@ export class Model {
       throw new ServiceError(code, 502);
     }
     const result = await readSSE(response);
-    const calls = (result.output || []).filter((o: any) => o.type === 'function_call');
-    if (
-      calls.length !== 1 ||
-      !['step', 'ssal_browser.step'].includes(calls[0].name) ||
-      (calls[0].namespace && calls[0].namespace !== 'ssal_browser')
-    ) {
-      throw new ServiceError('expected_one_browser_step', 502);
-    }
-    let args: unknown;
-    try {
-      args = JSON.parse(calls[0].arguments);
-    } catch {
-      throw new ServiceError('invalid_action_json', 502);
-    }
-    const parsed = StepSchema.safeParse(args);
-    if (!parsed.success) throw new ServiceError('invalid_action_schema', 502);
     return {
-      step: parsed.data,
-      inputTokens: result.usage?.input_tokens || 0,
-      outputTokens: result.usage?.output_tokens || 0,
+      ...parseModelOutput(result, Date.now() - started),
       requestId: response.headers.get('x-request-id') || undefined,
     };
   }

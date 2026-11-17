@@ -44,7 +44,25 @@ function renderJobNotice(j) {
   };
   const outcomes = { retrying: '자동 재관찰', recovered: '복구 완료', stopped: '재관찰 중단' };
   const rows = j.observationDiagnostics || [];
-  return `${n ? `<div class="job-notice ${esc(n.category)}"><strong>${esc(n.title)}</strong><p><b>다음 조치</b> · ${esc(n.nextAction)}</p></div>` : ''}${n?.code || rows.length ? `<details class="job-diagnostics"><summary>원인·복구 기록${rows.length ? ` · ${rows.length}건` : ''}</summary>${n?.code ? `<p>${esc(n.code)} · 발생 단계: ${esc(n.phase || '기록 없음')}</p>` : ''}<ul>${rows.map((d) => `<li>${esc(new Date(d.at).toLocaleString())} · ${esc(stages[d.stage] || d.stage)} · ${esc(outcomes[d.outcome] || d.outcome)} (${esc(d.attempt)}회)<br><small>${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">화면을 다시 읽은 기록입니다. 클릭·입력·제출을 재실행한 횟수가 아닙니다.</p></details>` : ''}`;
+  return `${n ? `<div class="job-notice ${esc(n.category)}"><strong>${esc(n.title)}</strong><p><b>다음 조치</b> · ${esc(n.nextAction)}</p></div>` : ''}${n?.code || rows.length ? `<details class="job-diagnostics"><summary>원인·복구 기록${rows.length ? ` · ${rows.length}건` : ''}</summary>${n?.code ? `<p>${esc(n.code)} · 발생 단계: ${esc(n.phase || '기록 없음')}</p>` : ''}<ul>${rows.map((d) => `<li>${esc(new Date(d.at).toLocaleString())} · ${esc(stages[d.stage] || d.stage)} · ${esc(outcomes[d.outcome] || d.outcome)} (${esc(d.attempt)}회)<br><small>${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">화면을 다시 읽은 기록입니다. 클릭·입력·제출을 재실행한 횟수가 아닙니다.</p></details>` : ''}${renderModelDiagnostics(j)}`;
+}
+function renderModelDiagnostics(j) {
+  if (!j.modelDiagnostics?.length) return '';
+  const reasons = {
+    call_count: '동작 개수 불일치',
+    function_name: '함수 이름 불일치',
+    namespace: '도구 그룹 불일치',
+    arguments_json: '명령 JSON 해석 실패',
+    arguments_schema: '명령 항목·형식 불일치',
+    refusal: '모델의 명시적 거절',
+  };
+  const outcomes = {
+    rejected: '검증 거절',
+    retrying: '새 화면으로 자동 재요청',
+    recovered: '재요청 응답 검증 통과',
+    stopped: '해당 응답 복구 중단',
+  };
+  return `<details class="model-diagnostics"><summary>AI 응답 검증 기록 · ${j.modelDiagnostics.length}건 · 탐색 자동 재요청 ${j.modelFormatRetries || 0}/2회</summary><ul>${j.modelDiagnostics.map((d) => `<li><strong>${esc(reasons[d.reason] || d.code)}</strong> · ${esc(outcomes[d.outcome] || d.outcome)}<p>반환 동작 ${esc(d.callCount)}개 · 응답 종류 ${esc(d.outputTypes.join(', ') || '없음')} · ${(d.elapsedMs / 1000).toFixed(1)}초 · ${d.usage ? `${esc(d.usage.inputTokens.toLocaleString())} 입력 / ${esc(d.usage.outputTokens.toLocaleString())} 출력 토큰` : '토큰 미보고'}</p>${d.issues?.length ? `<ul>${d.issues.map((i) => `<li>${esc(i.path.join('.') || '최상위')} · ${esc(i.code)}</li>`).join('')}</ul>` : ''}<small>${esc(new Date(d.at).toLocaleString())} · ${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">형식 검증에서 거절된 응답의 동작은 실행하지 않았습니다. 재요청도 기존 사용량 한도에 포함합니다. 원본 응답·개인정보는 기록하지 않습니다.</p></details>`;
 }
 function toast(message, error = false) {
   const el = $('toast');

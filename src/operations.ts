@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { ServiceError, safeMessage } from './auth.js';
 import type { ModelClient } from './model.js';
+import { ModelOutputError, type ReportedUsage } from './model-output.js';
 import type { Job, Store } from './store.js';
 import type { Runner } from './runner.js';
 import { outcomes, queueResultCheck } from './outcomes.js';
@@ -140,8 +141,7 @@ export function meteredModel(store: Store, model: ModelClient, job: Job): ModelC
       store.db
         .prepare('INSERT INTO usage VALUES (?,?,?,?,?,?,?,?)')
         .run(id, day, job.id, 0, 0, null, 'pending', Date.now());
-      try {
-        const result = await model.decide(...args);
+      const report = (result: ReportedUsage) => {
         const rate =
           args[0].kind === 'api'
             ? operations(store).rates.find((r) => r.model === args[0].model)
@@ -156,9 +156,32 @@ export function meteredModel(store: Store, model: ModelClient, job: Job): ModelC
             'UPDATE usage SET input_tokens=?,output_tokens=?,estimated_usd=?,state=? WHERE id=?',
           )
           .run(result.inputTokens, result.outputTokens, cost, 'reported', id);
+      };
+      try {
+        const result = await model.decide(...args);
+        report(result);
         return result;
       } catch (error) {
-        store.db.prepare("UPDATE usage SET state='unreported' WHERE id=?").run(id);
+        if (error instanceof ModelOutputError) {
+          if (error.usage) {
+            report(error.usage);
+            job.inputTokens = (job.inputTokens || 0) + error.usage.inputTokens;
+            job.outputTokens = (job.outputTokens || 0) + error.usage.outputTokens;
+          } else store.db.prepare("UPDATE usage SET state='unreported' WHERE id=?").run(id);
+          job.modelDiagnostics = [
+            ...(job.modelDiagnostics || []),
+            {
+              ...error.details,
+              id,
+              at: Date.now(),
+              code: error.code,
+              elapsedMs: error.elapsedMs,
+              usage: error.usage,
+              outcome: 'rejected' as const,
+            },
+          ].slice(-30);
+          store.saveJob(job);
+        } else store.db.prepare("UPDATE usage SET state='unreported' WHERE id=?").run(id);
         throw error;
       }
     },

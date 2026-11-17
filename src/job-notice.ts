@@ -1,4 +1,5 @@
 import { ServiceError, safeMessage } from './auth.js';
+import { ModelOutputError } from './model-output.js';
 import type { Job } from './store.js';
 import { pendingFormStep } from './form-execution.js';
 
@@ -49,6 +50,28 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     error instanceof ServiceError && /^[a-z0-9_:-]{1,150}$/.test(error.code)
       ? error.code
       : 'unclassified_error';
+  if (
+    [
+      'expected_one_browser_step',
+      'invalid_action_json',
+      'invalid_action_schema',
+      'model_output_refused',
+    ].includes(code) &&
+    (phase === 'model' || error instanceof ModelOutputError)
+  )
+    return {
+      category: 'technical',
+      title: '기술 오류 · AI 응답 확인 중단',
+      reason:
+        code === 'model_output_refused'
+          ? '모델이 응답을 거절했습니다. 자동 재요청하지 않습니다.'
+          : 'AI 응답을 실행 명령으로 검증하지 못했습니다. 해당 동작은 실행하지 않았습니다.',
+      nextAction:
+        'AI 응답 검증 기록에서 동작 개수·형식·실패 항목과 재요청 결과를 확인하세요. 기존 제출 결과가 미확인인 경우 재제출하지 마세요.',
+      code,
+      phase,
+      at: Date.now(),
+    };
   if (code === 'storage_screenshot_limit')
     return {
       category: 'normal',

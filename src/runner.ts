@@ -14,11 +14,12 @@ import { evaluateCandidate, selection, selectionKey } from './selection.js';
 import { requireConnection, saveConnection, registerCandidateConnections } from './connections.js';
 import { runTasks, buildTasks, instagramBrowser } from './tasks.js';
 import { runResultCheck } from './outcomes.js';
-import { meteredModel, operations } from './operations.js';
+import { meteredModel, operations, budgetReason } from './operations.js';
 import { pageProgress } from './page-progress.js';
 import { compactDiscoveryContext } from './discovery-context.js';
 import { beginReadTrace } from './read-trace.js';
 import { settings } from './autonomy.js';
+import { ModelOutputError, type ModelDiagnostic, type OutputDetails } from './model-output.js';
 import { prepareFormDrafts } from './form-drafts.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -572,6 +573,8 @@ export class Runner {
     let stalePage = '';
     let staleFailures = 0;
     let executionPhase = 'navigation';
+    let formatFeedback: OutputDetails | undefined;
+    let formatRetry: ModelDiagnostic | undefined;
     try {
       if (
         job.uncertain &&
@@ -653,6 +656,13 @@ export class Runner {
             job.kind === 'discover' ? { ...selection(this.store), facts: undefined } : undefined,
           userContext: job.userContext || '',
           mode: job.kind,
+          modelOutputRepair: formatFeedback
+            ? {
+                instruction:
+                  'The previous response was rejected before any browser action. Use this NEW observationId and return exactly one ssal_browser.step call with valid schema fields. Do not repeat or infer any executed action. Do not bypass a refusal or approval.',
+                failure: formatFeedback,
+              }
+            : undefined,
           uncertain: job.uncertain,
           pendingStepProgress: job.intent?.kind === 'step' ? job.intent.progress : null,
           candidateLimit: job.candidateLimit,
@@ -727,8 +737,45 @@ export class Runner {
               )
             : undefined;
         executionPhase = 'model';
-        const result = await model.decide(job.provider, INSTRUCTIONS, submitted, image, signal);
+        let result;
+        try {
+          result = await model.decide(job.provider, INSTRUCTIONS, submitted, image, signal);
+        } catch (error) {
+          if (error instanceof ModelOutputError) {
+            if (formatRetry) formatRetry.outcome = 'stopped';
+            trace?.finish('failed', error.code, { validation: error.details });
+            const diagnostic = job.modelDiagnostics?.at(-1);
+            if (diagnostic) diagnostic.outcome = 'stopped';
+            const blocked =
+              jobBudget(this.store, job)?.blocked || budgetReason(this.store, job.provider);
+            if (
+              job.kind === 'discover' &&
+              error.retryable &&
+              !signal.aborted &&
+              !job.uncertain &&
+              !job.intent &&
+              !job.transmitted &&
+              !job.approval &&
+              (job.modelFormatRetries || 0) < 2 &&
+              !blocked
+            ) {
+              job.modelFormatRetries = (job.modelFormatRetries || 0) + 1;
+              formatFeedback = error.details;
+              formatRetry = diagnostic;
+              if (diagnostic) diagnostic.outcome = 'retrying';
+              job.note = `AI 응답 형식 오류: 새 화면으로 재요청합니다 (${job.modelFormatRetries}/2). 브라우저 동작은 실행하지 않았습니다.`;
+              this.store.note(job.id, job.note);
+              this.store.saveJob(job);
+              continue;
+            }
+            if (blocked) throw new ServiceError(blocked);
+          }
+          throw error;
+        }
         signal.throwIfAborted();
+        if (formatRetry) formatRetry.outcome = 'recovered';
+        formatRetry = undefined;
+        formatFeedback = undefined;
         job.steps++;
         job.inputTokens += result.inputTokens;
         job.outputTokens += result.outputTokens;
@@ -1199,6 +1246,7 @@ export class Runner {
       job.note = signal.aborted ? '사용자 요청으로 일시정지했습니다.' : job.stopReason!.reason;
       this.store.note(job.id, job.note);
     } finally {
+      if (formatRetry?.outcome === 'retrying') formatRetry.outcome = 'stopped';
       job.activeMs = (job.activeMs || 0) + Date.now() - started;
       this.store.saveJob(job);
     }

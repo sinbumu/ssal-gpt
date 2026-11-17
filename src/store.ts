@@ -51,6 +51,8 @@ export type Job = {
   retryEventId?: string;
   retryFromJobId?: string;
   readTraces?: ReadTraceSummary[];
+  modelDiagnostics?: import('./model-output.js').ModelDiagnostic[];
+  modelFormatRetries?: number;
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
   prepareOne?: { revision: string; expires: number; childId?: string; switches?: number };

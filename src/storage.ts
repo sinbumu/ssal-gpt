@@ -83,8 +83,17 @@ export class StorageManager {
         protectedNames.add(name);
     };
     const jobs = new Map(this.store.jobs().map((j) => [j.id, j]));
-    // Referenced evidence, receipts, consent records and diagnostic links remain readable.
-    for (const table of ['jobs', 'events', 'settings'])
+    // Routine read-trace links in finished jobs may expire; their small summaries
+    // remain in the DB. Protect final/approved/source evidence and failed reads.
+    for (const job of jobs.values()) {
+      if (job.uncertain || activeStates.has(job.status) || job.status === 'failed') references(job);
+      else {
+        const { readTraces, ...important } = job;
+        references(important);
+        references((readTraces || []).filter((t) => ['failed', 'rejected'].includes(t.status)));
+      }
+    }
+    for (const table of ['events', 'settings'])
       for (const row of this.store.db.prepare(`SELECT data FROM ${table}`).all())
         references(row.data);
     for (const row of this.store.db.prepare('SELECT evidence FROM submissions').all())

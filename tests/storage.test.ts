@@ -79,6 +79,15 @@ test('retention protects referenced, unknown, consent, error and unfinished evid
     delete failed.screenshot;
     f.store.saveJob(failed);
     f.job.screenshot = referenced.name;
+    f.job.readTraces = [
+      {
+        id: ordinary.name.slice(0, -4),
+        screenshot: ordinary.name,
+        phase: 'discovery',
+        at: Date.now() - 20 * 86400_000,
+        status: 'executed',
+      },
+    ];
     f.store.saveJob(f.job);
     const recent = f.asset(100, 0);
     const trace = ordinary.path.replace('.png', '.read.json');

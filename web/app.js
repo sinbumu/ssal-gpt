@@ -1084,8 +1084,68 @@ $('completed-collapse').onclick = () => {
 };
 
 let operationsLoaded = false;
+let storageLoaded = false;
+let storageLoading = false;
+let storageReport;
+const storageSize = (bytes) =>
+  bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
+    : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+async function refreshStorage() {
+  const s = await api('/api/storage');
+  storageReport = s;
+  if (!storageLoaded) {
+    for (const [key, value] of Object.entries(s.config)) {
+      const el = $('storage-form').elements[key];
+      if (el.type === 'checkbox') el.checked = value;
+      else el.value = value;
+    }
+    storageLoaded = true;
+  }
+  $('storage-summary').innerHTML =
+    `<p><strong>스크린샷 ${storageSize(s.screenshotBytes)} / ${storageSize(s.config.screenshotLimitMiB * 1024 ** 2)}</strong> · ${s.screenshotCount.toLocaleString()}장</p>
+    <p>보호 자료 ${storageSize(s.protectedBytes)} · 관찰 JSON ${storageSize(s.traceBytes)} · 정리 예정 ${s.plannedCount}장 (${storageSize(s.plannedBytes)})</p>
+    ${s.cleanupError ? '<p class="warning-text">최근 자동 정리 중 파일 접근 오류가 있었습니다. 정리 결과를 확인하고 다시 시도해 주세요.</p>' : ''}
+    ${s.limitBlocked ? '<p class="warning-text">보호 자료 때문에 상한을 확보할 수 없습니다. 중요한 자료는 자동 삭제하지 않으며 새 관찰이 중단될 수 있습니다.</p>' : ''}
+    <details><summary>보호 이유·정리 예정 내역</summary><ul>${s.protection.map((p) => `<li>${esc(p.reason)}: ${p.count}장 · ${storageSize(p.bytes)}</li>`).join('')}</ul>
+    <ul>${s.planned.map((p) => `<li>${esc(new Date(p.at).toLocaleString('ko-KR'))} · ${esc(p.reason)} · ${storageSize(p.bytes)}<small> ${esc(p.name)}</small></li>`).join('') || '<li>지금 정리할 일반 자료가 없습니다.</li>'}</ul>${s.plannedCount > 20 ? '<p>오래된 순서로 처음 20개만 표시합니다.</p>' : ''}</details>
+    <p>${s.caches.map((c) => `${c.profile === 'browser' ? 'Chromium' : 'Chrome'} 캐시 ${storageSize(c.bytes)}${c.open ? ' · 열림, 정리 보류' : ' · 닫힘'}`).join('<br>')}</p>
+    ${s.lastCleanup ? `<p class="hint">최근 관찰 정리: ${esc(new Date(s.lastCleanup.at).toLocaleString('ko-KR'))} · ${s.lastCleanup.files}개 파일 · ${storageSize(s.lastCleanup.bytes)}</p>` : ''}
+    ${s.lastCacheCleanup ? `<p class="hint">최근 캐시 정리: ${esc(new Date(s.lastCacheCleanup.at).toLocaleString('ko-KR'))} · ${storageSize(s.lastCacheCleanup.bytes)}</p>` : ''}
+    <p class="hint">확인 시각 ${esc(new Date(s.at).toLocaleString('ko-KR'))} · 파일 크기 기준이며 DB·첨부·브라우저 전체 용량은 스크린샷 상한에 포함되지 않습니다.</p>`;
+  $('storage-cleanup').disabled = !!state?.busy;
+}
+$('storage-refresh').onclick = guard(refreshStorage);
+$('storage-form').onsubmit = guard(async () => {
+  const f = new FormData($('storage-form'));
+  await api('/api/storage', {
+    automatic: f.has('automatic'),
+    retentionDays: Number(f.get('retentionDays')),
+    screenshotLimitMiB: Number(f.get('screenshotLimitMiB')),
+    cacheCleanup: f.has('cacheCleanup'),
+    cacheLimitMiB: Number(f.get('cacheLimitMiB')),
+  });
+  await refreshStorage();
+  toast('보관 설정을 저장했습니다.');
+});
+$('storage-cleanup').onclick = guard(async () => {
+  await api('/api/storage/cleanup', {});
+  await refreshStorage();
+  toast('현재 정책으로 일반 자료를 정리했습니다. 중요한 증거는 유지했습니다.');
+});
 function renderOperations() {
   if (!state.operations) return;
+  $('storage-cleanup').disabled = !storageReport || state.busy;
+  if (!storageLoaded && !storageLoading) {
+    storageLoading = true;
+    void refreshStorage()
+      .catch(() => {
+        storageLoaded = false;
+      })
+      .finally(() => {
+        storageLoading = false;
+      });
+  }
   const u = state.usage;
   $('usage-summary').textContent =
     `오늘 AI 호출 ${u.calls}회 · 보고 토큰 ${u.tokens.toLocaleString()} · 가격이 설정된 호출의 추정 비용 $${u.estimatedUsd.toFixed(4)} · 사용량 미확인 ${u.unknown}회 · 단가 미설정 ${u.unpriced}회`;

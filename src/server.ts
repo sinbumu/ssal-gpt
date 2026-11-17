@@ -1,5 +1,6 @@
 import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
+import { StorageManager } from './storage.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -131,6 +132,7 @@ export async function createApp(options: {
   externalOpen?: (url: string) => Promise<void>;
 }) {
   const store = new Store(options.dir);
+  const storage = new StorageManager(store);
   const auth = new Auth(options.dir);
   const csrf = randomBytes(32).toString('base64url');
   let origin = '';
@@ -448,6 +450,19 @@ export async function createApp(options: {
       return send(response, 200, {
         code: outcomes(store).find((o) => o.eventId === id)?.reward?.code || '',
       });
+    }
+    if (method === 'GET' && url.pathname === '/api/storage') {
+      return send(response, 200, storage.summary());
+    }
+    if (method === 'POST' && url.pathname === '/api/storage') {
+      storage.save(data);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/storage/cleanup') {
+      if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+      const result = storage.cleanup();
+      for (const profile of ['browser', 'browser-chrome'] as const) storage.cleanupCache(profile);
+      return send(response, 200, result);
     }
     if (method === 'POST' && url.pathname === '/api/operations') {
       store.setSettings('operations', OperationsSchema.parse(data));
@@ -1192,7 +1207,22 @@ export async function createApp(options: {
     }
     if (method === 'GET' && /^\/evidence\/[a-f0-9-]+\.png$/.test(url.pathname)) {
       const name = url.pathname.split('/').pop()!;
-      return send(response, 200, await readFile(join(options.dir, 'evidence', name)), 'image/png');
+      try {
+        return send(
+          response,
+          200,
+          await readFile(join(options.dir, 'evidence', name)),
+          'image/png',
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return send(
+          response,
+          410,
+          '보관 기간·용량 정책으로 정리된 관찰 자료이거나 존재하지 않는 파일입니다. 응모 내역과 중복 방지 기록은 유지됩니다.',
+          'text/plain; charset=utf-8',
+        );
+      }
     }
     const files: Record<string, [string, string]> = {
       '/': ['index.html', 'text/html; charset=utf-8'],
@@ -1220,9 +1250,11 @@ export async function createApp(options: {
     .enum(['chromium', 'chrome'])
     .parse(store.settings('browser', { engine: 'chromium' }).engine);
   browser = new Browser(options.dir, origin, options.headless, engine);
+  browser.storage = storage;
   runner = new Runner(store, browser, model, origin);
   scheduler = new Scheduler(store, runner, () => manualNavigation);
   scheduler.start();
+  storage.start(() => runner.isBusy() || manualNavigation);
   return {
     origin,
     server,
@@ -1231,7 +1263,9 @@ export async function createApp(options: {
     browser,
     runner,
     scheduler,
+    storage,
     async close() {
+      storage.stop();
       scheduler.stop();
       if (runner.activeId) await runner.pause(runner.activeId);
       await browser.close();

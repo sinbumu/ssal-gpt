@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { writeFile } from 'node:fs/promises';
+import type { StorageManager } from './storage.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   observationErrorCode,
@@ -129,6 +130,7 @@ export async function validateUrl(raw: string, demoOrigin?: string) {
 }
 
 export class Browser {
+  storage?: StorageManager;
   context?: BrowserContext;
   page?: Page;
   latest?: Observation;
@@ -374,6 +376,7 @@ export class Browser {
     return readFile(join(this.evidence, name));
   }
   private async launch() {
+    this.storage?.cleanupCache(this.engine === 'chrome' ? 'browser-chrome' : 'browser');
     this.context = await chromium.launchPersistentContext(
       privateDirectory(browserProfileDirectory(this.dir, this.engine)),
       {
@@ -901,7 +904,6 @@ export class Browser {
     progress.stage = 'finalize';
     const revision = await page.evaluate(() => Number((window as any).__ssalRevision || 0));
     const screenshot = `${id}.png`;
-    await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
     const viewport =
       page.viewportSize() ||
       (await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })));
@@ -948,6 +950,14 @@ export class Browser {
     if (this.page !== page) throw new ServiceError('observation_target_changed');
     if (page.url() !== url || (this.documentEpoch.get(page) || 0) !== epoch)
       throw new ServiceError('observation_navigation_changed');
+    if (this.storage)
+      this.storage.writeImage(
+        screenshot,
+        image,
+        this.ownerJobId,
+        /개인정보|수집.{0,10}동의|privacy|consent/i.test(text),
+      );
+    else await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
     this.latest = observation;
     return observation;
   }
@@ -1167,6 +1177,8 @@ export class Browser {
       this.externalRoute = undefined;
     } else await this.context?.close();
     this.context = undefined;
+    if (this.engine !== 'connected')
+      this.storage?.cleanupCache(this.engine === 'chrome' ? 'browser-chrome' : 'browser');
     this.page = undefined;
     this.ownerJobId = undefined;
     this.jobPages.clear();

@@ -49,6 +49,18 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     error instanceof ServiceError && /^[a-z0-9_:-]{1,150}$/.test(error.code)
       ? error.code
       : 'unclassified_error';
+  if (code === 'storage_screenshot_limit')
+    return {
+      category: 'normal',
+      title: '정상 중단 · 스크린샷 용량 상한',
+      reason:
+        '일반 자료를 정리해도 새 스크린샷을 저장할 공간이 부족합니다. 중요한 증거는 보호했습니다.',
+      nextAction:
+        '07 예약·운영의 저장 공간에서 보호·정리 내역을 확인하세요. 공간 확보 후 현재 화면에서 재개할 수 있습니다. 접수 결과 미확인 건은 재제출하지 마세요.',
+      code,
+      phase,
+      at: Date.now(),
+    };
   const normal =
     /^(?:discovery_(?:decision_limit|switch_limit|no_alternative)|selection_(?:call_limit|token_limit)|daily_.+|session_time_limit|budget_.+|unstable_source_recovery_limit)$/.test(
       code,

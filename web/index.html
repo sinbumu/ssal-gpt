@@ -679,6 +679,64 @@
             </details>
             <button>운영 설정 저장</button>
           </form>
+          <h3>저장 공간·보관</h3>
+          <p class="hint">
+            일반 관찰 자료는 기간·용량 기준으로 오래된 순서대로 정리합니다. 원문·접수·동의·오류
+            증거와 진행·미확인 작업은 보호합니다. 과거 용도 미분류 자료도 보존합니다.
+            응모·사용량·중복 방지 기록은 삭제하지 않습니다.
+          </p>
+          <form id="storage-form">
+            <label class="check"
+              ><input name="automatic" type="checkbox" />일반 관찰 자료 자동 정리</label
+            >
+            <div class="form-row">
+              <label
+                >일반 자료 보관 일수<input
+                  name="retentionDays"
+                  type="number"
+                  min="1"
+                  max="365"
+                  required
+                  value="14"
+              /></label>
+              <label
+                >스크린샷 전체 상한 (MiB)<input
+                  name="screenshotLimitMiB"
+                  type="number"
+                  min="128"
+                  max="3072"
+                  required
+                  value="3072"
+              /></label>
+            </div>
+            <p class="hint">
+              3072MiB = 3GiB. 보호 자료도 상한에 포함합니다. 정리할 수 있는 자료가 없으면 중요한
+              증거를 삭제하는 대신 새 관찰을 중단합니다. 자동 정리를 꺼도 용량 상한은 적용됩니다.
+            </p>
+            <label class="check"
+              ><input name="cacheCleanup" type="checkbox" />전용 브라우저 캐시 자동 정리</label
+            >
+            <label
+              >프로필별 캐시 정리 기준 (MiB)<input
+                name="cacheLimitMiB"
+                type="number"
+                min="128"
+                max="2048"
+                required
+                value="512"
+            /></label>
+            <p class="hint">
+              캐시는 정상 종료 또는 다음 실행 전에 기준을 넘으면 정리합니다. 실행 중에는 기준을 넘을
+              수 있습니다. 쿠키·로그인·사이트 저장소와 사용자가 연결한 일반 브라우저는 대상이
+              아닙니다.
+            </p>
+            <button>보관 설정 저장</button>
+          </form>
+          <div id="storage-summary" aria-live="polite">용량을 확인하려면 아래 버튼을 누르세요.</div>
+          <div class="inline">
+            <button id="storage-refresh">용량·정리 예정 확인</button
+            ><button id="storage-cleanup" disabled>일반 자료 지금 정리</button>
+          </div>
           <h3>반복 탐색 추가</h3>
           <form id="schedule-form">
             <label

@@ -237,6 +237,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS submissions (event_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, state TEXT NOT NULL, evidence TEXT);
       CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL, at TEXT NOT NULL, message TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS evidence_assets (name TEXT PRIMARY KEY, job_id TEXT, purpose TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS demo_receipts (run TEXT PRIMARY KEY, receipt TEXT NOT NULL);
     `);
     for (const job of this.jobs()) {
@@ -263,6 +264,16 @@ export class Store {
     this.db
       .prepare('INSERT INTO jobs VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')
       .run(job.id, JSON.stringify(job));
+    for (const name of [
+      job.status === 'failed' || job.stopReason?.category === 'technical'
+        ? job.screenshot
+        : undefined,
+      ...(job.readTraces || [])
+        .filter((t) => ['failed', 'rejected'].includes(t.status))
+        .map((t) => t.screenshot),
+    ])
+      if (name)
+        this.db.prepare("UPDATE evidence_assets SET purpose='error' WHERE name=?").run(name);
   }
   note(id: string, message: string) {
     this.db

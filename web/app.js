@@ -1315,6 +1315,14 @@ function renderResultBatch() {
     pending: '발표 대기',
     unavailable: '자동 확인 불가',
   };
+  const readReasons = {
+    result_source_outside_scope:
+      '이번 공개 페이지 읽기 범위 밖의 주소로 이동하려 해 중단했습니다. 별도 발표 페이지가 있으면 결과·발표 주소 설정에서 지정해 주세요.',
+    result_requires_user_check:
+      '자동 읽기로 처리할 수 없는 동작이 필요해 멈췄습니다. 원문을 직접 확인해 주세요. 게시·신청은 실행하지 않았습니다.',
+    result_check_limit:
+      '이번 확인 한도 안에서 발표 근거를 확보하지 못했습니다. 낙첨으로 처리하지 않습니다.',
+  };
   $('result-batch-status').textContent = b
     ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초`
     : `지금 확인 가능 ${eligible}건 · 제외/대기 ${plan.length - eligible}건. 발표 주소를 하나씩 등록할 필요 없이 시작할 수 있습니다.`;
@@ -1322,7 +1330,7 @@ function renderResultBatch() {
     .slice(0, resultRowsLimit)
     .map(
       (x) =>
-        `<article class="event-card"><span class="pill">${esc(x.state === 'pending' ? '대기' : x.state === 'running' ? '확인 중' : x.state === 'skipped' ? '제외' : labels[x.check?.state] || '확인 중단')}</span><h4>${esc(x.title)}</h4><p>${esc(x.check?.reason || x.note || '')}</p>${x.check?.quote ? `<blockquote>${esc(x.check.quote)}</blockquote>` : ''}<div class="card-actions">${safeLink(x.check?.url || x.sourceUrl, '확인 경로 열기')}${x.state === 'done' ? `<button data-outcome="${esc(x.eventId)}">결과·경품 관리</button>` : ''}</div></article>`,
+        `<article class="event-card"><span class="pill">${esc(x.state === 'pending' ? '대기' : x.state === 'running' ? '확인 중' : x.state === 'skipped' ? '제외' : labels[x.check?.state] || '확인 중단')}</span><h4>${esc(x.title)}</h4><p>${esc(x.check?.reason || readReasons[x.note] || x.note || '')}</p>${x.check?.quote ? `<blockquote>${esc(x.check.quote)}</blockquote>` : ''}<div class="card-actions">${safeLink(x.check?.url || x.sourceUrl, '확인 경로 열기')}${x.state === 'done' ? `<button data-outcome="${esc(x.eventId)}">결과·경품 관리</button>` : ''}</div></article>`,
     )
     .join('');
   $('result-batch-more').hidden = (b?.items.length || 0) <= resultRowsLimit;

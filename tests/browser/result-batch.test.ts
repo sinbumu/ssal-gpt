@@ -17,7 +17,7 @@ test('dashboard batch automatically registers sources, runs sequentially with qu
   const browser = await chromium.launch({ headless: true });
   try {
     app.store.setSettings('selection', { kind: 'api', model: 'fixture' });
-    for (const name of ['first', 'blocked', 'last']) {
+    for (const name of ['first', 'blocked', 'scope', 'last']) {
       const e = app.store.record(
         {
           title: '합성 ' + name,
@@ -66,14 +66,16 @@ test('dashboard batch automatically registers sources, runs sequentially with qu
       step: {
         observationId: c.observation.id,
         reason: '합성 확인',
-        ...(c.observation.url.endsWith('/blocked')
-          ? {
-              action: 'click',
-              ref: c.observation.elements.find((e: any) => e.type === 'submit')?.ref,
-            }
-          : c.observation.url.endsWith('/first')
-            ? { action: 'done', resultKind: 'announced', evidenceQuote: '합성 당첨자 발표' }
-            : { action: 'needs_user', reason: '합성 안내에는 이번 행사 발표 근거가 없습니다.' }),
+        ...(c.observation.url.endsWith('/scope')
+          ? { action: 'navigate', url: 'https://outside.example/notice' }
+          : c.observation.url.endsWith('/blocked')
+            ? {
+                action: 'click',
+                ref: c.observation.elements.find((e: any) => e.type === 'submit')?.ref,
+              }
+            : c.observation.url.endsWith('/first')
+              ? { action: 'done', resultKind: 'announced', evidenceQuote: '합성 당첨자 발표' }
+              : { action: 'needs_user', reason: '합성 안내에는 이번 행사 발표 근거가 없습니다.' }),
       } as any,
       inputTokens: 10,
       outputTokens: 2,
@@ -83,32 +85,35 @@ test('dashboard batch automatically registers sources, runs sequentially with qu
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(app.origin + '/#rewards');
     await page.waitForFunction(() =>
-      document.querySelector('#result-batch-status')?.textContent?.includes('확인 가능 3건'),
+      document.querySelector('#result-batch-status')?.textContent?.includes('확인 가능 4건'),
     );
     assert.equal(await page.locator('#result-batch-start').isEnabled(), true);
     const created = page.waitForResponse((r) => r.url().endsWith('/api/outcomes/batch'));
     await page.locator('#result-batch-start').click();
     const response = await created;
     assert.equal(response.status(), 200, await response.text());
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       await app.runner.finished();
       await app.scheduler.tick();
     }
     assert.equal(resultBatch(app.store)?.state, 'completed');
     await page.reload();
     await page.waitForFunction(() =>
-      document.querySelector('#result-batch-status')?.textContent?.includes('3/3건 처리'),
+      document.querySelector('#result-batch-status')?.textContent?.includes('4/4건 처리'),
     );
-    assert.equal(await page.locator('#result-batch-results article').count(), 3);
+    assert.equal(await page.locator('#result-batch-results article').count(), 4);
     const text = await page.locator('#result-batch-results').innerText();
     assert.match(text, /발표 발견 · 본인 결과 확인 필요/);
     assert.match(text, /자동 확인 불가/);
     assert.match(text, /확인 중단/);
+    assert.match(text, /이번 공개 페이지 읽기 범위 밖의 주소/);
+    assert.ok(!text.includes('result_source_outside_scope'));
+    assert.ok(!text.includes('result_requires_user_check'));
     assert.equal(writes, 0);
     assert.ok(outcomes(app.store).every((o) => o.status === 'pending'));
     const s = await page.request.get(app.origin + '/api/state').then((r) => r.json());
-    assert.equal(s.resultBatch.metrics.calls, 3);
-    assert.equal(s.resultBatch.metrics.inputTokens, 30);
+    assert.equal(s.resultBatch.metrics.calls, 4);
+    assert.equal(s.resultBatch.metrics.inputTokens, 40);
     assert.equal(s.operations.queueEnabled, false);
     assert.equal(s.outcomeAlerts.length, 1);
     const noCsrf = await page.request.post(app.origin + '/api/outcomes/batch', {

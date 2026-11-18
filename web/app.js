@@ -21,6 +21,7 @@ let rendered = '';
 let renderedBrowserEngine;
 let renderedInstagramRevision;
 let lastInboxAction;
+let rewardFollowupLimit = 20;
 const terminalJob = (job) => ['completed', 'stopped'].includes(job.status);
 const canAnswerInbox = (job) =>
   !job.archivedAt &&
@@ -1270,6 +1271,31 @@ function renderOutcomeSummary() {
         `<p><button data-outcome="${esc(a.eventId)}">${esc(a.title)}</button> ${esc(a.message)}</p>`,
     )
     .join('');
+  const followStates = {
+    needs_reply: '회신 필요',
+    replied: '회신 완료 · 수령 대기',
+    awaiting_delivery: '배송·발송 대기',
+    done: '후속 처리 완료',
+  };
+  const followups = won.filter(
+    (o) =>
+      o.followUp &&
+      o.followUp.state !== 'done' &&
+      !['received', 'used', 'expired'].includes(o.reward?.status),
+  );
+  $('reward-followups').innerHTML =
+    followups
+      .slice(0, rewardFollowupLimit)
+      .map((o) => {
+        const f = o.followUp,
+          e = state.completedEntries.find((e) => e.eventId === o.eventId);
+        return `<article class="event-card"><span class="pill warning">${esc(followStates[f.state])}</span><h3>${esc(e?.title || '당첨')}</h3><p>${esc(o.reward?.name || e?.prize || '경품 확인 필요')}</p><p>연락 대상 · ${esc(f.recipient || '확인 필요')}</p>${f.deadlineText ? `<p>회신 기한 · ${esc(f.deadlineText)}</p>` : ''}${f.deadlineUncertain ? '<p class="consent-notice">기한 안내가 불명확하거나 서로 다릅니다. 원문을 확인하세요.</p>' : ''}${f.deliveryNote ? `<p>${esc(f.deliveryNote)}</p>` : ''}<div class="card-actions"><button data-outcome="${esc(o.eventId)}">후속 처리·회신 초안</button><button data-followup-open="${esc(o.eventId)}">전용 브라우저에서 안내 열기</button></div></article>`;
+      })
+      .join('') +
+    (followups.length > rewardFollowupLimit
+      ? '<button id="more-reward-followups" type="button">당첨 후속 항목 20개 더 보기</button>'
+      : '');
+  notifyRewardAlerts();
 }
 document.addEventListener('click', (event) => {
   const b = event.target.closest('[data-outcome]');
@@ -1280,6 +1306,9 @@ document.addEventListener('click', (event) => {
   form.reset();
   form.hidden = false;
   $('reward-code').textContent = '';
+  $('claim-reply-draft').value = '';
+  $('claim-reply-status').textContent = '';
+  $('claim-consent').value = 'unset';
   $('outcome-title').textContent = e.title;
   const values = {
     eventId: e.eventId,
@@ -1295,9 +1324,19 @@ document.addEventListener('click', (event) => {
     expiresOn: o?.reward?.expiresOn || '',
     faceValue: o?.reward?.faceValue || 0,
     realizedValue: o?.reward?.realizedValue || 0,
+    followUpState: o?.followUp?.state || 'needs_reply',
+    followUpChannel: o?.followUp?.channel || 'instagram_dm',
+    followUpRecipient: o?.followUp?.recipient || '',
+    deadlineText: o?.followUp?.deadlineText || '',
+    deliveryNote: o?.followUp?.deliveryNote || '',
   };
   for (const [k, v] of Object.entries(values)) form.elements.namedItem(k).value = v;
   form.elements.autoCheck.checked = !!o?.autoCheck;
+  form.elements.hasFollowUp.checked = !!o?.followUp;
+  form.elements.deadlineUncertain.checked = !!o?.followUp?.deadlineUncertain;
+  for (const input of form.querySelectorAll('input[name=requested]'))
+    input.checked = !!o?.followUp?.requested.includes(input.value);
+  $('check-outcome').disabled = /instagram\.com\/direct\//i.test(values.sourceUrl);
   $('outcome-proof').innerHTML = o?.check
     ? `<blockquote>${esc(o.check.quote)}</blockquote><p>${safeLink(o.check.url, '확인한 발표')} · ${esc(new Date(o.check.at).toLocaleString())}</p><a href="/evidence/${esc(o.check.screenshot)}" target="_blank">확인 당시 화면 ↗</a>`
     : '';
@@ -1313,6 +1352,18 @@ $('outcome-form').onsubmit = guard(async () => {
     autoCheck: f.has('autoCheck'),
     nextCheckAt: f.get('checkDate') ? Date.parse(`${f.get('checkDate')}T09:00:00+09:00`) : null,
     claimBy: f.get('claimBy') || null,
+    followUp:
+      f.get('status') === 'won' && f.has('hasFollowUp')
+        ? {
+            state: f.get('followUpState'),
+            channel: f.get('followUpChannel'),
+            recipient: f.get('followUpRecipient'),
+            requested: f.getAll('requested'),
+            deadlineText: f.get('deadlineText'),
+            deadlineUncertain: f.has('deadlineUncertain'),
+            deliveryNote: f.get('deliveryNote'),
+          }
+        : null,
     reward:
       f.get('status') === 'won'
         ? {
@@ -1336,6 +1387,101 @@ $('check-outcome').onclick = guard(async () => {
   });
   toast('저장된 공식 발표 주소를 읽는 작업을 시작했습니다.');
 });
+$('prepare-claim-reply').onclick = guard(async () => {
+  const result = await api('/api/outcomes/reply-draft', {
+    eventId: $('outcome-form').elements.eventId.value,
+    consent: $('claim-consent').value,
+  });
+  $('claim-reply-draft').value = result.text;
+  $('claim-reply-status').textContent =
+    `받는 곳: ${result.recipient || '확인 필요'} · ${result.missing.length ? '직접 확인: ' + result.missing.join(', ') : '필요 정보 준비됨'} · 초안이며 아직 전송하지 않았습니다.`;
+});
+$('copy-claim-reply').onclick = guard(async () => {
+  const text = $('claim-reply-draft').value;
+  if (!text.trim()) throw new Error('먼저 회신 초안을 준비하세요.');
+  if (/\[(?:확인 후 입력|동의 안내를 읽고 선택해 주세요)\]/.test(text))
+    throw new Error('초안의 미확인 항목을 먼저 확인해 주세요.');
+  await navigator.clipboard.writeText(text);
+  toast('검토한 초안을 복사했습니다. 안내의 받는 계정을 확인하고 직접 보내세요.');
+});
+$('clear-claim-reply').onclick = () => {
+  $('claim-reply-draft').value = '';
+  $('claim-reply-status').textContent = '';
+};
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#more-reward-followups')) {
+    rewardFollowupLimit += 20;
+    renderOutcomeSummary();
+    return;
+  }
+  const button = e.target.closest('[data-followup-open]');
+  if (button)
+    void guard(async () => {
+      const o = state.outcomes.find((o) => o.eventId === button.dataset.followupOpen);
+      await api('/api/browser/open', { url: o.sourceUrl });
+      toast('당첨 안내를 전용 브라우저에서 열었습니다.');
+    })(e);
+});
+
+const rewardAlertPreference = 'ssal:reward-notifications';
+const rewardAlertLedger = 'ssal:reward-notifications-seen';
+function notifyRewardAlerts() {
+  const enabled = localStorage.getItem(rewardAlertPreference) === 'on';
+  const supported = 'Notification' in window;
+  $('reward-notification-status').textContent = !supported
+    ? '이 브라우저는 알림을 지원하지 않습니다.'
+    : enabled && Notification.permission === 'granted'
+      ? '브라우저 알림 켜짐 · 앱과 대시보드 탭이 실행 중일 때만 동작합니다. 알림에는 개인정보를 표시하지 않습니다.'
+      : '브라우저 알림 꺼짐 · 버튼을 눌러 이 브라우저에서 허용할 수 있습니다. 대시보드 알림은 계속 표시됩니다.';
+  if (!enabled || !supported || Notification.permission !== 'granted') return;
+  let seen;
+  try {
+    seen = JSON.parse(localStorage.getItem(rewardAlertLedger) || '{}');
+  } catch {
+    seen = {};
+  }
+  if (!seen || typeof seen !== 'object' || Array.isArray(seen)) seen = {};
+  const fresh = (state.outcomeAlerts || []).filter(
+    (a) => !seen[a.key || a.eventId + ':' + a.message],
+  );
+  if (!fresh.length) return;
+  try {
+    const notification = new Notification('쌀-GPT · 당첨·수령 확인', {
+      body: `확인할 새 항목 ${fresh.length}개가 있습니다. 대시보드에서 안내와 기한을 확인하세요.`,
+      tag: 'ssal-reward-attention',
+    });
+    notification.onclick = () => {
+      window.focus();
+      location.hash = 'rewards';
+      notification.close();
+    };
+    for (const a of fresh) seen[a.key || a.eventId + ':' + a.message] = Date.now();
+    localStorage.setItem(
+      rewardAlertLedger,
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(seen)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 200),
+        ),
+      ),
+    );
+  } catch {
+    $('reward-notification-status').textContent =
+      '브라우저 알림을 표시하지 못했습니다. 대시보드에서 확인하세요.';
+  }
+}
+$('enable-reward-notifications').onclick = guard(async () => {
+  if (!('Notification' in window)) throw new Error('이 브라우저는 알림을 지원하지 않습니다.');
+  const permission = await Notification.requestPermission();
+  if (permission === 'granted') localStorage.setItem(rewardAlertPreference, 'on');
+  else localStorage.removeItem(rewardAlertPreference);
+  notifyRewardAlerts();
+});
+$('disable-reward-notifications').onclick = () => {
+  localStorage.removeItem(rewardAlertPreference);
+  notifyRewardAlerts();
+};
 $('show-reward-code').onclick = guard(async () => {
   const result = await api('/api/outcomes/code', {
     eventId: $('outcome-form').elements.eventId.value,

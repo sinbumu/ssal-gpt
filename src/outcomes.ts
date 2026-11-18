@@ -4,6 +4,20 @@ import { ServiceError, safeMessage } from './auth.js';
 import type { Store, Job } from './store.js';
 import type { Browser } from './browser.js';
 import type { ModelClient } from './model.js';
+import { settings } from './autonomy.js';
+
+export const FollowUpSchema = z.object({
+  state: z.enum(['needs_reply', 'replied', 'awaiting_delivery', 'done']).default('needs_reply'),
+  channel: z.enum(['instagram_dm', 'email', 'form', 'other']).default('instagram_dm'),
+  recipient: z.string().trim().max(200).default(''),
+  requested: z
+    .array(z.enum(['name', 'phone', 'address', 'postalCode', 'consent']))
+    .max(5)
+    .default([]),
+  deadlineText: z.string().max(500).default(''),
+  deadlineUncertain: z.boolean().default(false),
+  deliveryNote: z.string().max(500).default(''),
+});
 
 export const OutcomeSchema = z.object({
   eventId: z.string().uuid(),
@@ -13,6 +27,7 @@ export const OutcomeSchema = z.object({
   autoCheck: z.boolean().default(false),
   nextCheckAt: z.number().int().positive().nullable().default(null),
   claimBy: z.string().date().nullable().default(null),
+  followUp: FollowUpSchema.nullable().optional(),
   reward: z
     .object({
       name: z.string().max(200).default(''),
@@ -56,10 +71,18 @@ export function saveOutcome(store: Store, input: z.infer<typeof OutcomeSchema>) 
     throw new ServiceError('outcome_evidence_note_required');
   if (input.reward && input.status !== 'won')
     throw new ServiceError('reward_requires_confirmed_win');
+  if (input.followUp && input.status !== 'won')
+    throw new ServiceError('followup_requires_confirmed_win');
   if (input.reward?.realizedValue && input.reward.status !== 'used')
     throw new ServiceError('realized_value_requires_used_reward');
   const next: Outcome = {
     ...input,
+    followUp:
+      input.status === 'won'
+        ? input.followUp === undefined
+          ? prior?.followUp
+          : input.followUp
+        : undefined,
     reward: input.reward
       ? { ...input.reward, code: input.reward.code || prior?.reward?.code || '' }
       : undefined,
@@ -80,6 +103,8 @@ export function queueResultCheck(
   const event = store.event(eventId);
   if (!outcome || !event || !store.completedEntries().some((e) => e.eventId === eventId))
     throw new ServiceError('completed_entry_required');
+  if (/^https:\/\/(?:www\.)?instagram\.com\/direct\//i.test(outcome.sourceUrl))
+    throw new ServiceError('private_message_check_not_supported');
   const existing = store
     .jobs()
     .find(
@@ -195,7 +220,24 @@ export async function runResultCheck(
 export function outcomeAlerts(store: Store, today: string) {
   return outcomes(store).flatMap((o) => {
     const title = store.event(o.eventId)?.title || '응모';
-    const alerts: { eventId: string; title: string; message: string }[] = [];
+    const alerts: { eventId: string; title: string; message: string; key?: string }[] = [];
+    const follow = o.followUp;
+    const waiting =
+      o.status === 'won' && !['received', 'used', 'expired'].includes(o.reward?.status || '');
+    if (waiting && follow?.state === 'needs_reply')
+      alerts.push({
+        eventId: o.eventId,
+        title,
+        key: `${o.eventId}:reply:${follow.deadlineText}:${o.claimBy || ''}:${o.claimBy && o.claimBy <= today ? 'due' : 'pending'}`,
+        message: `당첨 · 회신 대기${follow.deadlineText ? ' — ' + follow.deadlineText : ''}${follow.deadlineUncertain ? ' (기한 안내 확인 필요)' : ''}`,
+      });
+    else if (waiting && follow && ['replied', 'awaiting_delivery'].includes(follow.state))
+      alerts.push({
+        eventId: o.eventId,
+        title,
+        key: `${o.eventId}:delivery:${follow.state}`,
+        message: `회신 후 경품 수령 대기${follow.deliveryNote ? ' — ' + follow.deliveryNote : ''}`,
+      });
     if (o.check?.state === 'announced' && !['won', 'lost'].includes(o.status))
       alerts.push({
         eventId: o.eventId,
@@ -204,6 +246,7 @@ export function outcomeAlerts(store: Store, today: string) {
       });
     if (
       o.status === 'won' &&
+      (!follow || follow.state === 'needs_reply') &&
       o.claimBy &&
       o.claimBy <= today &&
       (!o.reward || o.reward.status === 'expected')
@@ -217,4 +260,59 @@ export function outcomeAlerts(store: Store, today: string) {
       });
     return alerts;
   });
+}
+
+// Explicit local preview only: no message sending, consent action or draft persistence.
+export function claimReplyDraft(
+  store: Store,
+  eventId: string,
+  consent: 'unset' | 'accept' | 'decline',
+) {
+  const outcome = outcomes(store).find((o) => o.eventId === eventId);
+  if (!outcome || outcome.status !== 'won' || !outcome.followUp)
+    throw new ServiceError('confirmed_followup_required');
+  const profile = settings(store).profile;
+  const fields: Record<string, [string, string]> = {
+    name: ['성함', profile.name],
+    phone: ['휴대전화', profile.phone],
+    address: [
+      '주소',
+      profile.shippingAddress
+        ? [profile.shippingAddress, profile.shippingAddressDetail].filter(Boolean).join(', ')
+        : '',
+    ],
+    postalCode: ['우편번호', profile.postalCode],
+  };
+  const missing: string[] = [];
+  const lines = ['안녕하세요. 당첨 안내 감사합니다.'];
+  if (consent === 'decline' && outcome.followUp.requested.includes('consent'))
+    return {
+      text: lines.concat('개인정보 수집·이용에는 동의하지 않습니다.').join('\n'),
+      missing,
+      recipient: outcome.followUp.recipient,
+      sourceUrl: outcome.sourceUrl,
+    };
+  for (const key of [...new Set(outcome.followUp.requested)]) {
+    if (key === 'consent') {
+      lines.push(
+        '개인정보 수집·이용: ' +
+          {
+            unset: '[동의 안내를 읽고 선택해 주세요]',
+            accept: '동의합니다.',
+            decline: '동의하지 않습니다.',
+          }[consent],
+      );
+      if (consent === 'unset') missing.push('개인정보 동의');
+    } else {
+      const [label, value] = fields[key]!;
+      lines.push(`${label}: ${value || '[확인 후 입력]'}`);
+      if (!value) missing.push(label);
+    }
+  }
+  return {
+    text: lines.join('\n'),
+    missing,
+    recipient: outcome.followUp.recipient,
+    sourceUrl: outcome.sourceUrl,
+  };
 }

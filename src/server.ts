@@ -41,6 +41,7 @@ import {
   publicOutcomes,
   outcomes,
   outcomeAlerts,
+  claimReplyDraft,
   queueResultCheck,
 } from './outcomes.js';
 import {
@@ -444,6 +445,16 @@ export async function createApp(options: {
       const jobId = queueResultCheck(store, id, provider, browser.engine);
       if (!runner.isBusy() && !manualNavigation) runner.start(jobId);
       return send(response, 200, { id: jobId });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/reply-draft') {
+      const input = z
+        .object({
+          eventId: z.string().uuid(),
+          consent: z.enum(['unset', 'accept', 'decline']).default('unset'),
+        })
+        .strict()
+        .parse(data);
+      return send(response, 200, claimReplyDraft(store, input.eventId, input.consent));
     }
     if (method === 'POST' && url.pathname === '/api/outcomes/code') {
       const id = z.string().uuid().parse(data.eventId);

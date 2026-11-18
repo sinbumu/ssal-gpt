@@ -1021,7 +1021,14 @@
         <section class="panel" id="rewards">
           <div class="section-head"><h2>08 · 결과·경품</h2></div>
           <div id="outcome-summary"></div>
+          <div class="card-actions">
+            <button id="enable-reward-notifications" type="button">
+              이 브라우저에서 당첨·수령 알림 켜기</button
+            ><button id="disable-reward-notifications" type="button">알림 끄기</button>
+          </div>
+          <p id="reward-notification-status" class="hint"></p>
           <div id="outcome-alerts"></div>
+          <div id="reward-followups"></div>
           <p class="hint">
             완료한 응모의 ‘결과·경품 관리’에서 기록을 선택하세요. 발표를 찾은 것과 본인의 당첨은
             구분하며, 확인 실패를 낙첨으로 기록하지 않습니다.
@@ -1029,7 +1036,7 @@
           <form id="outcome-form" hidden>
             <h3 id="outcome-title"></h3>
             <input name="eventId" type="hidden" />
-            <label>공식 발표 주소<input name="sourceUrl" type="url" required /></label>
+            <label>발표·당첨 안내 주소<input name="sourceUrl" type="url" required /></label>
             <label
               >결과<select name="status">
                 <option value="pending">발표 대기</option>
@@ -1050,7 +1057,58 @@
               (예약·대기열 실행 필요)</label
             >
             <label>첫 발표 확인 날짜<input name="checkDate" type="date" /></label>
-            <label>수령 기한<input name="claimBy" type="date" /></label>
+            <label>회신·수령 신청 기한<input name="claimBy" type="date" /></label>
+            <fieldset>
+              <legend>당첨 후 해야 할 일</legend>
+              <label class="check"
+                ><input name="hasFollowUp" type="checkbox" />회신·배송 진행 관리</label
+              >
+              <label
+                >진행 상태<select name="followUpState">
+                  <option value="needs_reply">회신 필요</option>
+                  <option value="replied">회신 완료</option>
+                  <option value="awaiting_delivery">배송·발송 대기</option>
+                  <option value="done">후속 처리 완료</option>
+                </select></label
+              >
+              <label
+                >연락 수단<select name="followUpChannel">
+                  <option value="instagram_dm">인스타그램 DM</option>
+                  <option value="email">이메일</option>
+                  <option value="form">수령 폼</option>
+                  <option value="other">기타</option>
+                </select></label
+              >
+              <label>받는 계정·주최자<input name="followUpRecipient" maxlength="200" /></label>
+              <fieldset>
+                <legend>요청받은 정보만 선택</legend>
+                <label class="check"
+                  ><input type="checkbox" name="requested" value="name" />이름</label
+                >
+                <label class="check"
+                  ><input type="checkbox" name="requested" value="phone" />휴대전화</label
+                >
+                <label class="check"
+                  ><input type="checkbox" name="requested" value="address" />배송주소</label
+                >
+                <label class="check"
+                  ><input type="checkbox" name="requested" value="postalCode" />우편번호</label
+                >
+                <label class="check"
+                  ><input type="checkbox" name="requested" value="consent" />개인정보 동의</label
+                >
+              </fieldset>
+              <label>기한 안내 원문·시각<input name="deadlineText" maxlength="500" /></label>
+              <label class="check"
+                ><input name="deadlineUncertain" type="checkbox" />기한이 불명확하거나 안내가 서로
+                다름</label
+              >
+              <label>발송 일정·배송 메모<input name="deliveryNote" maxlength="500" /></label>
+              <p class="hint">
+                당첨 안내를 등록한 뒤 회신·수령을 관리합니다. 현재 개인 DM 자동 감시와 답장 자동
+                전송은 하지 않습니다.
+              </p>
+            </fieldset>
             <fieldset>
               <legend>당첨 경품</legend>
               <label>경품명<input name="rewardName" /></label>
@@ -1087,6 +1145,30 @@
             <div id="outcome-proof"></div>
             <button>결과·경품 저장</button
             ><button type="button" id="check-outcome">저장한 발표 주소 지금 확인</button>
+            <fieldset>
+              <legend>검토용 회신 초안</legend>
+              <p class="hint">
+                먼저 위 내용을 저장하세요. 요청받은 항목만 저장 프로필에서 가져옵니다. 초안을 만드는
+                것은 개인정보 동의나 외부 전송이 아닙니다.
+              </p>
+              <label
+                >안내를 읽고 선택한 동의 여부<select id="claim-consent">
+                  <option value="unset">아직 선택하지 않음</option>
+                  <option value="accept">동의</option>
+                  <option value="decline">미동의</option>
+                </select></label
+              >
+              <button type="button" id="prepare-claim-reply">저장 프로필로 회신 초안 준비</button>
+              <p id="claim-reply-status" class="hint"></p>
+              <textarea
+                id="claim-reply-draft"
+                rows="7"
+                autocomplete="off"
+                placeholder="버튼을 누르면 이 화면에만 초안을 표시합니다."
+              ></textarea>
+              <button type="button" id="copy-claim-reply">검토한 초안 복사</button>
+              <button type="button" id="clear-claim-reply">초안 지우기</button>
+            </fieldset>
           </form>
         </section>
         <footer>

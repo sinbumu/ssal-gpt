@@ -1,3 +1,4 @@
+import { dmCheckPlan, queueDmCheck } from './instagram-dm.js';
 import { publicResultSource } from './result-sources.js';
 export { publicResultSource } from './result-sources.js';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,7 @@ import { outcomes, OutcomeSchema, putOutcome, queueResultCheck } from './outcome
 import { budgetReason, dayKey } from './operations.js';
 
 export type ResultBatch = {
+  mode?: 'public' | 'instagram_dm';
   id: string;
   state: 'running' | 'paused' | 'completed' | 'stopped';
   at: number;
@@ -109,6 +111,38 @@ export function startResultBatch(
   return batch;
 }
 
+export function startDmBatch(
+  store: Store,
+  provider: Job['provider'],
+  engine: Job['browserEngine'],
+  eventIds: string[],
+) {
+  if (['running', 'paused'].includes(resultBatch(store)?.state || ''))
+    throw new ServiceError('result_batch_exists');
+  const plan = dmCheckPlan(store),
+    ids = [...new Set(eventIds)];
+  if (!ids.length || ids.length > 20) throw new ServiceError('dm_batch_size');
+  for (const id of ids) {
+    const row = plan.find((p) => p.eventId === id);
+    if (!row?.scope || row.scope.profile !== (engine || 'chromium') || engine === 'connected')
+      throw new ServiceError('dm_completed_scope_required');
+  }
+  const now = Date.now();
+  const batch: ResultBatch = {
+    id: randomUUID(),
+    mode: 'instagram_dm',
+    state: 'running',
+    at: now,
+    updatedAt: now,
+    provider,
+    engine,
+    note: '선택한 완료 응모의 주최자 DM만 확인합니다.',
+    items: ids.map((eventId) => ({ eventId, sourceUrl: '', state: 'pending' })),
+  };
+  store.setSettings('resultBatch', batch);
+  return batch;
+}
+
 export function recoverResultBatch(store: Store) {
   const b = resultBatch(store);
   if (b?.state === 'running') {
@@ -172,7 +206,10 @@ export function tickResultBatch(store: Store, runner: Runner, now = Date.now()) 
   }
   if (b.items.every((x) => ['done', 'skipped'].includes(x.state))) {
     b.state = 'completed';
-    b.note = '일괄 확인을 마쳤습니다. 발표 발견·확인 불가·제외 이유를 확인하세요.';
+    b.note =
+      b.mode === 'instagram_dm'
+        ? '주최자 DM 확인을 마쳤습니다. 당첨 근거·연결 검토·확인 불가를 구분해 확인하세요.'
+        : '일괄 확인을 마쳤습니다. 발표 발견·확인 불가·제외 이유를 확인하세요.';
   } else {
     const reason = budgetReason(store, b.provider, now);
     if (reason) {
@@ -183,7 +220,12 @@ export function tickResultBatch(store: Store, runner: Runner, now = Date.now()) 
       try {
         if (!item.jobId) {
           const plan = resultCheckPlan(store, now).find((x) => x.eventId === item.eventId);
-          if (!plan?.eligible || plan.sourceUrl !== item.sourceUrl) {
+          if (b.mode === 'instagram_dm') {
+            item.jobId = queueDmCheck(store, item.eventId, b.provider, b.engine);
+            const job = store.job(item.jobId)!;
+            job.resultBatchId = b.id;
+            store.saveJob(job);
+          } else if (!plan?.eligible || plan.sourceUrl !== item.sourceUrl) {
             item.state = 'skipped';
             item.reason = plan?.reason || '대상 또는 주소가 변경됐습니다.';
           } else {
@@ -203,7 +245,10 @@ export function tickResultBatch(store: Store, runner: Runner, now = Date.now()) 
         }
         if (item.jobId) {
           item.state = 'running';
-          b.note = '공개 페이지를 읽고 있습니다. 게시·응모·개인 메시지 전송은 하지 않습니다.';
+          b.note =
+            b.mode === 'instagram_dm'
+              ? '완료 응모의 주최자 대화를 읽고 있습니다. 메시지 작성·발송 기능은 없습니다.'
+              : '공개 페이지를 읽고 있습니다. 게시·응모·개인 메시지 전송은 하지 않습니다.';
           store.setSettings('resultBatch', b);
           runner.start(item.jobId);
         }
@@ -233,9 +278,15 @@ export function publicResultBatch(store: Store) {
       ...i,
       title: store.event(i.eventId)?.title || '응모',
       check: outcomes(store).find((o) => o.eventId === i.eventId)?.check,
+      dmChecks: outcomes(store).find((o) => o.eventId === i.eventId)?.dmChecks,
       note: i.reason || (i.jobId && store.job(i.jobId)?.note),
     })),
     metrics: {
+      automaticRecoveries: jobs.reduce(
+        (n, j) =>
+          n + (j.dmReadDiagnostics || []).filter((d) => d.fallback && d.stage === 'scoped').length,
+        0,
+      ),
       calls: usage.length,
       inputTokens: usage.reduce((n, r) => n + Number(r.input_tokens), 0),
       outputTokens: usage.reduce((n, r) => n + Number(r.output_tokens), 0),

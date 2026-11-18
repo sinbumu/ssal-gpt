@@ -1,3 +1,4 @@
+import { DmAssessmentSchema } from './instagram-dm.js';
 import { z } from 'zod';
 import { Auth, ServiceError, type ProviderChoice } from './auth.js';
 import { AnswerPlanSchema } from './autonomy.js';
@@ -97,6 +98,7 @@ export const StepSchema = z
     searchEngine: z.enum(['naver', 'google']).optional(),
     skipCategory: z.enum(['ended', 'requirements', 'access', 'restricted', 'other']).optional(),
     questionId: z.string().optional(),
+    dmAssessment: DmAssessmentSchema.optional(),
     resultKind: z.enum(['announced', 'pending', 'unavailable']).optional(),
     receiptKind: z.enum(['accepted', 'already_participated', 'not_confirmed']).optional(),
     draftBasis: z.enum(['source_text', 'source_image', 'inference', 'suggestion']).optional(),

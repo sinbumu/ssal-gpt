@@ -1,3 +1,4 @@
+import { runDmCheck } from './instagram-dm.js';
 import { jobBudget } from './operations.js';
 import { completionMessage } from './completion.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -557,6 +558,8 @@ export class Runner {
   }
   private async run(job: Job, signal: AbortSignal, approved?: Approval) {
     const model = meteredModel(this.store, this.model, job);
+    if (job.kind === 'result' && job.dmScope)
+      return runDmCheck(this.store, this.browser, model, job, signal);
     if (job.kind === 'result') return runResultCheck(this.store, this.browser, model, job, signal);
     if (job.tasks?.length && job.autonomy) {
       for (let phase = 0; phase <= job.tasks.length; phase++) {

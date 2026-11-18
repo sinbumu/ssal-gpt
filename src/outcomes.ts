@@ -42,7 +42,8 @@ export const OutcomeSchema = z.object({
 });
 export type Outcome = z.infer<typeof OutcomeSchema> & {
   updatedAt: string;
-  reportedBy: 'user' | 'unconfirmed';
+  reportedBy: 'user' | 'unconfirmed' | 'agent';
+  dmChecks?: import('./instagram-dm.js').DmFinding[];
   check?: {
     at: number;
     state: 'announced' | 'pending' | 'unavailable';
@@ -91,6 +92,7 @@ export function saveOutcome(store: Store, input: z.infer<typeof OutcomeSchema>) 
     updatedAt: new Date().toISOString(),
     reportedBy: ['won', 'lost'].includes(input.status) ? 'user' : 'unconfirmed',
     check: prior?.check,
+    dmChecks: prior?.dmChecks,
   };
   putOutcome(store, next);
   return next;

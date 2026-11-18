@@ -1,3 +1,4 @@
+import { dmReadRequest, inspectDm } from './instagram-dm.js';
 import {
   chromium,
   type BrowserContext,
@@ -146,6 +147,12 @@ export class Browser {
   observationContext?: { signal: AbortSignal; report: (event: ObservationDiagnostic) => void };
   private readOnlyPages = new WeakSet<Page>();
   private readOnlyMode = false;
+  private dmReadPage?: Page;
+  dmReadDiagnostics: {
+    fallback?: 'inbox_search';
+    stage: string;
+    blocked: { method: string; route: string; operation: string }[];
+  } = { stage: 'idle', blocked: [] };
   private readOnlyBlocks = 0;
   private external?: ConnectedBrowser;
   private connectionKey = randomUUID();
@@ -395,8 +402,28 @@ export class Browser {
       if (/^(data:|blob:)/.test(url)) return route.continue();
       try {
         if (
+          this.dmReadPage === route.request().frame().page() &&
+          !dmReadRequest(route.request().method(), url, route.request().postData())
+        ) {
+          const request = route.request(),
+            u = new URL(url),
+            data = new URLSearchParams(request.postData() || '');
+          const operation = data.get('fb_api_req_friendly_name') || '';
+          this.dmReadDiagnostics.blocked.push({
+            method: request.method(),
+            route: u.pathname.replace(/\d{5,}/g, ':id').slice(0, 160),
+            operation: /^[A-Za-z0-9_]{1,150}$/.test(operation) ? operation : 'unspecified',
+          });
+          this.dmReadDiagnostics.blocked = this.dmReadDiagnostics.blocked.slice(-20);
+          return await route.abort('blockedbyclient');
+        }
+        if (
           (this.readOnlyMode || this.readOnlyPages.has(route.request().frame().page())) &&
-          !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())
+          !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) &&
+          !(
+            this.dmReadPage === route.request().frame().page() &&
+            dmReadRequest(route.request().method(), url, route.request().postData())
+          )
         ) {
           if (route.request().isNavigationRequest()) this.readOnlyBlocks++;
           return await route.abort('blockedbyclient');
@@ -964,6 +991,116 @@ export class Browser {
     else await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
     this.latest = observation;
     return observation;
+  }
+  async readOrganizerDm(actor: string, organizer: string, signal: AbortSignal) {
+    await this.open();
+    const page = this.page!;
+    this.dmReadPage = page;
+    this.dmReadDiagnostics = { stage: 'profile', blocked: [] };
+    this.setReadOnlyMode(true);
+    try {
+      await this.navigate(`https://www.instagram.com/${organizer}/`);
+      signal.throwIfAborted();
+      await page
+        .getByRole('button', { name: /^(메시지 보내기|Message|Send message)$/i })
+        .waitFor({ state: 'visible', timeout: 10000 });
+      // Verify the current account before opening a conversation; inbox fallback stays scoped.
+      const actorLinks = page
+        .locator(`a[href="/${actor}/"]`)
+        .filter({ has: page.locator('img[alt*="프로필"],img[alt*="profile"]') });
+      if (
+        !(await actorLinks.count()) ||
+        new URL(page.url()).pathname.replaceAll('/', '').toLowerCase() !== organizer
+      )
+        throw new ServiceError('dm_account_or_profile_mismatch');
+      const button = page.getByRole('button', { name: /^(메시지 보내기|Message|Send message)$/i });
+      if ((await button.count()) !== 1) throw new ServiceError('dm_message_control_ambiguous');
+      this.dmReadDiagnostics.stage = 'open_thread';
+      await button.click();
+      let view = await inspectDm(page, actor, organizer);
+      for (let i = 0; i < 20 && view.state !== 'scoped'; i++) {
+        signal.throwIfAborted();
+        await page.waitForTimeout(300);
+        view = await inspectDm(page, actor, organizer);
+      }
+      signal.throwIfAborted();
+      if (
+        view.state !== 'scoped' &&
+        this.dmReadDiagnostics.blocked.some(
+          (x) => x.route === '/api/v1/direct_v2/create_group_thread/',
+        )
+      ) {
+        // Profile Message may create an empty thread. Keep that request blocked;
+        // search existing conversations through the visible inbox instead.
+        this.dmReadDiagnostics.stage = 'inbox_search';
+        this.dmReadDiagnostics.fallback = 'inbox_search';
+        await this.navigate('https://www.instagram.com/direct/inbox/');
+        const search = page.locator(
+          'input[placeholder="검색"],input[aria-label="검색"],input[placeholder="Search"],input[aria-label="Search"]',
+        );
+        this.dmReadDiagnostics.stage = 'inbox_search_input';
+        await search.waitFor({ state: 'visible', timeout: 10000 });
+        await search.click();
+        await search.fill(organizer);
+        const target = page
+          .getByRole('button')
+          .filter({ has: page.getByText(organizer, { exact: true }) });
+        this.dmReadDiagnostics.stage = 'inbox_search_result';
+        await target.waitFor({ state: 'visible', timeout: 10000 });
+        if ((await target.count()) !== 1) throw new ServiceError('dm_search_ambiguous');
+        this.dmReadDiagnostics.stage = 'inbox_open_existing';
+        await target.click();
+        view = await inspectDm(page, actor, organizer);
+        for (let i = 0; i < 20 && view.state !== 'scoped'; i++) {
+          signal.throwIfAborted();
+          await page.waitForTimeout(300);
+          view = await inspectDm(page, actor, organizer);
+        }
+      }
+      signal.throwIfAborted();
+      this.dmReadDiagnostics.stage = view.state;
+      if (view.state !== 'scoped') throw new ServiceError('dm_' + view.state);
+      let stable = 0;
+      for (let i = 0; i < 20 && stable < 5; i++) {
+        signal.throwIfAborted();
+        await page.waitForTimeout(300);
+        const next = await inspectDm(page, actor, organizer);
+        stable =
+          next.state === 'scoped' && JSON.stringify(next) === JSON.stringify(view) ? stable + 1 : 0;
+        view = next;
+      }
+      if (view.state !== 'scoped' || stable < 5) throw new ServiceError('dm_thread_not_settled');
+      if (!view.empty && !view.incoming?.length) throw new ServiceError('dm_sender_unverified');
+      const region = page
+        .locator(view.empty ? '[data-ssal-dm-pane="scoped"]' : '[data-ssal-dm-incoming="true"]')
+        .first();
+      const image = await region.screenshot({
+        type: 'png',
+        animations: 'disabled',
+        mask: [page.locator('textarea,input,[contenteditable=true]')],
+        timeout: 10000,
+      });
+      // Recheck identities after capture; a user takeover must not store a different thread.
+      const current = await inspectDm(page, actor, organizer);
+      if (
+        current.state !== 'scoped' ||
+        JSON.stringify(current.incoming) !== JSON.stringify(view.incoming)
+      )
+        throw new ServiceError('dm_thread_changed');
+      const screenshot = `${randomUUID()}.png`;
+      if (this.storage) this.storage.writeImage(screenshot, image, this.ownerJobId, true);
+      else await writeFile(join(this.evidence, screenshot), image, { mode: 0o600 });
+      return {
+        url: page.url(),
+        screenshot,
+        image,
+        empty: !!view.empty,
+        messages: view.incoming || [],
+      };
+    } finally {
+      this.dmReadPage = undefined;
+      this.invalidate();
+    }
   }
   async assertFresh(id: string, action?: Step['action']) {
     const o = this.latest;

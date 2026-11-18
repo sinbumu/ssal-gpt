@@ -1,9 +1,11 @@
+import { dmCheckPlan, reviewDmFinding } from './instagram-dm.js';
 import { TelegramNotifications, type TelegramRequest } from './telegram.js';
 import { collectNotices, noticeInbox, readNotices } from './reward-notifications.js';
 import {
   resultCheckPlan,
   publicResultBatch,
   startResultBatch,
+  startDmBatch,
   controlResultBatch,
   recoverResultBatch,
 } from './result-batch.js';
@@ -354,6 +356,7 @@ export async function createApp(options: {
         completedEntries: store.completedEntries(),
         outcomes: publicOutcomes(store),
         resultCheckPlan: resultCheckPlan(store),
+        dmCheckPlan: dmCheckPlan(store),
         resultBatch: publicResultBatch(store),
         outcomeAlerts: outcomeAlerts(store, dayKey()),
         rewardNotices: noticeInbox(store),
@@ -482,6 +485,30 @@ export async function createApp(options: {
       if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
         throw new ServiceError('pause_before_updating_outcome');
       saveOutcome(store, input);
+      collectNotices(store);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/dm-batch') {
+      const input = z
+        .object({ provider: ProviderSchema, eventIds: z.array(z.string().uuid()).min(1).max(20) })
+        .strict()
+        .parse(data);
+      const batch = startDmBatch(store, input.provider, browser.engine, input.eventIds);
+      void scheduler.tick();
+      return send(response, 200, { id: batch.id });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/dm-review') {
+      const input = z
+        .object({
+          eventId: z.string().uuid(),
+          key: z.string().regex(/^[a-f0-9]{64}$/),
+          confirm: z.boolean(),
+        })
+        .strict()
+        .parse(data);
+      if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
+        throw new ServiceError('pause_before_updating_outcome');
+      reviewDmFinding(store, input.eventId, input.key, input.confirm);
       collectNotices(store);
       return send(response, 200, { ok: true });
     }

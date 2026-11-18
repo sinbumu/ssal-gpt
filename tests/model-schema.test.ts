@@ -51,7 +51,7 @@ test('wire schema recursively requires every field, closes objects and preserves
     s.anyOf?.forEach(visit);
   }
   visit(stepToolParameters);
-  assert.equal(objects, 19);
+  assert.equal(objects, 20);
   const entry = stepToolParameters.properties.candidate.anyOf[0].properties.entryType;
   assert.deepEqual(entry.anyOf[0].enum, ['survey', 'quiz', 'social', 'mixed', 'other']);
   assert.deepEqual(entry.anyOf[1], { type: 'null' });

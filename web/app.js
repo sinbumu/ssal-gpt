@@ -573,7 +573,7 @@ function render() {
   renderOperations();
   renderOutcomeSummary();
   renderTelegramAndInbox();
-  $('result-attention').innerHTML = $('outcome-alerts').innerHTML;
+  $('result-attention').innerHTML = $('outcome-alerts').innerHTML + $('dm-reviews').innerHTML;
   const auth = state.auth;
   if (state.browser) {
     if (renderedBrowserEngine !== state.browser.engine) {
@@ -1248,6 +1248,9 @@ document.addEventListener('click', (e) => {
 });
 
 function outcomeLabel(eventId) {
+  const outcome = state.outcomes?.find((o) => o.eventId === eventId);
+  if (outcome?.status === 'won' && outcome.reportedBy === 'agent')
+    return '당첨 · 주최자 DM 근거 확인';
   return (
     {
       pending: '발표 대기',
@@ -1259,6 +1262,7 @@ function outcomeLabel(eventId) {
 }
 function renderOutcomeSummary() {
   renderResultBatch();
+  renderDmChecks();
   const rows = state.outcomes || [],
     won = rows.filter((o) => o.status === 'won');
   const realized = won.reduce(
@@ -1299,6 +1303,69 @@ function renderOutcomeSummary() {
       : '');
   notifyRewardAlerts();
 }
+let dmPlanLimit = 20;
+function renderDmChecks() {
+  const plan = state.dmCheckPlan || [],
+    active = ['running', 'paused'].includes(state.resultBatch?.state);
+  const announced = plan.filter((x) => x.eligible && x.announced && !x.checks.length).slice(0, 20);
+  $('dm-announced-start').disabled = active || !announced.length;
+  $('dm-check-summary').textContent =
+    `연결 가능한 완료 응모 ${plan.filter((x) => x.eligible).length}건 · 발표 후 첫 DM 확인 ${announced.length}건. 묶음 실행 상태와 시간·토큰은 위 실행 결과에 표시합니다.`;
+  const labels = {
+    won: '당첨 근거 확인',
+    review: '행사 연결 확인 필요',
+    no_evidence: '당첨 근거 없음 · 낙첨 아님',
+    unavailable: '자동 확인 불가',
+  };
+  $('dm-check-plan').innerHTML = plan
+    .slice(0, dmPlanLimit)
+    .map(
+      (x) =>
+        `<article class="event-card"><strong>${esc(x.title)}</strong><p>${esc(x.reason)}</p>${x.scope ? `<p>응모 계정 @${esc(x.scope.actor)} · 주최자 ${x.scope.organizers.map((h) => '@' + esc(h)).join(', ')} · ${esc(x.scope.profile)}</p>` : ''}${x.checks.map((d) => `<p><b>${esc(labels[d.state])}</b> · @${esc(d.organizer)} · ${new Date(d.at).toLocaleString()}<br>${esc(d.reason)}${d.lastAttempt ? `<br>최근 재확인 · ${esc(d.lastAttempt.reason)}` : ''}</p>`).join('')}${x.eligible ? `<button data-dm-check="${esc(x.eventId)}" ${active ? 'disabled' : ''}>이 응모 주최자 DM 확인</button>` : ''}</article>`,
+    )
+    .join('');
+  $('dm-plan-more').hidden = plan.length <= dmPlanLimit;
+  $('dm-reviews').innerHTML = plan
+    .flatMap((x) =>
+      x.checks
+        .filter((d) => d.state === 'review' && !d.reviewed)
+        .map(
+          (d) =>
+            `<article class="event-card"><span class="pill warning">당첨 DM · 행사 연결 확인</span><h4>${esc(x.title)}</h4><p>@${esc(d.organizer)} · ${esc(d.reason)}</p><blockquote>${esc(d.quote || '')}</blockquote>${d.deadlineText ? `<p>기한 원문 · ${esc(d.deadlineText)}</p>` : ''}<div class="card-actions"><button data-dm-review="${esc(x.eventId)}" data-key="${esc(d.key)}" data-confirm="true">이 응모의 당첨 안내가 맞음</button><button data-dm-review="${esc(x.eventId)}" data-key="${esc(d.key)}" data-confirm="false">이 응모와 연결하지 않음</button><button data-outcome="${esc(x.eventId)}">결과·경품 관리</button></div></article>`,
+        ),
+    )
+    .join('');
+}
+$('dm-plan-more').onclick = () => {
+  dmPlanLimit += 20;
+  renderDmChecks();
+};
+$('dm-announced-start').onclick = guard(async () => {
+  const eventIds = (state.dmCheckPlan || [])
+    .filter((x) => x.eligible && x.announced && !x.checks.length)
+    .slice(0, 20)
+    .map((x) => x.eventId);
+  await api('/api/outcomes/dm-batch', { provider: requireChoice(), eventIds });
+});
+document.addEventListener('click', (e) => {
+  const check = e.target.closest('[data-dm-check]'),
+    review = e.target.closest('[data-dm-review]');
+  if (check)
+    void guard(() =>
+      api('/api/outcomes/dm-batch', {
+        provider: requireChoice(),
+        eventIds: [check.dataset.dmCheck],
+      }),
+    )(e);
+  if (review)
+    void guard(() =>
+      api('/api/outcomes/dm-review', {
+        eventId: review.dataset.dmReview,
+        key: review.dataset.key,
+        confirm: review.dataset.confirm === 'true',
+      }),
+    )(e);
+});
 let resultPlanLimit = 20;
 let resultRowsLimit = 20;
 function renderResultBatch() {
@@ -1324,13 +1391,13 @@ function renderResultBatch() {
       '이번 확인 한도 안에서 발표 근거를 확보하지 못했습니다. 낙첨으로 처리하지 않습니다.',
   };
   $('result-batch-status').textContent = b
-    ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초`
+    ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초${b.mode === 'instagram_dm' ? ` / 대화 검색 자동 복구 ${b.metrics.automaticRecoveries || 0}회` : ''}`
     : `지금 확인 가능 ${eligible}건 · 제외/대기 ${plan.length - eligible}건. 발표 주소를 하나씩 등록할 필요 없이 시작할 수 있습니다.`;
   $('result-batch-results').innerHTML = (b?.items || [])
     .slice(0, resultRowsLimit)
     .map(
       (x) =>
-        `<article class="event-card"><span class="pill">${esc(x.state === 'pending' ? '대기' : x.state === 'running' ? '확인 중' : x.state === 'skipped' ? '제외' : labels[x.check?.state] || '확인 중단')}</span><h4>${esc(x.title)}</h4><p>${esc(x.check?.reason || readReasons[x.note] || x.note || '')}</p>${x.check?.quote ? `<blockquote>${esc(x.check.quote)}</blockquote>` : ''}<div class="card-actions">${safeLink(x.check?.url || x.sourceUrl, '확인 경로 열기')}${x.state === 'done' ? `<button data-outcome="${esc(x.eventId)}">결과·경품 관리</button>` : ''}</div></article>`,
+        `<article class="event-card"><span class="pill">${esc(x.state === 'pending' ? '대기' : x.state === 'running' ? '확인 중' : x.state === 'skipped' ? '제외' : (b.mode === 'instagram_dm' ? 'DM 확인 결과' : labels[x.check?.state]) || '확인 중단')}</span><h4>${esc(x.title)}</h4><p>${esc(b.mode === 'instagram_dm' ? (x.dmChecks || []).map((d) => '@' + d.organizer + ' · ' + d.reason).join(' / ') || x.note : x.check?.reason || readReasons[x.note] || x.note || '')}</p>${x.check?.quote ? `<blockquote>${esc(x.check.quote)}</blockquote>` : ''}<div class="card-actions">${safeLink(x.check?.url || x.sourceUrl, '확인 경로 열기')}${x.state === 'done' ? `<button data-outcome="${esc(x.eventId)}">결과·경품 관리</button>` : ''}</div></article>`,
     )
     .join('');
   $('result-batch-more').hidden = (b?.items.length || 0) <= resultRowsLimit;

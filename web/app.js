@@ -1915,6 +1915,26 @@ document.addEventListener('click', (event) => {
 let rewardInboxLimit = 20;
 let shownRewardNoticeIds = [];
 let telegramCandidateKey = '';
+let telegramPending = '';
+let telegramFeedback;
+function telegramAction(progress, fn) {
+  return async (event) => {
+    event?.preventDefault();
+    if (telegramPending || state.telegram?.busy) return;
+    telegramPending = progress;
+    telegramFeedback = undefined;
+    renderTelegramAndInbox();
+    try {
+      telegramFeedback = await fn();
+    } catch (error) {
+      telegramFeedback = { message: error.message, error: true };
+    } finally {
+      await refresh().catch(() => {});
+      telegramPending = '';
+      renderTelegramAndInbox();
+    }
+  };
+}
 const deliveryLabels = {
   sending: '전송 중',
   sent: '텔레그램 접수 확인',
@@ -1924,6 +1944,36 @@ const deliveryLabels = {
 };
 function renderTelegramAndInbox() {
   const t = state.telegram || {};
+  const busy = !!telegramPending || t.busy;
+  const connection = t.connection;
+  const phase = connection?.phase === 'webhook' ? '기존 연결 확인' : '봇 정보 확인';
+  const feedback = telegramPending
+    ? { message: telegramPending }
+    : telegramFeedback ||
+      (connection?.state === 'failed'
+        ? {
+            error: true,
+            message: `${phase} 실패: ${connection.message || connection.code}${!t.configured ? ' 토큰은 저장되지 않았습니다. 입력 후 다시 시도해 주세요.' : ''}`,
+          }
+        : connection?.state === 'checking'
+          ? { message: `${phase} 중…` }
+          : connection?.state === 'ready' && t.pairUrl
+            ? {
+                message:
+                  '토큰 저장 완료. 아래 연결 링크를 열어 본인 텔레그램에서 시작(Start)을 누르세요.',
+              }
+            : undefined);
+  const status = $('telegram-action-status');
+  status.hidden = !feedback;
+  status.textContent = feedback?.message || '';
+  status.className = 'telegram-feedback' + (feedback?.error ? ' error' : '');
+  status.setAttribute('role', feedback?.error ? 'alert' : 'status');
+  const pairForm = $('telegram-pair-form');
+  pairForm.querySelector('button').disabled = busy;
+  pairForm.querySelector('button').textContent = busy
+    ? '텔레그램 확인 중…'
+    : '토큰 저장·연결 링크 만들기';
+  pairForm.elements.token.readOnly = busy;
   const candidateLabel = t.candidate || t.recipient || '';
   const candidateKey = t.confirmation || '';
   if (candidateKey !== telegramCandidateKey) {
@@ -1935,11 +1985,11 @@ function renderTelegramAndInbox() {
   $('telegram-pair-link').hidden = !t.pairUrl;
   if (t.pairUrl) $('telegram-pair-link').href = t.pairUrl;
   else $('telegram-pair-link').removeAttribute('href');
-  $('telegram-find').disabled = !t.pairUrl || t.busy;
-  $('telegram-activate').disabled = !candidateKey || t.busy || !$('telegram-confirm').checked;
-  $('telegram-send-pending').disabled = !t.enabled || t.busy;
-  $('telegram-pause').disabled = !t.enabled || t.busy;
-  $('telegram-disconnect').disabled = !t.configured || t.busy;
+  $('telegram-find').disabled = !t.pairUrl || busy;
+  $('telegram-activate').disabled = !candidateKey || busy || !$('telegram-confirm').checked;
+  $('telegram-send-pending').disabled = !t.enabled || busy;
+  $('telegram-pause').disabled = !t.enabled || busy;
+  $('telegram-disconnect').disabled = !t.configured || busy;
   $('telegram-deliveries').innerHTML =
     (t.deliveries || [])
       .map(
@@ -1965,43 +2015,52 @@ function renderTelegramAndInbox() {
   $('reward-inbox-more').hidden = filtered.length <= rewardInboxLimit;
   $('reward-inbox-read').disabled = !shown.some((n) => !n.readAt);
 }
-$('telegram-pair-form').onsubmit = guard(async (e) => {
-  e.preventDefault();
-  const input = $('telegram-pair-form').elements.token;
-  const token = input.value.trim();
-  input.value = '';
-  await api('/api/telegram/pair', { token });
-  await refresh();
-  toast('연결 링크를 열어 본인 텔레그램에서 시작을 누르세요. 아직 알림은 꺼져 있습니다.');
-});
-$('telegram-find').onclick = guard(async () => {
+$('telegram-pair-form').onsubmit = telegramAction(
+  '봇 정보와 기존 연결을 확인하는 중입니다…',
+  async () => {
+    const input = $('telegram-pair-form').elements.token;
+    const token = input.value.trim();
+    await api('/api/telegram/pair', { token });
+    input.value = '';
+    return {
+      message:
+        '토큰 저장 완료. 아래 연결 링크를 열어 본인 텔레그램에서 시작(Start)을 누르세요. 아직 알림은 꺼져 있습니다.',
+    };
+  },
+);
+$('telegram-find').onclick = telegramAction('본인 대화를 확인하는 중입니다…', async () => {
   const r = await api('/api/telegram/find', {});
-  await refresh();
-  toast(
-    r.candidate
+  return {
+    message: r.candidate
       ? '개인 대화를 찾았습니다. 본인 대화인지 확인해 주세요.'
       : '시작 메시지가 아직 없습니다. 연결 링크에서 시작 버튼을 누른 뒤 다시 확인하세요.',
-  );
+  };
 });
 $('telegram-confirm').onchange = () => renderTelegramAndInbox();
-$('telegram-activate').onclick = guard(async () => {
+$('telegram-activate').onclick = telegramAction('테스트 알림을 전송하는 중입니다…', async () => {
   if (!$('telegram-confirm').checked) return;
   const r = await api('/api/telegram/activate', {
     confirmPersonalChat: true,
     confirmation: state.telegram.confirmation,
   });
-  await refresh();
-  toast(
-    r.enabled
+  return {
+    message: r.enabled
       ? '텔레그램이 테스트 메시지를 접수했습니다. 알림을 사용합니다.'
       : '테스트 발송을 확인하지 못했습니다. 전송 내역을 확인하세요.',
-    !r.enabled,
-  );
+    error: !r.enabled,
+  };
 });
 for (const action of ['pause', 'disconnect', 'send-pending'])
-  $('telegram-' + action).onclick = guard(async () => {
+  $('telegram-' + action).onclick = telegramAction('요청을 처리하는 중입니다…', async () => {
     await api('/api/telegram/' + action, {});
-    await refresh();
+    return {
+      message:
+        action === 'pause'
+          ? '텔레그램 알림을 중지했습니다.'
+          : action === 'disconnect'
+            ? '텔레그램 연결을 해제했습니다.'
+            : '대기 알림을 확인했습니다. 아래 전송 내역에서 결과를 확인하세요.',
+    };
   });
 $('reward-inbox-filter').onchange = () => {
   rewardInboxLimit = 20;

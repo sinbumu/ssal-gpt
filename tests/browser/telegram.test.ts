@@ -8,7 +8,7 @@ import { chromium } from 'playwright';
 import { createApp } from '../../src/server.js';
 import { OutcomeSchema, putOutcome } from '../../src/outcomes.js';
 import { collectNotices } from '../../src/reward-notifications.js';
-import type { TelegramRequest } from '../../src/telegram.js';
+import { TelegramFailure, type TelegramRequest } from '../../src/telegram.js';
 
 test('dashboard pairs a private bot, reviews recipient, tests alerts and keeps an independent paginated inbox', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-telegram-ui-'));
@@ -112,6 +112,74 @@ test('dashboard pairs a private bot, reviews recipient, tests alerts and keeps a
     );
     assert.deepEqual(errors, []);
   } finally {
+    await browser.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pairing shows local progress and persistent failure, retains failed input and permits a successful retry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-telegram-feedback-'));
+  let release!: () => void;
+  let fail = true;
+  let calls = 0;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const request: TelegramRequest = async (_token, method) => {
+    if (method === 'getMe') {
+      calls++;
+      if (fail) {
+        await gate;
+        throw new TelegramFailure('telegram_network_timeout');
+      }
+      return { is_bot: true, username: 'FixtureAlertsBot' };
+    }
+    if (method === 'getWebhookInfo') return { url: '' };
+    throw new Error('unexpected request');
+  };
+  const app = await createApp({ dir, port: 0, headless: true, telegramRequest: request });
+  app.scheduler.stop();
+  const browser = await chromium.launch({ headless: true });
+  const token = '123456:fixture_token_without_real_credentials';
+  try {
+    const page = await browser.newPage();
+    await page.goto(app.origin + '/#rewards');
+    await page.locator('#telegram-settings > summary').click();
+    await page.locator('#telegram-pair-form input').fill(token);
+    await page.locator('#telegram-pair-form button').click();
+    assert.equal(await page.locator('#telegram-pair-form button').isDisabled(), true);
+    assert.match(await page.locator('#telegram-action-status').innerText(), /확인하는 중/);
+    assert.equal(await page.locator('#telegram-pair-form input').getAttribute('readonly'), '');
+    release();
+    await page.waitForFunction(
+      () => document.querySelector('#telegram-action-status')?.getAttribute('role') === 'alert',
+    );
+    assert.match(await page.locator('#telegram-action-status').innerText(), /연결 시간이 초과/);
+    assert.equal(await page.locator('#telegram-pair-form input').inputValue(), token);
+    assert.equal(await page.locator('#telegram-pair-form button').isEnabled(), true);
+    assert.equal(calls, 1);
+    await page.reload();
+    await page.locator('#telegram-settings > summary').click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector('#telegram-action-status')
+        ?.textContent?.includes('토큰은 저장되지 않았습니다'),
+    );
+    assert.equal(await page.locator('#telegram-pair-form input').inputValue(), '');
+    fail = false;
+    await page.locator('#telegram-pair-form input').fill(token);
+    await page.locator('#telegram-pair-form button').click();
+    await page.locator('#telegram-pair-link').waitFor();
+    await page.waitForFunction(() =>
+      document.querySelector('#telegram-action-status')?.textContent?.includes('토큰 저장 완료'),
+    );
+    assert.equal(await page.locator('#telegram-pair-form input').inputValue(), '');
+    assert.equal(calls, 2);
+    const state = await (await page.request.get(app.origin + '/api/state')).json();
+    assert.ok(!JSON.stringify(state).includes(token));
+    assert.equal(state.telegram.connection.state, 'ready');
+    assert.equal(state.telegram.enabled, false);
+  } finally {
+    release();
     await browser.close();
     await app.close();
     rmSync(dir, { recursive: true, force: true });

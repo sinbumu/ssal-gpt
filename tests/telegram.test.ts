@@ -4,13 +4,15 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type { request as httpsRequest } from 'node:https';
 import { Store } from '../src/store.js';
 import { OutcomeSchema, putOutcome, outcomes } from '../src/outcomes.js';
 import { collectNotices, noticeInbox, readNotices } from '../src/reward-notifications.js';
 import {
   TelegramNotifications,
   TelegramFailure,
-  telegramRequest,
+  createTelegramRequest,
   type TelegramRequest,
 } from '../src/telegram.js';
 const token = '123456:fixture_token_without_real_credentials';
@@ -235,36 +237,141 @@ test('known rate rejection honors retry_after and stops after three attempts; bl
     await f.cleanup();
   }
 });
-test('HTTP transport restricts host, disables redirects and redacts raw errors', async () => {
-  const original = globalThis.fetch;
-  try {
-    globalThis.fetch = (async (url, init) => {
-      assert.ok(String(url).startsWith('https://api.telegram.org/bot'));
-      assert.equal(init?.redirect, 'error');
-      assert.equal(init?.method, 'POST');
-      throw new Error('secret ' + token);
-    }) as typeof fetch;
-    await assert.rejects(
-      telegramRequest(token, 'getMe', {}),
-      (e: Error) => e.message === 'telegram_response_unknown',
-    );
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify({
+function transportFixture({
+  status = 200,
+  data = '{"ok":true,"result":{"accepted":true}}',
+  error = '',
+  aborted = false,
+} = {}) {
+  let calls = 0;
+  const request = ((options: any, callback: any) => {
+    calls++;
+    assert.equal(options.hostname, 'api.telegram.org');
+    assert.equal(options.protocol, 'https:');
+    assert.equal(options.family, 4);
+    assert.equal(options.rejectUnauthorized, true);
+    assert.equal(options.method, 'POST');
+    assert.ok(options.signal instanceof AbortSignal);
+    const req = new EventEmitter() as any;
+    req.end = () =>
+      queueMicrotask(() => {
+        if (error) {
+          req.emit('error', Object.assign(new Error('secret ' + token), { code: error }));
+          return;
+        }
+        const response = new EventEmitter() as any;
+        response.statusCode = status;
+        response.resume = () => {};
+        response.destroy = () => response.emit('aborted');
+        callback(response);
+        if (aborted) response.emit('aborted');
+        else {
+          response.emit('data', Buffer.from(data));
+          response.emit('end');
+        }
+      });
+    return req;
+  }) as typeof httpsRequest;
+  return { request: createTelegramRequest(request), calls: () => calls };
+}
+test('Telegram transport uses scoped IPv4, verifies TLS, rejects redirects and redacts failures without retry', async () => {
+  const success = transportFixture();
+  assert.deepEqual(await success.request(token, 'getMe', {}), { accepted: true });
+  const failures = [
+    [{ error: 'ETIMEDOUT' }, 'telegram_network_timeout'],
+    [{ error: 'ABORT_ERR' }, 'telegram_network_timeout'],
+    [{ error: 'ENOTFOUND' }, 'telegram_dns_failed'],
+    [{ error: 'CERT_HAS_EXPIRED' }, 'telegram_tls_failed'],
+    [{ error: 'ECONNRESET' }, 'telegram_network_failed'],
+    [{ status: 302 }, 'telegram_redirect_blocked'],
+    [{ data: 'bad response ' + token }, 'telegram_response_invalid'],
+    [{ data: 'x'.repeat(2_000_001) }, 'telegram_response_too_large'],
+    [{ aborted: true }, 'telegram_response_incomplete'],
+  ] as const;
+  for (const [options, code] of failures) {
+    for (const method of ['getMe', 'sendMessage']) {
+      const f = transportFixture(options);
+      await assert.rejects(
+        f.request(token, method, {}),
+        (e: TelegramFailure) =>
+          e.code === code &&
+          e.uncertain === (method === 'sendMessage') &&
+          !e.message.includes(token),
+      );
+      assert.equal(f.calls(), 1);
+    }
+  }
+  for (const [status, code] of [
+    [401, 'telegram_token_invalid'],
+    [429, 'telegram_rate_limited'],
+    [500, 'telegram_rejected'],
+  ] as const) {
+    for (const method of ['getMe', 'sendMessage']) {
+      const f = transportFixture({
+        status,
+        data: JSON.stringify({
           ok: false,
-          error_code: 429,
+          error_code: status,
           parameters: { retry_after: 7 },
           description: token,
         }),
-        { status: 429 },
-      )) as typeof fetch;
-    await assert.rejects(
-      telegramRequest(token, 'sendMessage', {}),
-      (e: TelegramFailure) =>
-        e.code === 'telegram_rate_limited' && e.retryAfter === 7 && !e.message.includes(token),
-    );
+      });
+      await assert.rejects(
+        f.request(token, method, {}),
+        (e: TelegramFailure) =>
+          e.code === code &&
+          e.uncertain === (method === 'sendMessage' && status >= 500) &&
+          (status !== 429 || e.retryAfter === 7) &&
+          !e.message.includes(token),
+      );
+    }
+  }
+});
+test('pair failures persist safe stage diagnostics without saving attempted credentials', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-pair-failure-'));
+  const store = new Store(dir);
+  let failPhase = 'getMe';
+  const instance = () =>
+    new TelegramNotifications(store, async (_token, method) => {
+      if (method === failPhase) throw new TelegramFailure('telegram_network_timeout');
+      if (method === 'getMe') return { is_bot: true, username: 'FixtureAlertsBot' };
+      return { url: '' };
+    });
+  const t = instance();
+  try {
+    for (const [method, phase] of [
+      ['getMe', 'bot'],
+      ['getWebhookInfo', 'webhook'],
+    ]) {
+      failPhase = method!;
+      await assert.rejects(t.pair(token), /telegram_network_timeout/);
+      assert.equal(t.publicInfo().configured, false);
+      assert.equal(t.publicInfo().connection?.phase, phase);
+      assert.equal(t.publicInfo().connection?.state, 'failed');
+      assert.ok(!readFileSync(join(dir, 'telegram-private.json'), 'utf8').includes(token));
+      const restarted = instance();
+      assert.equal(restarted.publicInfo().connection?.code, 'telegram_network_timeout');
+      await restarted.close();
+    }
+    failPhase = '';
+    await t.pair(token);
+    assert.equal(t.publicInfo().connection?.state, 'ready');
+    failPhase = 'getMe';
+    const replacement = '654321:another_fixture_without_credentials';
+    await assert.rejects(t.pair(replacement), /telegram_network_timeout/);
+    const stored = JSON.parse(readFileSync(join(dir, 'telegram-private.json'), 'utf8'));
+    assert.equal(stored.token, token);
+    assert.ok(!JSON.stringify(stored).includes(replacement));
+    stored.connection.state = 'checking';
+    const { writePrivate } = await import('../src/config.js');
+    writePrivate(join(dir, 'telegram-private.json'), stored);
+    const restarted = instance();
+    assert.equal(restarted.publicInfo().connection?.code, 'telegram_connection_interrupted');
+    await restarted.close();
   } finally {
-    globalThis.fetch = original;
+    await t.close();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

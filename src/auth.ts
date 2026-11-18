@@ -50,6 +50,20 @@ export class ServiceError extends Error {
 }
 const userMessages: Record<string, string> = {
   telegram_target_changed: '수신 대상이 바뀌었습니다. 표시된 개인 대화를 다시 확인하세요.',
+  telegram_network_timeout:
+    '텔레그램 서버 연결 시간이 초과됐습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.',
+  telegram_dns_failed: '텔레그램 서버 주소를 확인하지 못했습니다. 인터넷·DNS 연결을 확인해 주세요.',
+  telegram_tls_failed:
+    '텔레그램 서버의 보안 연결을 확인하지 못했습니다. 인증서 검증을 우회하지 않았습니다.',
+  telegram_network_failed:
+    '텔레그램 서버 연결에 실패했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+  telegram_redirect_blocked:
+    '예상하지 않은 다른 주소로의 이동 요청을 차단했습니다. 토큰을 다른 서버로 보내지 않았습니다.',
+  telegram_response_too_large: '텔레그램 응답이 허용 크기를 초과했습니다.',
+  telegram_response_incomplete: '텔레그램 응답이 중간에 끊겼습니다. 연결 상태를 확인해 주세요.',
+  telegram_response_invalid: '텔레그램에서 정상적인 API 응답을 받지 못했습니다.',
+  telegram_connection_interrupted:
+    '봇 확인 중 앱이 재시작됐습니다. 토큰을 다시 입력해 연결을 시작해 주세요.',
   telegram_busy: '텔레그램 요청을 처리 중입니다. 잠시 후 다시 시도해 주세요.',
   telegram_token_format: 'BotFather에서 발급한 봇 토큰 전체를 입력해 주세요.',
   telegram_token_invalid: '봇 토큰이 유효하지 않습니다. BotFather에서 확인해 주세요.',

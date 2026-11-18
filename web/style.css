@@ -927,3 +927,16 @@ dialog#entry-manager::backdrop {
   margin: 10px 0;
   overflow-wrap: anywhere;
 }
+/* Keep connection feedback next to the control on the long dashboard. */
+.telegram-feedback {
+  padding: 12px 14px;
+  border: 1px solid #a7c7d8;
+  border-radius: 8px;
+  background: #eef7fb;
+  color: #163e50;
+}
+.telegram-feedback.error {
+  border-color: #d4a0a0;
+  background: #fff1f1;
+  color: #902727;
+}

@@ -1,7 +1,8 @@
+import { request as httpsRequest } from 'node:https';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { readJson, writePrivate } from './config.js';
-import { ServiceError } from './auth.js';
+import { ServiceError, safeMessage } from './auth.js';
 import type { Store } from './store.js';
 import { collectNotices, currentNotices, notificationText } from './reward-notifications.js';
 
@@ -30,6 +31,12 @@ type State = {
     candidate?: Recipient;
   };
   deliveries: Delivery[];
+  connection?: {
+    at: number;
+    phase: 'bot' | 'webhook';
+    state: 'checking' | 'ready' | 'failed';
+    code?: string;
+  };
 };
 export class TelegramFailure extends ServiceError {
   constructor(
@@ -45,41 +52,97 @@ export type TelegramRequest = (
   method: string,
   body: Record<string, unknown>,
 ) => Promise<any>;
-export const telegramRequest: TelegramRequest = async (token, method, body) => {
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      redirect: 'error',
-      signal: AbortSignal.timeout(15000),
-    });
-    const data = (await response.json()) as any;
-    if (!response.ok || data.ok !== true) {
-      const code = Number(data.error_code || response.status);
-      throw new TelegramFailure(
-        code === 401
-          ? 'telegram_token_invalid'
-          : code === 403
-            ? 'telegram_bot_blocked'
-            : code === 409
-              ? 'telegram_updates_conflict'
-              : code === 429
-                ? 'telegram_rate_limited'
-                : 'telegram_rejected',
-        code >= 500,
-        code === 429
-          ? Math.max(1, Math.min(86400, Number(data.parameters?.retry_after) || 60))
-          : undefined,
+// Scope IPv4 to Telegram: avoid the observed dual-stack connection race without altering
+// global DNS/TLS settings or retrying a send whose result could already be committed.
+export function createTelegramRequest(request = httpsRequest): TelegramRequest {
+  return async (token, method, body) => {
+    const uncertain = method === 'sendMessage';
+    try {
+      const { status, data } = await new Promise<{ status: number; data: any }>(
+        (resolve, reject) => {
+          const fail = (code: string) => reject(new TelegramFailure(code, uncertain));
+          const req = request(
+            {
+              protocol: 'https:',
+              hostname: 'api.telegram.org',
+              port: 443,
+              path: `/bot${token}/${method}`,
+              method: 'POST',
+              family: 4,
+              rejectUnauthorized: true,
+              headers: { 'content-type': 'application/json' },
+              signal: AbortSignal.timeout(15000),
+            },
+            (response) => {
+              const status = response.statusCode || 0;
+              response.on('aborted', () => fail('telegram_response_incomplete'));
+              response.on('error', () => fail('telegram_response_incomplete'));
+              if (status >= 300 && status < 400) {
+                response.resume();
+                fail('telegram_redirect_blocked');
+                return;
+              }
+              const chunks: Buffer[] = [];
+              let length = 0;
+              response.on('data', (chunk: Buffer) => {
+                length += chunk.length;
+                if (length > 2_000_000) {
+                  fail('telegram_response_too_large');
+                  response.destroy();
+                  return;
+                }
+                chunks.push(chunk);
+              });
+              response.on('end', () => {
+                try {
+                  resolve({ status, data: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+                } catch {
+                  fail('telegram_response_invalid');
+                }
+              });
+            },
+          );
+          req.on('error', (error: NodeJS.ErrnoException) => {
+            fail(
+              ['ETIMEDOUT', 'ABORT_ERR'].includes(error.code || '')
+                ? 'telegram_network_timeout'
+                : ['ENOTFOUND', 'EAI_AGAIN'].includes(error.code || '')
+                  ? 'telegram_dns_failed'
+                  : /CERT|TLS|SSL/.test(error.code || '')
+                    ? 'telegram_tls_failed'
+                    : 'telegram_network_failed',
+            );
+          });
+          req.end(JSON.stringify(body));
+        },
       );
+      if (status < 200 || status >= 300 || data?.ok !== true) {
+        const code = Number(data?.error_code || status);
+        throw new TelegramFailure(
+          code === 401
+            ? 'telegram_token_invalid'
+            : code === 403
+              ? 'telegram_bot_blocked'
+              : code === 409
+                ? 'telegram_updates_conflict'
+                : code === 429
+                  ? 'telegram_rate_limited'
+                  : 'telegram_rejected',
+          uncertain && code >= 500,
+          code === 429
+            ? Math.max(1, Math.min(86400, Number(data?.parameters?.retry_after) || 60))
+            : undefined,
+        );
+      }
+      return data.result;
+    } catch (error) {
+      // Never surface raw request URLs, Telegram descriptions or token-bearing errors.
+      if (error instanceof TelegramFailure) throw error;
+      throw new TelegramFailure('telegram_network_failed', uncertain);
     }
-    return data.result;
-  } catch (error) {
-    // Never surface raw fetch errors, request URLs, Telegram descriptions or token-bearing response data.
-    if (error instanceof TelegramFailure) throw error;
-    throw new TelegramFailure('telegram_response_unknown', true);
-  }
-};
+  };
+}
+export const telegramRequest = createTelegramRequest();
 export class TelegramNotifications {
   private state: State;
   private path: string;
@@ -98,7 +161,11 @@ export class TelegramNotifications {
         d.status = 'unknown';
         d.code = 'telegram_interrupted';
       }
-    if (this.state.deliveries.length) this.save();
+    if (this.state.connection?.state === 'checking') {
+      this.state.connection.state = 'failed';
+      this.state.connection.code = 'telegram_connection_interrupted';
+    }
+    if (this.state.deliveries.length || this.state.connection) this.save();
   }
   private save() {
     writePrivate(this.path, this.state);
@@ -127,6 +194,14 @@ export class TelegramNotifications {
       this.state.pair && this.state.pair.expires > this.now() ? this.state.pair : undefined;
     return {
       configured: !!this.state.token,
+      connection: this.state.connection
+        ? {
+            ...this.state.connection,
+            message: this.state.connection.code
+              ? safeMessage(new ServiceError(this.state.connection.code))
+              : undefined,
+          }
+        : undefined,
       enabled: this.state.enabled,
       username: this.state.username,
       recipient: this.state.recipient?.label,
@@ -151,26 +226,46 @@ export class TelegramNotifications {
     if (!/^\d{5,20}:[A-Za-z0-9_-]{20,100}$/.test(token))
       throw new ServiceError('telegram_token_format');
     return this.exclusive(async () => {
-      const bot = await this.request(token, 'getMe', {});
-      if (bot?.is_bot !== true || !/^[A-Za-z0-9_]{5,32}$/.test(bot.username || ''))
-        throw new ServiceError('telegram_bot_invalid');
-      const hook = await this.request(token, 'getWebhookInfo', {});
-      if (typeof hook?.url !== 'string' || hook.url)
-        throw new ServiceError('telegram_dedicated_bot_required');
-      // Changing a bot revokes the former target and grant. Pairing alone never enables sends.
-      this.state = {
-        token,
-        username: bot.username,
-        enabled: false,
-        deliveries: [],
-        pair: {
-          nonce: randomBytes(24).toString('base64url'),
-          createdAt: this.now(),
-          expires: this.now() + 600000,
-        },
-      };
+      this.state.connection = { at: this.now(), phase: 'bot', state: 'checking' };
       this.save();
-      return this.publicInfo();
+      try {
+        const bot = await this.request(token, 'getMe', {});
+        if (bot?.is_bot !== true || !/^[A-Za-z0-9_]{5,32}$/.test(bot.username || ''))
+          throw new ServiceError('telegram_bot_invalid');
+        this.state.connection.phase = 'webhook';
+        this.save();
+        const hook = await this.request(token, 'getWebhookInfo', {});
+        if (typeof hook?.url !== 'string' || hook.url)
+          throw new ServiceError('telegram_dedicated_bot_required');
+        // Changing a bot revokes the former target and grant. Pairing alone never enables sends.
+        this.state = {
+          connection: { at: this.now(), phase: 'webhook', state: 'ready' },
+          token,
+          username: bot.username,
+          enabled: false,
+          deliveries: [],
+          pair: {
+            nonce: randomBytes(24).toString('base64url'),
+            createdAt: this.now(),
+            expires: this.now() + 600000,
+          },
+        };
+        this.save();
+        return this.publicInfo();
+      } catch (error) {
+        const code =
+          error instanceof ServiceError && /^telegram_[a-z_]+$/.test(error.code)
+            ? error.code
+            : 'telegram_network_failed';
+        this.state.connection = {
+          at: this.now(),
+          phase: this.state.connection!.phase,
+          state: 'failed',
+          code,
+        };
+        this.save();
+        throw new ServiceError(code);
+      }
     });
   }
   async findRecipient() {

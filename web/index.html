@@ -1027,6 +1027,79 @@
             ><button id="disable-reward-notifications" type="button">알림 끄기</button>
           </div>
           <p id="reward-notification-status" class="hint"></p>
+          <details id="telegram-settings">
+            <summary>텔레그램 개인 알림 연결</summary>
+            <p>
+              앱이 켜져 있으면 대시보드 탭을 닫아도 알립니다. 새 인스타 DM 자동 탐색 기능은 아직
+              별도 개발 항목입니다.
+            </p>
+            <ol>
+              <li>
+                <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">공식 BotFather</a
+                >에서 /newbot으로 쌀-GPT 전용 봇을 만들고 아래에 토큰을 입력하세요. 기존 서비스에서
+                사용하는 봇은 피하세요.
+              </li>
+              <li>
+                연결 링크로 본인 텔레그램 계정에서 시작(Start)을 누른 뒤 ‘본인 대화 확인’을
+                누르세요.
+              </li>
+              <li>표시된 대화가 본인 것인지 확인하고 테스트 전송·알림 사용을 선택하세요.</li>
+            </ol>
+            <form id="telegram-pair-form">
+              <label
+                >봇 토큰<input
+                  name="token"
+                  type="password"
+                  autocomplete="off"
+                  required
+                  placeholder="BotFather에서 받은 토큰"
+              /></label>
+              <button type="submit">토큰 저장·연결 링크 만들기</button>
+            </form>
+            <p class="hint">
+              토큰은 이 컴퓨터의 보호된 파일에 저장합니다. 알림에는 종류와 건수만 보내며 행사명·DM
+              원문·연락처·주소·쿠폰은 보내지 않습니다. 봇 교체 시 수신 대상과 알림 허용을 다시
+              확인합니다.
+            </p>
+            <div id="telegram-connection-status" aria-live="polite"></div>
+            <div class="card-actions">
+              <a id="telegram-pair-link" hidden target="_blank" rel="noreferrer"
+                >텔레그램에서 연결 시작 ↗</a
+              ><button id="telegram-find" type="button">본인 대화 확인</button>
+            </div>
+            <label class="check"
+              ><input id="telegram-confirm" type="checkbox" />표시된 개인 대화가 본인 것이며,
+              테스트와 이후 당첨·수령 알림을 받겠습니다.</label
+            >
+            <div class="card-actions">
+              <button id="telegram-activate" type="button">테스트 전송·알림 사용</button
+              ><button id="telegram-send-pending" type="button">현재 알림 전송 확인</button
+              ><button id="telegram-pause" type="button">텔레그램 알림 중지</button
+              ><button id="telegram-disconnect" type="button">봇 연결 해제</button>
+            </div>
+            <details>
+              <summary>최근 텔레그램 전송 내역</summary>
+              <div id="telegram-deliveries"></div>
+            </details>
+          </details>
+          <section aria-labelledby="reward-inbox-title">
+            <h3 id="reward-inbox-title">당첨·수령 알림함</h3>
+            <p id="reward-inbox-count"></p>
+            <div class="card-actions">
+              <label
+                >알림 표시<select id="reward-inbox-filter">
+                  <option value="all">전체</option>
+                  <option value="unread">안 읽은 알림</option>
+                </select></label
+              ><button id="reward-inbox-read" type="button">현재 표시한 알림 읽음</button>
+            </div>
+            <p class="hint">
+              읽음 표시는 회신·수령 완료나 텔레그램 발송 여부를 바꾸지 않습니다. 해결된 알림도
+              기록에 남습니다.
+            </p>
+            <div id="reward-inbox"></div>
+            <button id="reward-inbox-more" type="button" hidden>알림 20개 더 보기</button>
+          </section>
           <div id="outcome-alerts"></div>
           <div id="reward-followups"></div>
           <p class="hint">

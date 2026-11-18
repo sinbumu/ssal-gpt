@@ -1,3 +1,5 @@
+import { TelegramNotifications, type TelegramRequest } from './telegram.js';
+import { collectNotices, noticeInbox, readNotices } from './reward-notifications.js';
 import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
 import { StorageManager } from './storage.js';
@@ -129,11 +131,13 @@ export async function createApp(options: {
   dir: string;
   port: number;
   headless?: boolean;
+  telegramRequest?: TelegramRequest;
   webDir?: string;
   externalOpen?: (url: string) => Promise<void>;
 }) {
   const store = new Store(options.dir);
   const storage = new StorageManager(store);
+  const telegram = new TelegramNotifications(store, options.telegramRequest);
   const auth = new Auth(options.dir);
   const csrf = randomBytes(32).toString('base64url');
   let origin = '';
@@ -343,6 +347,8 @@ export async function createApp(options: {
         completedEntries: store.completedEntries(),
         outcomes: publicOutcomes(store),
         outcomeAlerts: outcomeAlerts(store, dayKey()),
+        rewardNotices: noticeInbox(store),
+        telegram: telegram.publicInfo(),
         operations: operations(store),
         schedules: schedules(store),
         selectionPolicy: selection(store),
@@ -431,12 +437,43 @@ export async function createApp(options: {
       );
       return send(response, 200, { ok: true });
     }
+    if (method === 'POST' && url.pathname === '/api/reward-notices/read') {
+      const ids = z.array(z.string().uuid()).max(2000).parse(data.ids);
+      readNotices(store, ids);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname.startsWith('/api/telegram/')) {
+      const action = url.pathname.slice('/api/telegram/'.length);
+      if (action === 'pair')
+        return send(
+          response,
+          200,
+          await telegram.pair(z.string().trim().max(150).parse(data.token)),
+        );
+      if (action === 'find') return send(response, 200, await telegram.findRecipient());
+      if (action === 'activate') {
+        z.literal(true).parse(data.confirmPersonalChat);
+        return send(
+          response,
+          200,
+          await telegram.activate(z.string().length(64).parse(data.confirmation)),
+        );
+      }
+      if (action === 'pause') return send(response, 200, await telegram.disable());
+      if (action === 'disconnect') return send(response, 200, await telegram.disable(true));
+      if (action === 'send-pending') {
+        await telegram.tick();
+        return send(response, 200, telegram.publicInfo());
+      }
+      throw new ServiceError('not_found', 404);
+    }
     if (method === 'POST' && url.pathname === '/api/outcomes') {
       const input = OutcomeSchema.parse(data);
       await validateUrl(input.sourceUrl, origin);
       if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
         throw new ServiceError('pause_before_updating_outcome');
       saveOutcome(store, input);
+      collectNotices(store);
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/outcomes/check') {
@@ -1265,6 +1302,7 @@ export async function createApp(options: {
   runner = new Runner(store, browser, model, origin);
   scheduler = new Scheduler(store, runner, () => manualNavigation);
   scheduler.start();
+  telegram.start();
   storage.start(() => runner.isBusy() || manualNavigation);
   return {
     origin,
@@ -1275,7 +1313,9 @@ export async function createApp(options: {
     runner,
     scheduler,
     storage,
+    telegram,
     async close() {
+      await telegram.close();
       storage.stop();
       scheduler.stop();
       if (runner.activeId) await runner.pause(runner.activeId);

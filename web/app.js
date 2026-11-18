@@ -572,6 +572,7 @@ function render() {
   renderSelection();
   renderOperations();
   renderOutcomeSummary();
+  renderTelegramAndInbox();
   $('result-attention').innerHTML = $('outcome-alerts').innerHTML;
   const auth = state.auth;
   if (state.browser) {
@@ -1909,4 +1910,114 @@ document.addEventListener('click', (event) => {
       button.disabled = false;
     }
   })();
+});
+
+let rewardInboxLimit = 20;
+let shownRewardNoticeIds = [];
+let telegramCandidateKey = '';
+const deliveryLabels = {
+  sending: '전송 중',
+  sent: '텔레그램 접수 확인',
+  unknown: '전송 결과 미확인 · 자동 재전송 안 함',
+  failed: '전송 중단',
+  retry: '요청 제한 · 재시도 대기',
+};
+function renderTelegramAndInbox() {
+  const t = state.telegram || {};
+  const candidateLabel = t.candidate || t.recipient || '';
+  const candidateKey = t.confirmation || '';
+  if (candidateKey !== telegramCandidateKey) {
+    $('telegram-confirm').checked = false;
+    telegramCandidateKey = candidateKey;
+  }
+  $('telegram-connection-status').textContent =
+    `${t.enabled ? '알림 사용 중' : t.configured ? '연결 준비·알림 중지' : '봇 미연결'}${t.username ? ' · @' + t.username : ''}${candidateKey ? ' · 수신 대화: ' + candidateLabel : ''}${t.pairExpires ? ' · 연결 링크 만료: ' + new Date(t.pairExpires).toLocaleTimeString() : ''}`;
+  $('telegram-pair-link').hidden = !t.pairUrl;
+  if (t.pairUrl) $('telegram-pair-link').href = t.pairUrl;
+  else $('telegram-pair-link').removeAttribute('href');
+  $('telegram-find').disabled = !t.pairUrl || t.busy;
+  $('telegram-activate').disabled = !candidateKey || t.busy || !$('telegram-confirm').checked;
+  $('telegram-send-pending').disabled = !t.enabled || t.busy;
+  $('telegram-pause').disabled = !t.enabled || t.busy;
+  $('telegram-disconnect').disabled = !t.configured || t.busy;
+  $('telegram-deliveries').innerHTML =
+    (t.deliveries || [])
+      .map(
+        (d) =>
+          `<p>${esc(new Date(d.at).toLocaleString())} · ${d.test ? '연결 테스트' : d.noticeIds.length + '개 알림'} · ${esc(deliveryLabels[d.status] || d.status)}${d.code ? '<br><small>' + esc(d.code) + '</small>' : ''}</p>`,
+      )
+      .join('') || '<p class="hint">아직 전송 내역이 없습니다.</p>';
+  const notices = state.rewardNotices || [];
+  const filtered =
+    $('reward-inbox-filter').value === 'unread' ? notices.filter((n) => !n.readAt) : notices;
+  const shown = filtered.slice(0, rewardInboxLimit);
+  shownRewardNoticeIds = shown.map((n) => n.id);
+  $('reward-inbox-count').textContent =
+    `안 읽음 ${notices.filter((n) => !n.readAt).length}개 · 전체 ${notices.length}개`;
+  $('reward-inbox').innerHTML =
+    shown
+      .map(
+        (n) =>
+          `<article class="event-card"><span class="pill ${n.readAt ? '' : 'warning'}">${n.readAt ? '읽음' : '안 읽음'}</span><h4>${esc(n.label)}</h4><p>${esc(n.title)}</p><p class="hint">${esc(new Date(n.createdAt).toLocaleString())} · ${n.active ? '현재 확인할 내용' : '지난 알림'}<br>텔레그램: ${esc(deliveryLabels[t.deliveryByNotice?.[n.id]] || (n.active && t.enabled ? '전송 대기' : '미전송'))}</p><div class="card-actions"><button data-outcome="${esc(n.eventId)}">결과·후속 처리 열기</button>${n.readAt ? '' : `<button data-notice-read="${esc(n.id)}">읽음으로 표시</button>`}</div></article>`,
+      )
+      .join('') ||
+    '<p class="hint">표시할 알림이 없습니다. 당첨·회신·수령 알림이 생기면 여기에 보관합니다.</p>';
+  $('reward-inbox-more').hidden = filtered.length <= rewardInboxLimit;
+  $('reward-inbox-read').disabled = !shown.some((n) => !n.readAt);
+}
+$('telegram-pair-form').onsubmit = guard(async (e) => {
+  e.preventDefault();
+  const input = $('telegram-pair-form').elements.token;
+  const token = input.value.trim();
+  input.value = '';
+  await api('/api/telegram/pair', { token });
+  await refresh();
+  toast('연결 링크를 열어 본인 텔레그램에서 시작을 누르세요. 아직 알림은 꺼져 있습니다.');
+});
+$('telegram-find').onclick = guard(async () => {
+  const r = await api('/api/telegram/find', {});
+  await refresh();
+  toast(
+    r.candidate
+      ? '개인 대화를 찾았습니다. 본인 대화인지 확인해 주세요.'
+      : '시작 메시지가 아직 없습니다. 연결 링크에서 시작 버튼을 누른 뒤 다시 확인하세요.',
+  );
+});
+$('telegram-confirm').onchange = () => renderTelegramAndInbox();
+$('telegram-activate').onclick = guard(async () => {
+  if (!$('telegram-confirm').checked) return;
+  const r = await api('/api/telegram/activate', {
+    confirmPersonalChat: true,
+    confirmation: state.telegram.confirmation,
+  });
+  await refresh();
+  toast(
+    r.enabled
+      ? '텔레그램이 테스트 메시지를 접수했습니다. 알림을 사용합니다.'
+      : '테스트 발송을 확인하지 못했습니다. 전송 내역을 확인하세요.',
+    !r.enabled,
+  );
+});
+for (const action of ['pause', 'disconnect', 'send-pending'])
+  $('telegram-' + action).onclick = guard(async () => {
+    await api('/api/telegram/' + action, {});
+    await refresh();
+  });
+$('reward-inbox-filter').onchange = () => {
+  rewardInboxLimit = 20;
+  renderTelegramAndInbox();
+};
+$('reward-inbox-more').onclick = () => {
+  rewardInboxLimit += 20;
+  renderTelegramAndInbox();
+};
+$('reward-inbox-read').onclick = guard(async () => {
+  await api('/api/reward-notices/read', { ids: shownRewardNoticeIds });
+  await refresh();
+});
+$('reward-inbox').onclick = guard(async (e) => {
+  const b = e.target.closest('[data-notice-read]');
+  if (!b) return;
+  await api('/api/reward-notices/read', { ids: [b.dataset.noticeRead] });
+  await refresh();
 });

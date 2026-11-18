@@ -49,6 +49,25 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  telegram_target_changed: '수신 대상이 바뀌었습니다. 표시된 개인 대화를 다시 확인하세요.',
+  telegram_busy: '텔레그램 요청을 처리 중입니다. 잠시 후 다시 시도해 주세요.',
+  telegram_token_format: 'BotFather에서 발급한 봇 토큰 전체를 입력해 주세요.',
+  telegram_token_invalid: '봇 토큰이 유효하지 않습니다. BotFather에서 확인해 주세요.',
+  telegram_bot_invalid: '봇 정보를 확인하지 못했습니다.',
+  telegram_dedicated_bot_required:
+    '다른 서비스에서 사용하는 webhook이 있습니다. 쌀-GPT 전용 새 봇을 사용하세요. 기존 연결은 변경하지 않았습니다.',
+  telegram_updates_conflict:
+    '다른 프로그램이 이 봇의 메시지를 읽고 있습니다. 전용 봇을 사용하세요.',
+  telegram_pair_expired: '연결 링크가 만료됐습니다. 봇 토큰을 다시 저장해 새 링크를 만드세요.',
+  telegram_recipient_required: '연결 링크로 본인 개인 대화에서 시작한 뒤 대화 확인을 눌러 주세요.',
+  telegram_updates_invalid: '텔레그램 연결 응답을 확인하지 못했습니다.',
+  telegram_bot_blocked:
+    '봇이 차단됐거나 대화에 접근할 수 없습니다. 차단을 해제하고 연결을 확인하세요.',
+  telegram_rate_limited: '텔레그램의 요청 제한입니다. 잠시 후 다시 확인하세요.',
+  telegram_rejected: '텔레그램이 요청을 거절했습니다. 연결 상태를 확인하세요.',
+  telegram_response_unknown:
+    '텔레그램 응답이 불명확합니다. 전송 이력을 확인하세요. 자동 재전송하지 않습니다.',
+
   form_origin_outside_grant:
     '위임한 사이트와 다른 출처로 이동해 멈췄습니다. 제출 후라면 완료 증거 없이 재제출하지 않습니다.',
   selection_changed_start_new_search:

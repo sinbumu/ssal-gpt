@@ -58,6 +58,7 @@ export type Question = {
   options: { id: string; label: string }[];
   multiple: boolean;
   maxChoices?: number;
+  maxLength?: number;
 };
 export const AnswerPlanSchema = z
   .object({
@@ -336,7 +337,11 @@ export function validateAnswer(q: Question, answer: string[]): string[] | undefi
       ? answer
       : undefined;
   if (q.kind === 'text')
-    return answer.length === 1 && (!q.required || !!answer[0]?.trim()) ? answer : undefined;
+    return answer.length === 1 &&
+      (!q.required || !!answer[0]?.trim()) &&
+      (q.maxLength === undefined || answer[0]!.length <= q.maxLength)
+      ? answer
+      : undefined;
   if (q.kind === 'rank' && answer.length !== q.options.length) return undefined;
   if (!q.multiple && answer.length > 1) return undefined;
   if (q.maxChoices && answer.length > q.maxChoices) return undefined;
@@ -365,6 +370,15 @@ export function resolveAnswer(
   }
   if (override) {
     const answer = validateAnswer(q, override);
+    if (
+      !answer &&
+      q.kind === 'text' &&
+      q.maxLength !== undefined &&
+      (override[0]?.length || 0) > q.maxLength
+    )
+      return {
+        source: `이전 답변은 ${override[0]!.length}자로, 사이트의 ${q.maxLength}자 제한에 맞게 다시 확인해야 합니다.`,
+      };
     const consent = isConsent && answer ? userConsentDecision(q, answer) : undefined;
     if (consent) recordConsent(state, q, consent, 'user');
     return { answer, source: 'user', consent };

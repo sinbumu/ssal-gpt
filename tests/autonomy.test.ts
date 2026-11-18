@@ -34,6 +34,23 @@ const plan: AnswerPlan = {
   answer: ['예'],
   reason: 'test',
 };
+test('site text limits reject oversized saved answers and drafts without truncating user intent', () => {
+  const state = createAutonomy(syntheticSettings, 'https://example.org');
+  const field = { ...q('응원 메시지 입력', 'text'), maxLength: 30 };
+  state.overrides[field.signature] = ['가'.repeat(98)];
+  const result = resolveAnswer(field, undefined, state, [], '');
+  assert.equal(result.answer, undefined);
+  assert.match(result.source, /98자.*30자/);
+  assert.equal(state.overrides[field.signature]![0]!.length, 98);
+  assert.equal(
+    reviewDraft(field, { ...plan, category: 'preference', answer: ['가'.repeat(31)] }),
+    undefined,
+  );
+  assert.deepEqual(
+    reviewDraft(field, { ...plan, category: 'preference', answer: ['가'.repeat(30)] }),
+    ['가'.repeat(30)],
+  );
+});
 test('a saved province maps only to a unique equivalent short label, never a city or ambiguous region', () => {
   const state = createAutonomy(syntheticSettings, 'https://example.org');
   state.profile.region = '경기도';

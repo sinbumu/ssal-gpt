@@ -21,6 +21,7 @@ import {
 import { privateDirectory } from './config.js';
 import { maskPrivateText } from './private-text.js';
 import { ServiceError } from './auth.js';
+import { acceptsSubmissionConfirm } from './submission-confirm.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
 import { isMoaform, moaformSnapshot } from './forms.js';
@@ -468,7 +469,10 @@ export class Browser {
     });
     // Manual login must leave native confirmation dialogs to the person at the browser.
     page.on('dialog', (dialog) => {
-      if (!this.manual) void dialog.dismiss().catch(() => {});
+      if (!this.manual)
+        void (acceptsSubmissionConfirm(dialog) ? dialog.accept() : dialog.dismiss()).catch(
+          () => {},
+        );
     });
     page.on('download', (download) => void download.cancel().catch(() => {}));
     page.on('close', () => {

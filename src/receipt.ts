@@ -9,6 +9,7 @@ import type { Dialog, Request, Response, Page, Frame } from 'playwright';
 import { maskPrivateText } from './private-text.js';
 import { durableResponseReader } from './response-body.js';
 import { randomUUID } from 'node:crypto';
+import { armSubmissionConfirm } from './submission-confirm.js';
 import { boundGoogleConfirmation, responseAcknowledgement } from './google-receipt.js';
 import {
   submissionRoute,
@@ -203,7 +204,7 @@ export async function watchSubmissionDialogs(
       reject('unsupported_request_type');
       return;
     }
-    const contract = targetRoute === 'naver-form-answer' ? targetRoute : undefined;
+    const contract = targetRoute === 'same-origin' ? undefined : targetRoute;
     if (!native || p !== page) {
       const match = submissionBodyMatch(
         r.postData() || '',
@@ -359,6 +360,8 @@ export async function watchSubmissionDialogs(
   context.on('response', response);
   context.on('requestfailed', requestFailed);
   context.on('dialog', dialog);
+  const disarmConfirm =
+    job.intent?.kind === 'submission' ? armSubmissionConfirm(page, valid) : () => {};
   return {
     async settle(signal: AbortSignal) {
       const until = Date.now() + 3000;
@@ -372,6 +375,7 @@ export async function watchSubmissionDialogs(
       signal.throwIfAborted();
     },
     close() {
+      disarmConfirm();
       save(true);
       open = false;
       context.off('page', newPage);

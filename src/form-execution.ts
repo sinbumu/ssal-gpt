@@ -4,6 +4,15 @@ import { hash } from './autonomy.js';
 // Definition, entered values and transport outcome have separate lifetimes.
 // No answers or raw DOM are stored in this journal.
 export type FormExecution = {
+  reveal?: {
+    state: 'opening' | 'verified' | 'blocked';
+    definition: string;
+    url: string;
+    target: string;
+    at: number;
+    count: number;
+    blockedRequests?: number;
+  };
   input?: {
     state: 'applying' | 'verified';
     definition: string;
@@ -40,6 +49,9 @@ export function pendingFormStep(job: Job) {
 }
 export function pendingFormAction(job: Job) {
   return job.uncertain || pendingFormStep(job);
+}
+export function pendingFormReveal(job: Job) {
+  return ['opening', 'blocked'].includes(job.formExecution?.reveal?.state || '');
 }
 export function beginFormAction(job: Job) {
   const state = formExecution(job);

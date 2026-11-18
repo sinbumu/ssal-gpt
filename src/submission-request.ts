@@ -1,10 +1,19 @@
 // Passive receipt routing only: never grants navigation, input or direct API writes.
-export type SubmissionContract = 'naver-form-answer';
+export type SubmissionContract = 'naver-form-answer' | 'campaign-g20-entry';
 export function submissionRoute(pageUrl: string, requestUrl: string) {
   try {
     const page = new URL(pageUrl),
       request = new URL(requestUrl);
     if (request.username || request.password) return;
+    if (
+      page.origin === 'https://campaign.daum-kg.net' &&
+      page.pathname === '/2028g20incheon/' &&
+      request.origin === page.origin &&
+      request.pathname === '/2028g20incheon/process/event_join_register.php' &&
+      !request.search &&
+      !request.hash
+    )
+      return 'campaign-g20-entry' as const;
     if (page.origin === request.origin) return 'same-origin' as const;
     const id = page.pathname.match(/^\/response\/([A-Za-z0-9_-]{5,100})\/?$/)?.[1];
     if (
@@ -61,9 +70,45 @@ export function submissionBodyMatch(
         };
         walk(data, 0);
       }
-    } else if (!contract && contentType.includes('application/x-www-form-urlencoded'))
+    } else if (
+      contract !== 'naver-form-answer' &&
+      contentType.includes('application/x-www-form-urlencoded')
+    )
       parts.push(...new URLSearchParams(body).values());
-    else return 'unsupported_body';
+    else if (contract !== 'naver-form-answer' && /^multipart\/form-data\s*;/i.test(contentType)) {
+      const boundary = contentType.match(/;\s*boundary=(?:"([^"\r\n]+)"|([^;\s]+))/i);
+      const token = boundary?.[1] || boundary?.[2];
+      if (!token || token.length > 70 || !/^[\w'()+,./:=? -]+$/.test(token))
+        return 'unsupported_body';
+      const delimiter = '--' + token;
+      if (
+        !body.startsWith(delimiter + '\r\n') ||
+        (!body.endsWith(delimiter + '--\r\n') && !body.endsWith(delimiter + '--'))
+      )
+        return 'unsupported_body';
+      const segments = body.split(delimiter).slice(1, -1);
+      if (segments.length > 500) return 'unsupported_body';
+      for (const segment of segments) {
+        if (!segment.startsWith('\r\n') || !segment.endsWith('\r\n')) return 'unsupported_body';
+        const split = segment.indexOf('\r\n\r\n');
+        if (split < 0 || split > 4096) return 'unsupported_body';
+        const headers = segment.slice(2, split);
+        const dispositions = headers.split('\r\n').filter((h) => /^content-disposition:/i.test(h));
+        if (dispositions.length !== 1) return 'unsupported_body';
+        const disposition = dispositions[0]!;
+        const name = disposition.match(
+          /^content-disposition:\s*form-data;\s*name="([^"\r\n]*)"(?:;|$)/i,
+        )?.[1];
+        if (name === undefined) return 'unsupported_body';
+        // Do not match answers against file bytes or authentication fields.
+        if (
+          /;\s*filename\*?=/i.test(disposition) ||
+          /token|password|cookie|authorization|secret/i.test(name)
+        )
+          continue;
+        parts.push(segment.slice(split + 4, -2));
+      }
+    } else return 'unsupported_body';
   } catch {
     return 'unsupported_body';
   }

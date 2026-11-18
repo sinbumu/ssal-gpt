@@ -96,6 +96,14 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       code,
     );
   const messages: Record<string, string> = {
+    form_button_missing: '현재 문항을 진행할 버튼을 인식하지 못했습니다. 입력·전송하지 않았습니다.',
+    form_button_unselected:
+      'AI 계획에 관찰한 진행 버튼이 연결되지 않았습니다. 입력·전송하지 않았습니다.',
+    multiple_active_form_dialogs: '열린 팝업이 여러 개여서 응모 폼을 구별하지 못했습니다.',
+    local_form_not_opened:
+      '진행 버튼을 눌렀지만 예상한 개인정보 팝업을 확인하지 못했습니다. 전송은 차단했고 버튼을 반복하지 않습니다.',
+    local_form_answers_changed:
+      '팝업을 열기 전에 확인한 입력값이 바뀌었습니다. 제출하지 않았습니다.',
     form_observation_unstable:
       '문항 구조가 계속 바뀌어 안정된 화면을 확보하지 못했습니다. 입력·전송하지 않았습니다.',
     step_intent_missing: '다음 이동의 실행 기록을 현재 화면과 연결하지 못했습니다.',

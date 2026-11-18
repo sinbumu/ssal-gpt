@@ -65,7 +65,7 @@ const keyKind = (key: string): ReceiptField['kind'] | undefined => {
   )
     return 'receipt';
   if (/^(?:success|issuccess|ok)$/.test(k)) return 'success';
-  if (/^(?:status|state|resultstatus)$/.test(k)) return 'status';
+  if (/^(?:status|state|resultstatus|result)$/.test(k)) return 'status';
   if (/^(?:error|errors|errormessage|errormsg)$/.test(k)) return 'error';
 };
 
@@ -138,8 +138,15 @@ export function classifyResponse(r: SubmissionResponse): ReceiptSignal {
     /^https:\/\/survey-api\.naver\.com\/api\/form\/surveys\/[A-Za-z0-9_-]{5,100}\/answers$/.test(
       r.url,
     );
+  // Public client reser.js treats result=ok from this exact registration POST
+  // as saved participation. Its thank-you dialog opens before that response,
+  // so the dialog alone is deliberately not an acknowledgement.
+  const campaignContract =
+    r.contract === 'campaign-g20-entry' &&
+    r.url === 'https://campaign.daum-kg.net/2028g20incheon/process/event_join_register.php';
   const contractSuccess =
-    naverContract && r.fields.some((f) => f.key === 'success' && f.value === 'true');
+    (naverContract && r.fields.some((f) => f.key === 'success' && f.value === 'true')) ||
+    (campaignContract && r.fields.some((f) => f.key === 'result' && f.value === 'ok'));
   const positive =
     contractSuccess ||
     outcomes.includes('accepted') ||
@@ -183,7 +190,11 @@ export function classifyResponse(r: SubmissionResponse): ReceiptSignal {
     flags: r.fields
       .filter((f) => f.kind === 'success' || f.kind === 'status')
       .map((f) => `${f.key}=${f.value}`),
-    contract: naverContract ? 'naver-form-answer' : undefined,
+    contract: naverContract
+      ? 'naver-form-answer'
+      : campaignContract
+        ? 'campaign-g20-entry'
+        : undefined,
     bodyState: r.bodyState,
   };
 }

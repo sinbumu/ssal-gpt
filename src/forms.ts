@@ -20,9 +20,11 @@ export type FormView = {
     label: string;
     action: string;
     form: number;
+    reveals?: string;
     providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
   }[];
   googlePage?: NonNullable<Awaited<ReturnType<typeof googleFormState>>>;
+  dialog?: string;
   // Transient UI is diagnostic, never part of the question definition hash.
   ui?: { invalidFields: number; validationAlerts: number; busy: boolean };
 };
@@ -56,6 +58,23 @@ export async function inspectForm(page: Page) {
   }
   const pending = page.evaluate(() => {
     const moa = location.hostname === 'answer.moaform.com';
+    const scope = {
+      shown(el: Element) {
+        const s = getComputedStyle(el);
+        return !!el.getClientRects().length && s.display !== 'none' && s.visibility !== 'hidden';
+      },
+      dialogId(el: Element) {
+        return `dialog-${[...document.querySelectorAll('dialog,[role=dialog]')].indexOf(el)}:${el.id}`;
+      },
+    };
+    const dialogs = [
+      ...document.querySelectorAll('dialog:modal,[role=dialog][aria-modal=true]'),
+    ].filter(scope.shown);
+    if (dialogs.length > 1) throw new Error('multiple_active_form_dialogs');
+    const activeDialog = dialogs[0];
+    const hiddenForms = [...document.querySelectorAll('dialog,[role=dialog]')].filter(
+      (el) => !scope.shown(el) && el.querySelector('form input,form textarea,form select'),
+    );
     const all = [
       ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
         'input,textarea,select',
@@ -63,8 +82,7 @@ export async function inspectForm(page: Page) {
     ];
     const helpers = {
       visible(el: Element) {
-        const s = getComputedStyle(el);
-        return !!el.getClientRects().length && s.display !== 'none' && s.visibility !== 'hidden';
+        return (!activeDialog || activeDialog.contains(el)) && scope.shown(el);
       },
       label(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) {
         // Some legacy lists have duplicated/broken for/id pairs. A sole visible
@@ -625,6 +643,16 @@ export async function inspectForm(page: Page) {
           b.matches('a[onclick]') &&
           b.getAttribute('href')?.startsWith('#') &&
           (!!b.closest('form') || forms.length === 0),
+        reveals:
+          !activeDialog &&
+          hiddenForms.length === 1 &&
+          groups.length > 0 &&
+          groups.every((g) => g.form === -1 && g.kind === 'text') &&
+          b.matches('a[role=button][href^="#"],button[type=button]') &&
+          (b.hasAttribute('data-join') ||
+            (hiddenForms[0]!.id && b.getAttribute('aria-controls') === hiddenForms[0]!.id))
+            ? scope.dialogId(hiddenForms[0]!)
+            : undefined,
         visible: helpers.visible(b),
         disabled: b.disabled,
         type: b.type,
@@ -650,14 +678,16 @@ export async function inspectForm(page: Page) {
         (b) =>
           b.visible &&
           !b.disabled &&
-          (b.anchor
-            ? b.localAnchor && /^(참여하기|응모하기|제출하기)$/i.test(b.label)
-            : ['submit', 'image'].includes(b.type) ||
-              /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label)),
+          (b.reveals ||
+            (b.anchor
+              ? b.localAnchor && /^(참여하기|응모하기|제출하기)$/i.test(b.label)
+              : ['submit', 'image'].includes(b.type) ||
+                /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label))),
       );
     return {
       groups,
       buttons,
+      dialog: activeDialog ? scope.dialogId(activeDialog) : undefined,
       forms: forms.map((f) => ({ action: f.action, method: f.method, target: f.target })),
       constraints: groups.map((g) =>
         g.custom
@@ -685,7 +715,7 @@ export async function inspectForm(page: Page) {
     const code =
       error instanceof Error &&
       error.message.match(
-        /^(?:page\.evaluate: )?(?:Error: )?(unlabelled_custom_choice|unsupported_choice_state|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
+        /^(?:page\.evaluate: )?(?:Error: )?(multiple_active_form_dialogs|unlabelled_custom_choice|unsupported_choice_state|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
       )?.[1];
     if (code) throw new ServiceError(code);
     throw error;
@@ -716,6 +746,10 @@ export async function inspectForm(page: Page) {
       required: g.required,
       multiple: g.multiple,
       picker: g.custom === 'picker' || undefined,
+      maxLength:
+        g.kind === 'text' && raw.constraints[i]?.[0]?.[3] != null
+          ? Number(raw.constraints[i]![0]![3])
+          : undefined,
       maxChoices: g.multiple
         ? Number((g.label + ' ' + g.description).match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) ||
           undefined
@@ -733,6 +767,7 @@ export async function inspectForm(page: Page) {
     label: b.label,
     action: b.action,
     form: b.form,
+    reveals: b.reveals,
     providerControl:
       b.providerControl ||
       (googlePage && b.form === googlePage.form
@@ -751,11 +786,13 @@ export async function inspectForm(page: Page) {
     questions,
     buttons,
     googlePage,
+    dialog: raw.dialog,
     fingerprint: hash({
       url: page.url(),
       questions,
       buttons,
       googlePage,
+      dialog: raw.dialog,
       forms: raw.forms,
       constraints: raw.constraints,
       buttonHandlers: raw.buttons.map((b) => [b.handler, b.href]),

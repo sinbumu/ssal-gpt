@@ -1,6 +1,6 @@
 import { completionMessage } from './completion.js';
 import { maskPrivateText } from './private-text.js';
-import type { SubmissionContract } from './submission-request.js';
+import type { SubmissionContract, SubmissionComparison } from './submission-request.js';
 
 export type ReceiptField = {
   kind: 'code' | 'message' | 'receipt' | 'success' | 'status' | 'error';
@@ -24,6 +24,7 @@ export type CaptureDiagnostics = {
   responses: number;
   failedRequests?: number;
   rejected: Record<string, number>;
+  bindingChecks?: SubmissionComparison[];
   popups: number;
   navigations: number;
   pageClosed: boolean;

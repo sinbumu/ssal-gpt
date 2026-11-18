@@ -511,7 +511,7 @@ function renderReceiptCapture(capture) {
           .map(([reason, count]) => `<li>${esc(reasons[reason] || reason)}: ${count}개</li>`)
           .join('')}</ul>`
       : ''
-  }</details>`;
+  }${(capture.bindingChecks || []).length ? `<ul>${capture.bindingChecks.map((check) => `<li>${esc(check.encoding)} · 답변 ${check.expected}개 중 ${check.matched}개 연결${check.phoneFormatting ? ` · 같은 전화번호 서식 보정 ${check.phoneFormatting}개` : ''}${check.unmatchedPhone || check.unmatchedText ? ` · 불일치: 전화번호 ${check.unmatchedPhone}개 / 기타 답변 ${check.unmatchedText}개` : ''}</li>`).join('')}</ul>` : ''}</details>`;
 }
 function renderFormExecution(j) {
   const f = j.formExecution;

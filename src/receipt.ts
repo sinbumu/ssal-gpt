@@ -14,6 +14,7 @@ import { boundGoogleConfirmation, responseAcknowledgement } from './google-recei
 import {
   submissionRoute,
   submissionBodyMatch,
+  type SubmissionAnswer,
   type SubmissionContract,
 } from './submission-request.js';
 import {
@@ -34,7 +35,7 @@ export async function watchSubmissionDialogs(
   browser: Browser,
   job: Job,
   destination: string,
-  ajaxValues?: string[],
+  ajaxValues?: SubmissionAnswer[],
 ) {
   const page = browser.page!,
     context = page.context();
@@ -75,7 +76,10 @@ export async function watchSubmissionDialogs(
   const failed = new Set<Request>();
   type Binding = { page: Page; contract?: SubmissionContract };
   const bindings = new Map<Request, Promise<Binding | undefined>>();
-  const values = [...new Set(ajaxValues?.filter((v) => v.trim()) || [])];
+  const answers = ajaxValues || [];
+  const values = [
+    ...new Set(answers.map((v) => (typeof v === 'string' ? v : v.value)).filter((v) => v.trim())),
+  ];
   const valid = () =>
     open &&
     pendingFormAction(job) &&
@@ -172,7 +176,7 @@ export async function watchSubmissionDialogs(
       if (
         r.isNavigationRequest() &&
         r.url() === destination &&
-        submissionBodyMatch(r.postData() || '', r.headers()['content-type'] || '', values) ===
+        submissionBodyMatch(r.postData() || '', r.headers()['content-type'] || '', answers) ===
           'matched'
       ) {
         const until = Date.now() + 300;
@@ -209,8 +213,11 @@ export async function watchSubmissionDialogs(
       const match = submissionBodyMatch(
         r.postData() || '',
         r.headers()['content-type'] || '',
-        values,
+        answers,
         contract,
+        (comparison) => {
+          diagnostics.bindingChecks = [...(diagnostics.bindingChecks || []), comparison].slice(-3);
+        },
       );
       if (match !== 'matched') {
         reject(match);

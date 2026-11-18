@@ -18,6 +18,7 @@ for (const scenario of ['accepted', 'no-dialog', 'changed-background'] as const)
     app.scheduler.stop();
     const config = {
       ...syntheticSettings,
+      profile: { ...syntheticSettings.profile, phone: '01000000000' },
       policy: { ...syntheticSettings.policy, finalSubmit: 'review' as const },
     };
     app.store.setSettings('autonomy', config);
@@ -29,6 +30,7 @@ for (const scenario of ['accepted', 'no-dialog', 'changed-background'] as const)
       <dialog id="entry"><form id="form" method="dialog"><label>이름<input name="name"></label>
       <label>전화번호<input name="phone"></label></form><button type="submit" form="form">참여하기</button></dialog>
       <script>window.opens=0;
+      form.phone.addEventListener('blur',()=>{form.phone.value=form.phone.value.replace(/^(01\\d)(\\d{3,4})(\\d{4})$/, '$1-$2-$3');});
       memo.addEventListener('input',()=>{ fetch('/demo/leak',{method:'POST',body:memo.value}).catch(()=>{}); });
       document.getElementById('open').addEventListener('click',e=>{ e.preventDefault(); window.opens++;
         fetch('/demo/leak?memo='+encodeURIComponent(memo.value)).catch(()=>{});
@@ -45,6 +47,7 @@ for (const scenario of ['accepted', 'no-dialog', 'changed-background'] as const)
           transmissions++;
           assert.equal(r.request().url(), app.origin + '/demo/save');
           assert.match(r.request().postData()!, /name="memo"\r\n\r\n가상 응원 문구/);
+          assert.match(r.request().postData()!, /name="phone"\r\n\r\n010-0000-0000/);
           return r.fulfill({
             contentType: 'application/json',
             body: '{"code":"0000","msg":"응모가 완료되었습니다."}',
@@ -164,6 +167,7 @@ for (const scenario of ['accepted', 'no-dialog', 'changed-background'] as const)
       assert.equal(saved.status, 'completed', saved.note);
       assert.equal(transmissions, 1);
       assert.equal(saved.receiptCapture?.requests, 1);
+      assert.equal(saved.receiptCheck?.capture?.bindingChecks?.[0]?.phoneFormatting, 1);
     } finally {
       await app.close();
       rmSync(dir, { recursive: true, force: true });

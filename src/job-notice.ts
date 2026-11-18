@@ -203,6 +203,25 @@ export function jobNotice(job: Job): JobNotice | undefined {
       phase: 'form_receipt',
       at: job.receiptCheck.at,
     };
+  const capture = job.receiptCheck?.capture;
+  if (
+    (job.uncertain || job.status === 'submission_unknown') &&
+    capture &&
+    capture.observedPosts > 0 &&
+    capture.matchedRequests === 0 &&
+    (capture.rejected.payload_mismatch || capture.rejected.unsupported_body)
+  )
+    return {
+      category: 'technical',
+      title: '기술 오류 · 제출 응답 연결 실패',
+      reason:
+        '브라우저의 전송 요청을 승인된 답변과 연결하지 못해 서버 응답을 접수 증거로 저장하지 못했습니다. 실제 응모 실패를 뜻하지 않습니다.',
+      nextAction:
+        '추가 답변이나 재제출은 하지 마세요. 남아 있는 화면·접수 기록으로 확인하거나 미확인 상태로 보관하세요. 저장하지 못한 과거 서버 응답은 자동 복원할 수 없습니다.',
+      code: 'receipt_request_unbound',
+      phase: 'form_receipt',
+      at: job.receiptCheck!.at,
+    };
   if (job.uncertain || job.status === 'submission_unknown')
     return {
       category: 'user',

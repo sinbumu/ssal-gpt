@@ -115,6 +115,33 @@ test('unverified Google Next shows a page transition issue instead of final rece
   job.intent!.kind = 'submission';
   assert.notEqual(jobNotice(job)?.code, 'form_step_unverified');
 });
+
+test('unbound submission response is a technical evidence failure, not a request for more answers', () => {
+  const job = {
+    status: 'submission_unknown',
+    uncertain: true,
+    note: 'unknown',
+    receiptCheck: {
+      at: 1,
+      capture: {
+        observedPosts: 1,
+        matchedRequests: 0,
+        responses: 0,
+        rejected: { payload_mismatch: 1 },
+      },
+    },
+  } as unknown as Job;
+  const notice = jobNotice(job)!;
+  assert.equal(notice.category, 'technical');
+  assert.equal(notice.code, 'receipt_request_unbound');
+  assert.match(notice.reason, /실제 응모 실패를 뜻하지 않습니다/);
+  assert.match(notice.nextAction, /재제출은 하지/);
+  job.receiptCheck!.capture!.matchedRequests = 1;
+  assert.equal(jobNotice(job)!.category, 'user');
+  job.receiptCheck!.capture!.matchedRequests = 0;
+  job.receiptCheck!.capture!.rejected = { unrelated_tab: 1 };
+  assert.equal(jobNotice(job)!.category, 'user');
+});
 test('comment read-control failure is technical while personal review and unknown receipt retain priority', () => {
   const job = {
     status: 'paused',

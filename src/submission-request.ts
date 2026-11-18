@@ -1,5 +1,14 @@
 // Passive receipt routing only: never grants navigation, input or direct API writes.
 export type SubmissionContract = 'naver-form-answer' | 'campaign-g20-entry';
+export type SubmissionAnswer = string | { value: string; kind: 'phone' };
+export type SubmissionComparison = {
+  encoding: 'json' | 'urlencoded' | 'multipart';
+  expected: number;
+  matched: number;
+  phoneFormatting: number;
+  unmatchedPhone: number;
+  unmatchedText: number;
+};
 export function submissionRoute(pageUrl: string, requestUrl: string) {
   try {
     const page = new URL(pageUrl),
@@ -33,16 +42,25 @@ export function submissionRoute(pageUrl: string, requestUrl: string) {
 export function submissionBodyMatch(
   body: string,
   contentType: string,
-  values: string[],
+  values: SubmissionAnswer[],
   contract?: SubmissionContract,
+  onComparison?: (comparison: SubmissionComparison) => void,
 ): 'matched' | 'insufficient_values' | 'unsupported_body' | 'payload_mismatch' {
-  const approved = [...new Set(values.filter((v) => v.trim()))];
+  const distinct = new Map<string, { value: string; kind: 'text' | 'phone' }>();
+  for (const v of values) {
+    const answer = typeof v === 'string' ? { value: v, kind: 'text' as const } : v;
+    if (!answer.value.trim()) continue;
+    // A duplicate value is not a second independent binding fact. If one
+    // occurrence is ordinary text, retain its stricter matching semantics.
+    if (!distinct.has(answer.value) || answer.kind === 'text') distinct.set(answer.value, answer);
+  }
+  const approved = [...distinct.values()];
   // A Naver final page may contain only a phone field. The exact survey POST
   // route already supplies identity; require one substantial exact answer there.
   if (
     contract === 'naver-form-answer'
-      ? !approved.length || !approved.some((v) => v.trim().length >= 6)
-      : approved.length < 2 || !approved.some((v) => v.length >= 3)
+      ? !approved.length || !approved.some((v) => v.value.trim().length >= 6)
+      : approved.length < 2 || !approved.some((v) => v.value.length >= 3)
   )
     return 'insufficient_values';
   if (Buffer.byteLength(body) > 65536) return 'unsupported_body';
@@ -114,9 +132,40 @@ export function submissionBodyMatch(
   }
   const normalize = (s: string) =>
     s.replace(/\r\n/g, '\n').replace(/[ ]+/g, ' ').replace(/\n\n+/g, '\n\n').trim();
-  return approved.every((v) =>
-    parts.some((p) => (contract ? normalize(p) === normalize(v) : p.includes(v))),
-  )
-    ? 'matched'
-    : 'payload_mismatch';
+  // Only a field identified as a phone may equate formatting separators.
+  // Digits, country prefixes and all non-phone text retain the prior checks.
+  const phone = (v: string) => {
+    const digits = v.replace(/[\s-]/g, '');
+    return /^01[016789]\d{7,8}$/.test(digits) && /^[\d\s-]+$/.test(v) ? digits : undefined;
+  };
+  const exact = (p: string, v: string) =>
+    contract ? normalize(p) === normalize(v) : p.includes(v);
+  const comparison: SubmissionComparison = {
+    encoding: contentType.includes('application/json')
+      ? 'json'
+      : contentType.includes('application/x-www-form-urlencoded')
+        ? 'urlencoded'
+        : 'multipart',
+    expected: approved.length,
+    matched: 0,
+    phoneFormatting: 0,
+    unmatchedPhone: 0,
+    unmatchedText: 0,
+  };
+  for (const answer of approved) {
+    const literal = parts.some((p) =>
+      answer.kind === 'phone' ? normalize(p) === normalize(answer.value) : exact(p, answer.value),
+    );
+    const formatted =
+      !literal &&
+      answer.kind === 'phone' &&
+      !!phone(answer.value) &&
+      parts.some((p) => phone(p) === phone(answer.value));
+    if (literal || formatted) comparison.matched++;
+    if (formatted) comparison.phoneFormatting++;
+    if (!literal && !formatted)
+      comparison[answer.kind === 'phone' ? 'unmatchedPhone' : 'unmatchedText']++;
+  }
+  onComparison?.(comparison);
+  return comparison.matched === comparison.expected ? 'matched' : 'payload_mismatch';
 }

@@ -5,6 +5,87 @@ import { classifyResponse, responseFields } from '../src/submission-response.js'
 const page = 'https://form.naver.com/response/fixtureSurvey';
 const endpoint = 'https://survey-api.naver.com/api/form/surveys/fixtureSurvey/answers';
 const values = ['가상 참가자', '01000000000'];
+test('only typed phone answers match the same digits after site formatting, with value-free diagnostics', async () => {
+  const approved = [values[0], { value: values[1], kind: 'phone' as const }];
+  assert.equal(
+    submissionBodyMatch('{"phone":"01000000000"}', 'application/json', [
+      values[1],
+      { value: values[1], kind: 'phone' },
+    ]),
+    'insufficient_values',
+  );
+  for (const format of ['json', 'urlencoded', 'multipart']) {
+    for (const [phone, expected] of [
+      ['010-0000-0000', 'matched'],
+      ['010 0000 0000', 'matched'],
+      ['010-0000-0001', 'payload_mismatch'],
+      ['prefix 010-0000-0000', 'payload_mismatch'],
+      ['+82 10-0000-0000', 'payload_mismatch'],
+    ]) {
+      const payload = { name: values[0], phone };
+      const form = new FormData();
+      Object.entries(payload).forEach(([k, v]) => form.set(k, v));
+      const request = new Request('https://example.org', {
+        method: 'POST',
+        body:
+          format === 'multipart'
+            ? form
+            : format === 'urlencoded'
+              ? new URLSearchParams(payload)
+              : JSON.stringify(payload),
+        ...(format === 'json' ? { headers: { 'Content-Type': 'application/json' } } : {}),
+      });
+      const body = await request.text(),
+        type = request.headers.get('content-type')!;
+      const checks: unknown[] = [];
+      assert.equal(
+        submissionBodyMatch(body, type, approved, undefined, (c) => checks.push(c)),
+        expected,
+      );
+      assert.equal(
+        submissionBodyMatch(body, type, values),
+        'payload_mismatch',
+        'untyped values must not receive phone normalization',
+      );
+      assert.ok(!JSON.stringify(checks).includes('010'));
+      assert.ok(!JSON.stringify(checks).includes(values[0]));
+      if (expected === 'matched')
+        assert.deepEqual(checks, [
+          {
+            encoding: format,
+            expected: 2,
+            matched: 2,
+            phoneFormatting: 1,
+            unmatchedPhone: 0,
+            unmatchedText: 0,
+          },
+        ]);
+    }
+  }
+  assert.equal(
+    submissionBodyMatch(
+      JSON.stringify({ name: values[0], phone: '010-0000-0000' }),
+      'application/json',
+      approved,
+      'naver-form-answer',
+    ),
+    'unsupported_body',
+  );
+  const body = JSON.stringify({ items: [{ value: values[0] }, { value: '010-0000-0000' }] });
+  assert.equal(
+    submissionBodyMatch(body, 'application/json', approved, 'naver-form-answer'),
+    'matched',
+  );
+  assert.equal(
+    submissionBodyMatch(
+      body.replace('010-0000-0000', '010-0000-0001'),
+      'application/json',
+      approved,
+      'naver-form-answer',
+    ),
+    'payload_mismatch',
+  );
+});
 test('verified campaign receipt code applies only to the bound registration contract', () => {
   const root = 'https://campaign.daum-kg.net/2028g20incheon/';
   const target = root + 'process/event_join_register.php';

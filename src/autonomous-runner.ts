@@ -21,6 +21,7 @@ import {
   redact,
   redactContext,
   resolveAnswer,
+  personalKey,
   verificationQuestion,
   settings,
   otherTextCondition,
@@ -680,7 +681,13 @@ export async function runAutonomous(
             browser,
             job,
             button.action,
-            view.questions.filter((q) => q.kind === 'text').flatMap((q) => answers.get(q.id) || []),
+            view.questions
+              .filter((q) => q.kind === 'text')
+              .flatMap((q) =>
+                (answers.get(q.id) || []).map((value) =>
+                  personalKey(q) === 'phone' ? { value, kind: 'phone' as const } : value,
+                ),
+              ),
           );
         }
         phase = intermediate ? 'form_transition' : 'form_submission';

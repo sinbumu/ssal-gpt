@@ -15,6 +15,7 @@ import {
 } from './model-output.js';
 const streamSummaries = new WeakMap<object, StreamSummary>();
 import { StreamOutput } from './stream-output.js';
+import { fromToolArguments, strictToolSchema } from './model-schema.js';
 
 export const CandidateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -44,7 +45,12 @@ export const CandidateSchema = z.object({
   announcementNote: z.string().max(500).optional(),
   startsAt: z.string().datetime({ offset: true }).nullable().optional(),
   selectionMethod: z.enum(['draw', 'first_come', 'judged', 'all', 'unknown']).optional(),
-  entryType: z.enum(['survey', 'quiz', 'social', 'mixed', 'other']).optional(),
+  entryType: z
+    .enum(['survey', 'quiz', 'social', 'mixed', 'other'])
+    .describe(
+      'App task classification, not a literal site label: survey=questionnaire, quiz=knowledge quiz, social=only SNS actions, mixed=SNS plus form/quiz, other=another known type. Infer from observed required tasks. Use null if unknown; never invent another enum value or use other for unknown.',
+    )
+    .optional(),
   eligibility: z
     .array(
       z.object({
@@ -122,8 +128,10 @@ export const StepSchema = z
   })
   .strict();
 export type Step = z.infer<typeof StepSchema>;
+const domainParameters = z.toJSONSchema(StepSchema, { target: 'draft-7' });
+export const stepToolParameters = strictToolSchema(domainParameters);
 export const modelRepairFeedback = (last?: ModelDiagnostic) =>
-  repairFeedback(last, z.toJSONSchema(StepSchema, { target: 'draft-7' }));
+  repairFeedback(last, domainParameters);
 export type Inference = {
   step: Step;
   inputTokens: number;
@@ -170,17 +178,14 @@ export function parseModelOutput(result: any, elapsedMs: number): Inference {
   } catch {
     fail('invalid_action_json', { ...details, reason: 'arguments_json' });
   }
-  const parsed = StepSchema.safeParse(args);
+  const parsed = StepSchema.safeParse(fromToolArguments(args, domainParameters));
   if (!parsed.success)
     throw new ModelOutputError(
       'invalid_action_schema',
       {
         ...details,
         reason: 'arguments_schema',
-        issues: schemaIssues(
-          parsed.error.issues,
-          z.toJSONSchema(StepSchema, { target: 'draft-7' }),
-        ),
+        issues: schemaIssues(parsed.error.issues, domainParameters),
       },
       elapsedMs,
       usage,
@@ -339,9 +344,9 @@ export class Model {
                 type: 'function',
                 name: 'step',
                 description:
-                  'Select exactly one next action using the current observation. Never invent completion or event facts.',
-                strict: false,
-                parameters: z.toJSONSchema(StepSchema, { target: 'draft-7' }),
+                  'Select exactly one next action using the current observation. Never invent completion or event facts. Use null for optional fields that are unknown or irrelevant to this action; use empty arrays for required lists with no items.',
+                strict: true,
+                parameters: stepToolParameters,
               },
             ],
           },

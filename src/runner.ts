@@ -645,7 +645,7 @@ export class Runner {
           timezone: 'Asia/Seoul',
           goal: job.goal,
           automaticEntryScope: job.prepareOne
-            ? 'Record observed task dependencies and eligibility, startsAt, selectionMethod, entryType when stated. Never invent qualifications. A supported form or social chain can be prepared for separate user task approval using executionRoutes. No purchases, physical visits or friend tagging.'
+            ? 'Record observed task dependencies and explicitly stated eligibility, startsAt and selectionMethod. Classify entryType from observed required tasks using only survey, quiz, social, mixed or other; use null if unknown. It is an app classification, not a source quote. Never invent qualifications. A supported form or social chain can be prepared for separate user task approval using executionRoutes. No purchases, physical visits or friend tagging.'
             : undefined,
           executionRoutes: {
             instagram: instagramBrowser(this.store).enabled

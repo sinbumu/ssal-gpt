@@ -43,6 +43,7 @@ export type Job = {
   dmScope?: import('./instagram-dm.js').DmScope;
   dmReadDiagnostics?: {
     fallback?: 'inbox_search';
+    reload?: boolean;
     organizer: string;
     stage: string;
     blocked: { method: string; route: string; operation: string }[];

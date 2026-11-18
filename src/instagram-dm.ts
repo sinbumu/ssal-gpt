@@ -178,6 +178,34 @@ export async function inspectDm(page: Page, actor: string, organizer: string) {
             return '';
           }
         },
+        profileOnly(root: Element, organizer: string): boolean {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          const remaining: string[] = [];
+          while (walker.nextNode()) {
+            const node = walker.currentNode,
+              parent = node.parentElement,
+              text = (node.textContent || '').trim();
+            if (
+              !parent ||
+              !text ||
+              !helpers.visible(parent) ||
+              parent.closest(
+                'button,textarea,input,[contenteditable=true],[role=button],h1,h2,h3,[role=heading]',
+              )
+            )
+              continue;
+            const link = parent.closest('a[href]');
+            if (link && helpers.pathHandle(link) === organizer) continue;
+            if (
+              text === organizer ||
+              /^·?\s*Instagram$/i.test(text) ||
+              (text.includes(organizer) && /Instagram/i.test(text))
+            )
+              continue;
+            remaining.push(text);
+          }
+          return remaining.length === 0;
+        },
       };
       const { visible, pathHandle } = helpers;
       const links = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')].filter(visible);
@@ -195,6 +223,7 @@ export async function inspectDm(page: Page, actor: string, organizer: string) {
             .filter(Boolean),
         ),
       ];
+      if (!actors.length) return { state: 'account_unavailable' as const };
       if (actors.length !== 1 || actors[0] !== actor) return { state: 'account_mismatch' as const };
       const editors = [
         ...document.querySelectorAll<HTMLElement>('textarea,[contenteditable=true],[role=textbox]'),
@@ -214,30 +243,60 @@ export async function inspectDm(page: Page, actor: string, organizer: string) {
       const editor = editors[0]!;
       // Smallest ancestor containing both the composer and an exact recipient profile link.
       let root = editor.parentElement;
+      let headerVerified = false;
       while (root && root !== document.body) {
         const exact = [...root.querySelectorAll('a[href]')].filter(
           (a) => visible(a) && pathHandle(a) === organizer,
         );
+        headerVerified = exact.some((a) => {
+          // Message avatar links use a similar label. A conversation header must
+          // have its own info/call/expand/close controls, outside the composer.
+          const ar = a.getBoundingClientRect();
+          return [...root!.querySelectorAll('button,[role=button]')].some((c) => {
+            const cr = c.getBoundingClientRect();
+            return (
+              visible(c) &&
+              !c.closest('textarea,[contenteditable=true]') &&
+              Math.abs(cr.top + cr.height / 2 - (ar.top + ar.height / 2)) < 64 &&
+              cr.bottom < editor.getBoundingClientRect().top &&
+              /^(대화 정보|음성 통화|영상 통화|펼쳐보기|닫기|Chat info|Audio call|Video call|Expand|Close)$/i.test(
+                c.getAttribute('aria-label') ||
+                  c.querySelector('svg[aria-label]')?.getAttribute('aria-label') ||
+                  c.textContent?.trim() ||
+                  '',
+              )
+            );
+          });
+        });
+        if (headerVerified) break;
+        // Empty first-contact threads have no call/info controls. Accept their
+        // named header only provisionally; below we require a profile-only body.
         if (
           exact.some(
             (a) =>
               /프로필 페이지 열기|open.*profile/i.test(a.getAttribute('aria-label') || '') &&
               a.getBoundingClientRect().top < editor.getBoundingClientRect().top,
-          )
+          ) &&
+          root.querySelector('h1,h2,h3,[role=heading]') &&
+          exact.some((a) => /^(프로필 보기|View profile)$/i.test(a.textContent?.trim() || '')) &&
+          helpers.profileOnly(root, organizer)
         )
           break;
         root = root.parentElement;
       }
-      if (!root || root === document.body || root.getBoundingClientRect().width > innerWidth * 0.86)
-        return { state: 'scope_unverified' as const };
+      if (!root || root === document.body)
+        return { state: 'scope_unverified' as const, problem: 'header' };
+      if (root.getBoundingClientRect().width > innerWidth * 0.86)
+        return { state: 'scope_unverified' as const, problem: 'width' };
       const r = root.getBoundingClientRect();
       if (r.x < 160 || r.y < 0 || r.bottom > innerHeight + 2)
-        return { state: 'scope_unverified' as const };
+        return { state: 'scope_unverified' as const, problem: 'bounds' };
       const otherProfiles = [...root.querySelectorAll('a[href]')]
         .filter(visible)
         .map(pathHandle)
         .filter((h) => h && ![organizer, actor].includes(h));
-      if (otherProfiles.length) return { state: 'scope_unverified' as const };
+      if (otherProfiles.length)
+        return { state: 'scope_unverified' as const, problem: 'other_profiles' };
       root.setAttribute('data-ssal-dm-pane', 'scoped');
       // Incoming rows need visible sender identity; outgoing/unknown rows never reach the model.
       const rows = [...root.querySelectorAll<HTMLElement>('[role=row],[role=listitem]')].filter(
@@ -275,34 +334,59 @@ export async function inspectDm(page: Page, actor: string, organizer: string) {
           unknown++;
         }
       }
+      // Current Instagram uses generic message containers with sender-labelled
+      // reply/reaction controls rather than ARIA rows. The controls identify the
+      // sender; we only READ their smallest message container, never click them.
+      const senderControls = [...root.querySelectorAll<HTMLElement>('[aria-label]')].filter((e) =>
+        (e.getAttribute('aria-label') || '').toLowerCase().startsWith(organizer + '님의 메시지'),
+      );
+      const containers = new Set<HTMLElement>();
+      for (const control of senderControls) {
+        for (
+          let p = control.parentElement, depth = 0;
+          p && p !== root && depth < 12;
+          p = p.parentElement, depth++
+        ) {
+          if (p.contains(editor)) break;
+          const recipientLinks = [...p.querySelectorAll('a[href]')].map(pathHandle).filter(Boolean);
+          const actions = [...p.querySelectorAll('[aria-label]')]
+            .map((e) => e.getAttribute('aria-label') || '')
+            .filter((v) => /님의 메시지/.test(v));
+          if (
+            recipientLinks.includes(organizer) &&
+            recipientLinks.every((h) => h === organizer) &&
+            actions.every((v) => v.toLowerCase().startsWith(organizer + '님의 메시지')) &&
+            p.innerText.trim().length > 20
+          ) {
+            containers.add(p);
+            break;
+          }
+        }
+      }
+      for (const p of containers) {
+        if ([...containers].some((other) => other !== p && p.contains(other))) continue;
+        const texts: string[] = [];
+        const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        while (w.nextNode()) {
+          const el = w.currentNode.parentElement;
+          if (
+            el &&
+            visible(el) &&
+            !el.closest('button,[role=button],a,svg,textarea,[contenteditable=true]')
+          )
+            texts.push(w.currentNode.textContent || '');
+        }
+        const text = texts.join('').trim().slice(0, 4000);
+        if (text && !incoming.includes(text)) {
+          p.setAttribute('data-ssal-dm-incoming', 'true');
+          incoming.push(text);
+        }
+      }
       // Never classify an unrecognised conversation as empty.
       const rendered = root.innerText.trim();
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      const remaining: string[] = [];
-      while (walker.nextNode()) {
-        const node = walker.currentNode,
-          parent = node.parentElement,
-          text = (node.textContent || '').trim();
-        if (
-          !parent ||
-          !text ||
-          !visible(parent) ||
-          parent.closest(
-            'button,textarea,input,[contenteditable=true],[role=button],h1,h2,h3,[role=heading]',
-          )
-        )
-          continue;
-        const link = parent.closest('a[href]');
-        if (link && pathHandle(link) === organizer) continue;
-        if (
-          text === organizer ||
-          /^·?\s*Instagram$/i.test(text) ||
-          (text.includes(organizer) && /Instagram/i.test(text))
-        )
-          continue;
-        remaining.push(text);
-      }
-      const profileOnly = remaining.length === 0;
+      const profileOnly = helpers.profileOnly(root, organizer);
+      if (!headerVerified && (!profileOnly || incoming.length))
+        return { state: 'scope_unverified' as const, problem: 'nonempty_header' };
       return {
         state: 'scoped' as const,
         incoming,
@@ -341,7 +425,7 @@ export function assessDm(
     ) && !/미당첨|당첨되지|당첨.*(?:경우|라면|예정)|not.*won/i.test(a.quote);
   const requested = a.requested.filter((field) =>
     ({
-      name: /이름|성명|name/i,
+      name: /이름|성명|성함|name/i,
       phone: /연락처|휴대폰|전화|phone/i,
       address: /주소|address/i,
       postalCode: /우편|postal/i,
@@ -498,7 +582,8 @@ export async function runDmCheck(
             !r.step.dmAssessment
           )
             throw new ServiceError('dm_assessment_unavailable');
-          Object.assign(result, assessDm(event, result, read.messages, r.step.dmAssessment));
+          const assessment = r.step.dmAssessment;
+          Object.assign(result, assessDm(event, result, read.messages, assessment));
         }
       } catch (error) {
         if (signal.aborted) throw error;

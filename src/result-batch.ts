@@ -284,7 +284,12 @@ export function publicResultBatch(store: Store) {
     metrics: {
       automaticRecoveries: jobs.reduce(
         (n, j) =>
-          n + (j.dmReadDiagnostics || []).filter((d) => d.fallback && d.stage === 'scoped').length,
+          n +
+          (j.dmReadDiagnostics || []).reduce(
+            (count, d) =>
+              count + (d.stage === 'scoped' ? Number(!!d.fallback) + Number(!!d.reload) : 0),
+            0,
+          ),
         0,
       ),
       calls: usage.length,

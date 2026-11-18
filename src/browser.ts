@@ -150,6 +150,7 @@ export class Browser {
   private dmReadPage?: Page;
   dmReadDiagnostics: {
     fallback?: 'inbox_search';
+    reload?: boolean;
     stage: string;
     blocked: { method: string; route: string; operation: string }[];
   } = { stage: 'idle', blocked: [] };
@@ -1058,8 +1059,33 @@ export class Browser {
         }
       }
       signal.throwIfAborted();
+      // Instagram sometimes opens the right thread but leaves its navigation shell
+      // in an error boundary. Reload that observed thread once, still read-only.
+      // A positively identified different account never enters this recovery.
+      const threadUrl = new URL(page.url());
+      if (
+        view.state === 'account_unavailable' &&
+        threadUrl.origin === 'https://www.instagram.com' &&
+        /^\/direct\/t\/[^/]+\/?$/.test(threadUrl.pathname) &&
+        (await page
+          .getByText(
+            /^(문제가 발생했습니다|문제가 발생하여 페이지를 읽어들이지 못했습니다\.|Something went wrong)$/i,
+          )
+          .count()) > 0
+      ) {
+        this.dmReadDiagnostics.reload = true;
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+        for (let i = 0; i < 20; i++) {
+          signal.throwIfAborted();
+          view = await inspectDm(page, actor, organizer);
+          if (view.state === 'scoped' || view.state === 'account_mismatch') break;
+          await page.waitForTimeout(300);
+        }
+      }
+      signal.throwIfAborted();
       this.dmReadDiagnostics.stage = view.state;
-      if (view.state !== 'scoped') throw new ServiceError('dm_' + view.state);
+      if (view.state !== 'scoped')
+        throw new ServiceError('dm_' + view.state + ('problem' in view ? '_' + view.problem : ''));
       let stable = 0;
       for (let i = 0; i < 20 && stable < 5; i++) {
         signal.throwIfAborted();
@@ -1070,7 +1096,28 @@ export class Browser {
         view = next;
       }
       if (view.state !== 'scoped' || stable < 5) throw new ServiceError('dm_thread_not_settled');
-      if (!view.empty && !view.incoming?.length) throw new ServiceError('dm_sender_unverified');
+      if (!view.empty && !view.incoming?.length) {
+        // Instagram renders sender-labelled message actions only on row hover.
+        // Hover exact recipient avatar links inside the verified pane; never click reply.
+        const avatars = page.locator('[data-ssal-dm-pane="scoped"] a[aria-label]');
+        for (const a of (await avatars.all()).slice(0, 4)) {
+          const href = await a.getAttribute('href'),
+            label = await a.getAttribute('aria-label');
+          if (
+            !href ||
+            !label ||
+            !/Open the profile page of/i.test(label) ||
+            new URL(href, page.url()).pathname.replaceAll('/', '').toLowerCase() !== organizer
+          )
+            continue;
+          await a.hover({ timeout: 3000 });
+          await page.waitForTimeout(150);
+          view = await inspectDm(page, actor, organizer);
+          if (view.state === 'scoped' && view.incoming.length) break;
+        }
+      }
+      if (view.state !== 'scoped' || (!view.empty && !view.incoming?.length))
+        throw new ServiceError('dm_sender_unverified');
       const region = page
         .locator(view.empty ? '[data-ssal-dm-pane="scoped"]' : '[data-ssal-dm-incoming="true"]')
         .first();

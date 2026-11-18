@@ -1307,10 +1307,17 @@ let dmPlanLimit = 20;
 function renderDmChecks() {
   const plan = state.dmCheckPlan || [],
     active = ['running', 'paused'].includes(state.resultBatch?.state);
-  const announced = plan.filter((x) => x.eligible && x.announced && !x.checks.length).slice(0, 20);
+  const announced = plan
+    .filter(
+      (x) =>
+        x.eligible &&
+        x.announced &&
+        !['won', 'lost'].includes(state.outcomes.find((o) => o.eventId === x.eventId)?.status),
+    )
+    .slice(0, 20);
   $('dm-announced-start').disabled = active || !announced.length;
   $('dm-check-summary').textContent =
-    `연결 가능한 완료 응모 ${plan.filter((x) => x.eligible).length}건 · 발표 후 첫 DM 확인 ${announced.length}건. 묶음 실행 상태와 시간·토큰은 위 실행 결과에 표시합니다.`;
+    `연결 가능한 완료 응모 ${plan.filter((x) => x.eligible).length}건 · 발표된 미확정 응모 ${announced.length}건. 묶음 실행 상태와 시간·토큰은 위 실행 결과에 표시합니다.`;
   const labels = {
     won: '당첨 근거 확인',
     review: '행사 연결 확인 필요',
@@ -1328,7 +1335,12 @@ function renderDmChecks() {
   $('dm-reviews').innerHTML = plan
     .flatMap((x) =>
       x.checks
-        .filter((d) => d.state === 'review' && !d.reviewed)
+        .filter(
+          (d) =>
+            d.state === 'review' &&
+            !d.reviewed &&
+            !['won', 'lost'].includes(state.outcomes.find((o) => o.eventId === x.eventId)?.status),
+        )
         .map(
           (d) =>
             `<article class="event-card"><span class="pill warning">당첨 DM · 행사 연결 확인</span><h4>${esc(x.title)}</h4><p>@${esc(d.organizer)} · ${esc(d.reason)}</p><blockquote>${esc(d.quote || '')}</blockquote>${d.deadlineText ? `<p>기한 원문 · ${esc(d.deadlineText)}</p>` : ''}<div class="card-actions"><button data-dm-review="${esc(x.eventId)}" data-key="${esc(d.key)}" data-confirm="true">이 응모의 당첨 안내가 맞음</button><button data-dm-review="${esc(x.eventId)}" data-key="${esc(d.key)}" data-confirm="false">이 응모와 연결하지 않음</button><button data-outcome="${esc(x.eventId)}">결과·경품 관리</button></div></article>`,
@@ -1342,7 +1354,12 @@ $('dm-plan-more').onclick = () => {
 };
 $('dm-announced-start').onclick = guard(async () => {
   const eventIds = (state.dmCheckPlan || [])
-    .filter((x) => x.eligible && x.announced && !x.checks.length)
+    .filter(
+      (x) =>
+        x.eligible &&
+        x.announced &&
+        !['won', 'lost'].includes(state.outcomes.find((o) => o.eventId === x.eventId)?.status),
+    )
     .slice(0, 20)
     .map((x) => x.eventId);
   await api('/api/outcomes/dm-batch', { provider: requireChoice(), eventIds });
@@ -1391,7 +1408,7 @@ function renderResultBatch() {
       '이번 확인 한도 안에서 발표 근거를 확보하지 못했습니다. 낙첨으로 처리하지 않습니다.',
   };
   $('result-batch-status').textContent = b
-    ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초${b.mode === 'instagram_dm' ? ` / 대화 검색 자동 복구 ${b.metrics.automaticRecoveries || 0}회` : ''}`
+    ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초${b.mode === 'instagram_dm' ? ` / 대화 읽기 자동 복구 ${b.metrics.automaticRecoveries || 0}회` : ''}`
     : `지금 확인 가능 ${eligible}건 · 제외/대기 ${plan.length - eligible}건. 발표 주소를 하나씩 등록할 필요 없이 시작할 수 있습니다.`;
   $('result-batch-results').innerHTML = (b?.items || [])
     .slice(0, resultRowsLimit)

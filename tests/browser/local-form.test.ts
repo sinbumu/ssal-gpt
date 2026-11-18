@@ -239,3 +239,27 @@ test('only one simple final submission confirmation inherits the active page gra
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('modal consent notices include their local terms; aggregate select-all is not a separate answer', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-modal-consent-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  try {
+    await app.browser.open();
+    await app.browser.page!.setContent(`<dialog open><form>
+      <label><input type="checkbox">모두 동의하기</label>
+      <section><label>개인정보 수집 동의<input type="checkbox" name="agree" required></label><dl><dt>보관 기간</dt><dd>운영 문안 확정 예정</dd></dl></section>
+      <section><label>개인정보 위탁 동의<input type="checkbox" name="privacy" required></label><table><tr><td>가상 운영 대행사</td><td>캠페인 지원</td></tr></table></section>
+      <button type="submit">참여하기</button></form></dialog>`);
+    const view = (await inspectForm(app.browser.page!)).view;
+    assert.deepEqual(
+      view.questions.map((q) => q.label),
+      ['개인정보 수집 동의', '개인정보 위탁 동의'],
+    );
+    assert.match(view.questions[0]!.description, /운영 문안 확정 예정/);
+    assert.match(view.questions[1]!.description, /가상 운영 대행사/);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

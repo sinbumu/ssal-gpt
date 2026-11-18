@@ -280,6 +280,26 @@ export async function inspectForm(page: Page) {
       )
         continue;
       if (!helpers.visible(el) && ![...(el.labels || [])].some(helpers.visible)) continue;
+      // An unnamed aggregate checkbox is a UI shortcut, not an independent
+      // consent answer. Plan/verify the individual notices to avoid accepting
+      // optional terms or conflicting with the site's derived checked state.
+      if (
+        el.type === 'checkbox' &&
+        !el.name &&
+        !el.required &&
+        el.form &&
+        /^(?:모두|전체)\s*동의(?:하기)?$/.test(helpers.label(el).trim()) &&
+        all.filter(
+          (other) =>
+            other !== el &&
+            other.form === el.form &&
+            other.type === 'checkbox' &&
+            other.name &&
+            helpers.visible(other) &&
+            /동의|consent/i.test(helpers.label(other)),
+        ).length >= 2
+      )
+        continue;
       const kind =
         el.type === 'file'
           ? 'file'
@@ -387,6 +407,15 @@ export async function inspectForm(page: Page) {
             block.querySelectorAll('input:not([type=hidden]),textarea,select').length !== 1
           )
             break;
+          const notice = definitions.text(block);
+          if (
+            notice.length > helpers.label(el).length &&
+            /개인정보.{0,20}(?:수집|이용|위탁|제공)|privacy|personal information/i.test(notice) &&
+            block.querySelector('dl,table,p')
+          ) {
+            nearbyConsent = notice.slice(0, 3000);
+            break;
+          }
           const previous = block.previousElementSibling;
           if (
             previous instanceof HTMLElement &&

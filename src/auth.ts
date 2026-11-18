@@ -49,6 +49,10 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  result_batch_exists:
+    '진행 중인 일괄 확인이 있습니다. 이어서 확인하거나 종료한 뒤 새로 시작하세요.',
+  result_batch_empty: '지금 확인할 수 있는 공개 발표 대상이 없습니다. 제외 이유를 확인하세요.',
+  result_batch_unavailable: '진행 중이거나 일시정지한 일괄 확인이 없습니다.',
   telegram_target_changed: '수신 대상이 바뀌었습니다. 표시된 개인 대화를 다시 확인하세요.',
   telegram_network_timeout:
     '텔레그램 서버 연결 시간이 초과됐습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.',

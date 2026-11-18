@@ -1,5 +1,12 @@
 import { TelegramNotifications, type TelegramRequest } from './telegram.js';
 import { collectNotices, noticeInbox, readNotices } from './reward-notifications.js';
+import {
+  resultCheckPlan,
+  publicResultBatch,
+  startResultBatch,
+  controlResultBatch,
+  recoverResultBatch,
+} from './result-batch.js';
 import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
 import { StorageManager } from './storage.js';
@@ -346,6 +353,8 @@ export async function createApp(options: {
         }),
         completedEntries: store.completedEntries(),
         outcomes: publicOutcomes(store),
+        resultCheckPlan: resultCheckPlan(store),
+        resultBatch: publicResultBatch(store),
         outcomeAlerts: outcomeAlerts(store, dayKey()),
         rewardNotices: noticeInbox(store),
         telegram: telegram.publicInfo(),
@@ -474,6 +483,25 @@ export async function createApp(options: {
         throw new ServiceError('pause_before_updating_outcome');
       saveOutcome(store, input);
       collectNotices(store);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/batch') {
+      const input = z
+        .object({ provider: ProviderSchema, limit: z.number().int().min(1).max(100).default(10) })
+        .strict()
+        .parse(data);
+      for (const item of resultCheckPlan(store)
+        .filter((x) => x.eligible)
+        .slice(0, input.limit))
+        await validateUrl(item.sourceUrl!, origin);
+      const batch = startResultBatch(store, input.provider, browser.engine, input.limit);
+      void scheduler.tick();
+      return send(response, 200, { id: batch.id });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/batch/control') {
+      const action = z.enum(['pause', 'resume', 'stop']).parse(data.action);
+      await controlResultBatch(store, runner, action);
+      if (action === 'resume') void scheduler.tick();
       return send(response, 200, { ok: true });
     }
     if (method === 'POST' && url.pathname === '/api/outcomes/check') {
@@ -1301,6 +1329,7 @@ export async function createApp(options: {
   browser.storage = storage;
   runner = new Runner(store, browser, model, origin);
   scheduler = new Scheduler(store, runner, () => manualNavigation);
+  recoverResultBatch(store);
   scheduler.start();
   telegram.start();
   storage.start(() => runner.isBusy() || manualNavigation);

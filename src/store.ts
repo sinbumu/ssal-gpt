@@ -39,6 +39,7 @@ export type Approval = {
   target?: { label: string; type: string; href?: string };
 };
 export type Job = {
+  resultBatchId?: string;
   discoveryStart?: {
     mode: import('./discovery-start.js').DiscoverySource;
     url: string;

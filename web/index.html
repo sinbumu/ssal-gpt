@@ -1021,6 +1021,32 @@
         <section class="panel" id="rewards">
           <div class="section-head"><h2>08 · 결과·경품</h2></div>
           <div id="outcome-summary"></div>
+          <h3>완료한 응모 · 공개 발표 일괄 확인</h3>
+          <p class="hint">
+            저장된 원문 주소로 발표를 확인합니다. 개인 DM·메일·문자는 읽지 않으며, 발표를 못
+            찾았다고 낙첨으로 처리하지 않습니다. AI 사용량은 기존 운영 한도를 따릅니다.
+          </p>
+          <div class="card-actions">
+            <label
+              >한 번에 확인할 수<select id="result-batch-limit">
+                <option value="3">3건</option>
+                <option value="10" selected>10건</option>
+                <option value="100">가능한 전체</option>
+              </select></label
+            >
+            <button id="result-batch-start" type="button">확인 가능한 응모 일괄 확인</button>
+            <button id="result-batch-pause" type="button" hidden>일시정지</button>
+            <button id="result-batch-resume" type="button" hidden>이어서 확인</button>
+            <button id="result-batch-stop" type="button" hidden>일괄 확인 종료</button>
+          </div>
+          <p id="result-batch-status" role="status" aria-live="polite"></p>
+          <div id="result-batch-results"></div>
+          <button id="result-batch-more" type="button" hidden>결과 20개 더 보기</button>
+          <details>
+            <summary id="result-plan-summary">확인 대상과 제외 이유</summary>
+            <div id="result-plan"></div>
+            <button type="button" id="result-plan-more" hidden>20개 더 보기</button>
+          </details>
           <div class="card-actions">
             <button id="enable-reward-notifications" type="button">
               이 브라우저에서 당첨·수령 알림 켜기</button

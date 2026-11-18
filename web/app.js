@@ -1258,6 +1258,7 @@ function outcomeLabel(eventId) {
   );
 }
 function renderOutcomeSummary() {
+  renderResultBatch();
   const rows = state.outcomes || [],
     won = rows.filter((o) => o.status === 'won');
   const realized = won.reduce(
@@ -1298,6 +1299,62 @@ function renderOutcomeSummary() {
       : '');
   notifyRewardAlerts();
 }
+let resultPlanLimit = 20;
+let resultRowsLimit = 20;
+function renderResultBatch() {
+  const plan = state.resultCheckPlan || [],
+    b = state.resultBatch;
+  const eligible = plan.filter((x) => x.eligible).length;
+  const active = b && ['running', 'paused'].includes(b.state);
+  $('result-batch-start').disabled = active || !eligible;
+  $('result-batch-pause').hidden = b?.state !== 'running';
+  $('result-batch-resume').hidden = b?.state !== 'paused';
+  $('result-batch-stop').hidden = !active;
+  const labels = {
+    announced: '발표 발견 · 본인 결과 확인 필요',
+    pending: '발표 대기',
+    unavailable: '자동 확인 불가',
+  };
+  $('result-batch-status').textContent = b
+    ? `${{ running: '일괄 확인 중', paused: '일시정지', completed: '일괄 확인 종료', stopped: '사용자가 종료' }[b.state]} · ${b.items.filter((x) => ['done', 'skipped'].includes(x.state)).length}/${b.items.length}건 처리 · ${b.note} · AI 호출 ${b.metrics.calls}회${b.metrics.unreported ? ` (사용량 미보고 ${b.metrics.unreported}회)` : ''} / 입력 ${b.metrics.inputTokens.toLocaleString()}·출력 ${b.metrics.outputTokens.toLocaleString()} 토큰 / 실행 ${(b.metrics.activeMs / 1000).toFixed(1)}초`
+    : `지금 확인 가능 ${eligible}건 · 제외/대기 ${plan.length - eligible}건. 발표 주소를 하나씩 등록할 필요 없이 시작할 수 있습니다.`;
+  $('result-batch-results').innerHTML = (b?.items || [])
+    .slice(0, resultRowsLimit)
+    .map(
+      (x) =>
+        `<article class="event-card"><span class="pill">${esc(x.state === 'pending' ? '대기' : x.state === 'running' ? '확인 중' : x.state === 'skipped' ? '제외' : labels[x.check?.state] || '확인 중단')}</span><h4>${esc(x.title)}</h4><p>${esc(x.check?.reason || x.note || '')}</p>${x.check?.quote ? `<blockquote>${esc(x.check.quote)}</blockquote>` : ''}<div class="card-actions">${safeLink(x.check?.url || x.sourceUrl, '확인 경로 열기')}${x.state === 'done' ? `<button data-outcome="${esc(x.eventId)}">결과·경품 관리</button>` : ''}</div></article>`,
+    )
+    .join('');
+  $('result-batch-more').hidden = (b?.items.length || 0) <= resultRowsLimit;
+  $('result-plan-summary').textContent =
+    `확인 대상과 제외 이유 · 가능 ${eligible} / 전체 ${plan.length}`;
+  $('result-plan').innerHTML = plan
+    .slice(0, resultPlanLimit)
+    .map(
+      (x) =>
+        `<article class="event-card"><strong>${esc(x.title)}</strong><p>${x.eligible ? '확인 가능' : '대기·제외'} · ${esc(x.reason)}</p><button data-outcome="${esc(x.eventId)}">결과·발표 주소 설정</button></article>`,
+    )
+    .join('');
+  $('result-plan-more').hidden = plan.length <= resultPlanLimit;
+}
+$('result-plan-more').onclick = () => {
+  resultPlanLimit += 20;
+  renderResultBatch();
+};
+$('result-batch-more').onclick = () => {
+  resultRowsLimit += 20;
+  renderResultBatch();
+};
+$('result-batch-start').onclick = guard(async () => {
+  await api('/api/outcomes/batch', {
+    provider: requireChoice(),
+    limit: Number($('result-batch-limit').value),
+  });
+});
+for (const action of ['pause', 'resume', 'stop'])
+  $('result-batch-' + action).onclick = guard(async () => {
+    await api('/api/outcomes/batch/control', { action });
+  });
 document.addEventListener('click', (event) => {
   const b = event.target.closest('[data-outcome]');
   if (!b) return;

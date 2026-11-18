@@ -192,9 +192,17 @@ export class Runner {
       throw new ServiceError('job_not_resumable');
     if (job.archivedAt) throw new ServiceError('restore_archived_job_first');
     const managedEvent = this.store.event(job.eventId || job.retryEventId || '');
-    if (managedEvent?.management?.manualAt && !managedEvent.management.manualNotEnteredAt)
+    if (
+      job.kind !== 'result' &&
+      managedEvent?.management?.manualAt &&
+      !managedEvent.management.manualNotEnteredAt
+    )
       throw new ServiceError('manual_participation_check_required');
-    if (managedEvent?.management?.mode && managedEvent.management.mode !== 'active')
+    if (
+      job.kind !== 'result' &&
+      managedEvent?.management?.mode &&
+      managedEvent.management.mode !== 'active'
+    )
       throw new ServiceError('entry_management_blocks_automation');
     if (
       job.kind === 'apply' &&

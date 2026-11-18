@@ -9,6 +9,7 @@ import type { Runner } from './runner.js';
 import { outcomes, queueResultCheck } from './outcomes.js';
 import { settings } from './autonomy.js';
 import { selection } from './selection.js';
+import { tickResultBatch } from './result-batch.js';
 
 export const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -259,6 +260,7 @@ export class Scheduler {
     if (this.ticking || this.blocked()) return;
     this.ticking = true;
     try {
+      if (tickResultBatch(this.store, this.runner, now)) return;
       const config = operations(this.store);
       if (!config.queueEnabled) return;
       const all = schedules(this.store);
@@ -374,7 +376,10 @@ export class Scheduler {
         .reverse()
         .find(
           (j) =>
-            j.status === 'queued' && !j.archivedAt && !budgetReason(this.store, j.provider, now),
+            j.status === 'queued' &&
+            !j.resultBatchId &&
+            !j.archivedAt &&
+            !budgetReason(this.store, j.provider, now),
         );
       if (!job || budgetReason(this.store, job.provider, now)) return;
       try {

@@ -149,4 +149,4 @@ R45 실제 첫 시도는 16/60회·233,044토큰·활성 126.0초에서 보이�
 
 ## Telegram 개인 알림 (2026-11-18)
 
-[Bot API](https://core.telegram.org/bots/api), [개인 대화 deep link](https://core.telegram.org/bots/features#deep-linking), [BotFather 토큰 발급](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)을 확인했다. getMe/getWebhookInfo로 전용 봇을 검사하고 getUpdates의 시작 nonce·개인 chat/from 일치를 검증한 뒤 대시보드에서 수신 대화를 확인한다. sendMessage는 본인이 활성화한 개인 대상에 고정된 알림 종류/건수만 전송한다. 입력 토큰은 런타임 0600 파일에 저장하고 UI·모델·로그에 반환하지 않는다. webhook 및 다른 사용자의 대화 내용은 저장/모델 전송하지 않는다. 구현과 합성 검증 완료이며 사용자 봇의 실제 메시지 수신은 별도 검증한다.
+[Bot API](https://core.telegram.org/bots/api), [개인 대화 deep link](https://core.telegram.org/bots/features#deep-linking), [BotFather 토큰 발급](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)을 확인했다. getMe/getWebhookInfo로 전용 봇을 검사하고 getUpdates의 시작 nonce·개인 chat/from 일치를 검증한 뒤 대시보드에서 수신 대화를 확인한다. sendMessage는 본인이 활성화한 개인 대상에 고정된 알림 종류/건수만 전송한다. 입력 토큰은 런타임 0600 파일에 저장하고 UI·모델·로그에 반환하지 않는다. webhook 및 다른 사용자의 대화 내용은 저장/모델 전송하지 않는다. 구현·합성 검증에 이어 본인 봇의 테스트 메시지 실제 수신을 사용자가 확인했다. 기존 웹 알림 1건의 앱 자동 발송도 Telegram의 성공 응답으로 확인했다. 새 당첨 DM 자동 감지·봇 대화 명령 처리·주최자 답장·경품 수령은 검증 범위가 아니다.

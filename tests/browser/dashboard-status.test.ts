@@ -228,6 +228,7 @@ test('dashboard separates expected stops, technical faults and actionable user i
     app.store.saveJob(technical);
     const page = await ui.newPage();
     await page.goto(app.origin);
+    await page.locator('#active-jobs-more').click();
     const root = (j: Job) => page.locator(`#active-jobs #job-${j.id}`);
     await root(technical).waitFor();
     assert.match(await root(technical).innerText(), /기술 오류/);
@@ -247,6 +248,72 @@ test('dashboard separates expected stops, technical faults and actionable user i
     assert.equal(await root(unknown).locator('[data-action=verify-result]').count(), 1);
   } finally {
     await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('attention defaults to two latest jobs, shows hidden reviews and expands without losing edits through polling', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-attention-page-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const jobs = Array.from({ length: 14 }, () => waitingJob(app));
+    const old = jobs[0]!;
+    const page = await browser.newPage();
+    await page.goto(app.origin + '/#attention');
+    await page.locator('#active-jobs-summary').filter({ hasText: '2 / 14' }).waitFor();
+    assert.equal(await page.locator('#active-jobs > article:visible').count(), 2);
+    assert.ok(await page.locator('#job-' + jobs[13]!.id).isVisible());
+    assert.match(
+      await page.locator('#active-jobs-summary').innerText(),
+      /접힌 항목 12건.*사용자 확인 대기 12건/,
+    );
+    await page.locator('#active-jobs-more').click();
+    assert.equal(await page.locator('#active-jobs > article:visible').count(), 12);
+    await page.locator('#active-jobs-more').click();
+    assert.equal(await page.locator('#active-jobs > article:visible').count(), 14);
+    const answer = page.locator('#job-' + old.id).getByLabel('동의하지 않습니다', { exact: true });
+    await answer.check();
+    await page.locator('#active-jobs-less').click();
+    assert.equal(await page.locator('#active-jobs > article:visible').count(), 2);
+    assert.ok(await answer.isChecked(), 'collapse changes visibility only');
+    // Changing another job forces a rerender on the normal polling path.
+    const recent = jobs[13]!;
+    recent.steps++;
+    app.store.saveJob(recent);
+    await page.waitForFunction(
+      (id) => document.querySelector('#job-' + id)?.textContent?.includes('판단 7/30'),
+      recent.id,
+    );
+    await page.locator('#active-jobs-more').click();
+    await page.locator('#active-jobs-more').click();
+    assert.ok(await answer.isChecked());
+    recent.steps++;
+    app.store.saveJob(recent);
+    await page.waitForFunction(
+      (id) => document.querySelector('#job-' + id)?.textContent?.includes('판단 8/30'),
+      recent.id,
+    );
+    assert.equal(
+      await page.locator('#active-jobs > article:visible').count(),
+      14,
+      'polling keeps expanded range',
+    );
+    assert.ok(await answer.isChecked());
+    await page.reload();
+    await page.locator('#active-jobs-summary').filter({ hasText: '2 / 14' }).waitFor();
+    assert.equal(
+      await page.locator('#active-jobs > article:visible').count(),
+      2,
+      'new visit defaults to recent two',
+    );
+    await page.locator('#active-jobs-more').click();
+    await page.locator('#active-jobs-more').click();
+    assert.ok(await answer.isChecked(), 'existing answer draft persistence survives a reload');
+  } finally {
+    await browser.close();
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   }

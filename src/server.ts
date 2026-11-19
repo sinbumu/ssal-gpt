@@ -54,6 +54,8 @@ import {
   outcomeAlerts,
   claimReplyDraft,
   queueResultCheck,
+  RewardProgressSchema,
+  saveRewardProgress,
 } from './outcomes.js';
 import {
   Scheduler,
@@ -485,6 +487,14 @@ export async function createApp(options: {
       if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
         throw new ServiceError('pause_before_updating_outcome');
       saveOutcome(store, input);
+      collectNotices(store);
+      return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/progress') {
+      const input = RewardProgressSchema.parse(data);
+      if (runner.activeId && store.job(runner.activeId)?.eventId === input.eventId)
+        throw new ServiceError('pause_before_updating_outcome');
+      saveRewardProgress(store, input);
       collectNotices(store);
       return send(response, 200, { ok: true });
     }

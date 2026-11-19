@@ -39,7 +39,16 @@
           </div>
           <div id="result-attention"></div>
           <div id="connection-attention"></div>
+          <p id="active-jobs-summary" class="hint" aria-live="polite"></p>
           <div id="active-jobs"></div>
+          <div class="card-actions">
+            <button id="active-jobs-more" type="button" aria-controls="active-jobs" hidden>
+              10건 더 보기
+            </button>
+            <button id="active-jobs-less" type="button" aria-controls="active-jobs" hidden>
+              최근 2건만 보기
+            </button>
+          </div>
         </section>
         <section class="panel discover" id="discover">
           <div class="section-head">
@@ -1021,6 +1030,18 @@
         <section class="panel" id="rewards">
           <div class="section-head"><h2>08 · 결과·경품</h2></div>
           <div id="outcome-summary"></div>
+          <section aria-labelledby="reward-followups-title">
+            <h3 id="reward-followups-title">당첨 후 해야 할 일</h3>
+            <div id="reward-followups"></div>
+          </section>
+          <section aria-labelledby="outcome-alerts-title">
+            <h3 id="outcome-alerts-title">확인할 결과와 안내</h3>
+            <div id="outcome-alerts"></div>
+          </section>
+          <section aria-labelledby="reward-received-title">
+            <h3 id="reward-received-title">수령 완료한 경품</h3>
+            <div id="reward-received"></div>
+          </section>
           <h3>완료한 응모 · 공개 발표 일괄 확인</h3>
           <p class="hint">
             저장된 원문 주소로 발표를 확인합니다. 개인 DM·메일·문자는 읽지 않으며, 발표를 못
@@ -1147,149 +1168,163 @@
             <div id="reward-inbox"></div>
             <button id="reward-inbox-more" type="button" hidden>알림 20개 더 보기</button>
           </section>
-          <div id="outcome-alerts"></div>
-          <div id="reward-followups"></div>
           <p class="hint">
             완료한 응모의 ‘결과·경품 관리’에서 기록을 선택하세요. 발표를 찾은 것과 본인의 당첨은
             구분하며, 확인 실패를 낙첨으로 기록하지 않습니다.
           </p>
-          <form id="outcome-form" hidden>
-            <h3 id="outcome-title"></h3>
-            <input name="eventId" type="hidden" />
-            <label>발표·당첨 안내 주소<input name="sourceUrl" type="url" required /></label>
-            <label
-              >결과<select name="status">
-                <option value="pending">발표 대기</option>
-                <option value="unconfirmed">확인 불가</option>
-                <option value="won">당첨 직접 확인</option>
-                <option value="lost">낙첨 직접 확인</option>
-              </select></label
+          <dialog id="outcome-dialog" class="reward-dialog" aria-labelledby="outcome-title">
+            <button
+              type="button"
+              class="dialog-close"
+              data-close-dialog="outcome-dialog"
+              aria-label="결과 창 닫기"
             >
-            <label
-              >확인 근거·메모<textarea
-                name="note"
-                rows="2"
-                placeholder="공식 발표 또는 받은 안내에서 확인한 내용"
-              ></textarea>
-            </label>
-            <label class="check"
-              ><input name="autoCheck" type="checkbox" />매일 공식 발표를 읽고 확인함에 알리기
-              (예약·대기열 실행 필요)</label
-            >
-            <label>첫 발표 확인 날짜<input name="checkDate" type="date" /></label>
-            <label>회신·수령 신청 기한<input name="claimBy" type="date" /></label>
-            <fieldset>
-              <legend>당첨 후 해야 할 일</legend>
+              닫기
+            </button>
+            <form id="outcome-form" hidden>
+              <h3 id="outcome-title"></h3>
+              <div id="outcome-guide"></div>
+              <input name="eventId" type="hidden" />
+              <label>발표·당첨 안내 주소<input name="sourceUrl" type="url" required /></label>
+              <label
+                >결과<select name="status">
+                  <option value="pending">발표 대기</option>
+                  <option value="unconfirmed">확인 불가</option>
+                  <option value="won">당첨 직접 확인</option>
+                  <option value="lost">낙첨 직접 확인</option>
+                </select></label
+              >
+              <label
+                >확인 근거·메모<textarea
+                  name="note"
+                  rows="2"
+                  placeholder="공식 발표 또는 받은 안내에서 확인한 내용"
+                ></textarea>
+              </label>
               <label class="check"
-                ><input name="hasFollowUp" type="checkbox" />회신·배송 진행 관리</label
+                ><input name="autoCheck" type="checkbox" />매일 공식 발표를 읽고 확인함에 알리기
+                (예약·대기열 실행 필요)</label
               >
-              <label
-                >진행 상태<select name="followUpState">
-                  <option value="needs_reply">회신 필요</option>
-                  <option value="replied">회신 완료</option>
-                  <option value="awaiting_delivery">배송·발송 대기</option>
-                  <option value="done">후속 처리 완료</option>
-                </select></label
-              >
-              <label
-                >연락 수단<select name="followUpChannel">
-                  <option value="instagram_dm">인스타그램 DM</option>
-                  <option value="email">이메일</option>
-                  <option value="form">수령 폼</option>
-                  <option value="other">기타</option>
-                </select></label
-              >
-              <label>받는 계정·주최자<input name="followUpRecipient" maxlength="200" /></label>
+              <label>첫 발표 확인 날짜<input name="checkDate" type="date" /></label>
+              <label>회신·수령 신청 기한<input name="claimBy" type="date" /></label>
               <fieldset>
-                <legend>요청받은 정보만 선택</legend>
+                <legend>당첨 후 해야 할 일</legend>
                 <label class="check"
-                  ><input type="checkbox" name="requested" value="name" />이름</label
+                  ><input name="hasFollowUp" type="checkbox" />회신·배송 진행 관리</label
                 >
-                <label class="check"
-                  ><input type="checkbox" name="requested" value="phone" />휴대전화</label
-                >
-                <label class="check"
-                  ><input type="checkbox" name="requested" value="address" />배송주소</label
-                >
-                <label class="check"
-                  ><input type="checkbox" name="requested" value="postalCode" />우편번호</label
-                >
-                <label class="check"
-                  ><input type="checkbox" name="requested" value="consent" />개인정보 동의</label
-                >
-              </fieldset>
-              <label>기한 안내 원문·시각<input name="deadlineText" maxlength="500" /></label>
-              <label class="check"
-                ><input name="deadlineUncertain" type="checkbox" />기한이 불명확하거나 안내가 서로
-                다름</label
-              >
-              <label>발송 일정·배송 메모<input name="deliveryNote" maxlength="500" /></label>
-              <p class="hint">
-                당첨 안내를 등록한 뒤 회신·수령을 관리합니다. 현재 개인 DM 자동 감시와 답장 자동
-                전송은 하지 않습니다.
-              </p>
-            </fieldset>
-            <fieldset>
-              <legend>당첨 경품</legend>
-              <label>경품명<input name="rewardName" /></label>
-              <div class="form-row">
                 <label
-                  >상태<select name="rewardStatus">
-                    <option value="expected">수령 대기</option>
-                    <option value="received">수령 완료</option>
-                    <option value="used">사용·처분 완료</option>
-                    <option value="expired">만료</option>
+                  >진행 상태<select name="followUpState">
+                    <option value="needs_reply">회신 필요</option>
+                    <option value="replied">회신 완료</option>
+                    <option value="awaiting_delivery">배송·발송 대기</option>
+                    <option value="done">후속 처리 완료</option>
                   </select></label
-                ><label>만료일<input name="expiresOn" type="date" /></label>
-              </div>
-              <div class="form-row">
-                <label>액면가 (원)<input name="faceValue" type="number" min="0" value="0" /></label
-                ><label
-                  >실제 사용 가치·판매대금 (원)<input
-                    name="realizedValue"
-                    type="number"
-                    min="0"
-                    value="0"
+                >
+                <label
+                  >연락 수단<select name="followUpChannel">
+                    <option value="instagram_dm">인스타그램 DM</option>
+                    <option value="email">이메일</option>
+                    <option value="form">수령 폼</option>
+                    <option value="other">기타</option>
+                  </select></label
+                >
+                <label>받는 계정·주최자<input name="followUpRecipient" maxlength="200" /></label>
+                <fieldset>
+                  <legend>요청받은 정보만 선택</legend>
+                  <label class="check"
+                    ><input type="checkbox" name="requested" value="name" />이름</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" name="requested" value="phone" />휴대전화</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" name="requested" value="address" />배송주소</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" name="requested" value="postalCode" />우편번호</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" name="requested" value="consent" />개인정보 동의</label
+                  >
+                </fieldset>
+                <label>기한 안내 원문·시각<input name="deadlineText" maxlength="500" /></label>
+                <label class="check"
+                  ><input name="deadlineUncertain" type="checkbox" />기한이 불명확하거나 안내가 서로
+                  다름</label
+                >
+                <label>발송 일정·배송 메모<input name="deliveryNote" maxlength="500" /></label>
+                <p class="hint">
+                  당첨 안내를 등록한 뒤 회신·수령을 관리합니다. 현재 개인 DM 자동 감시와 답장 자동
+                  전송은 하지 않습니다.
+                </p>
+              </fieldset>
+              <fieldset>
+                <legend>당첨 경품</legend>
+                <label>경품명<input name="rewardName" /></label>
+                <div class="form-row">
+                  <label
+                    >상태<select name="rewardStatus">
+                      <option value="expected">수령 대기</option>
+                      <option value="received">수령 완료</option>
+                      <option value="used">사용·처분 완료</option>
+                      <option value="expired">만료</option>
+                    </select></label
+                  ><label>만료일<input name="expiresOn" type="date" /></label>
+                </div>
+                <div class="form-row">
+                  <label
+                    >액면가 (원)<input name="faceValue" type="number" min="0" value="0" /></label
+                  ><label
+                    >실제 사용 가치·판매대금 (원)<input
+                      name="realizedValue"
+                      type="number"
+                      min="0"
+                      value="0"
+                  /></label>
+                </div>
+                <label class="check"
+                  ><input type="checkbox" name="valueKnown" />금액을 알고 있음 (모르면 가치 미정으로
+                  기록)</label
+                >
+                <label
+                  >쿠폰 코드 (로컬 보관)<input
+                    name="code"
+                    type="password"
+                    autocomplete="off"
+                    placeholder="비우면 저장된 코드 유지"
                 /></label>
-              </div>
-              <label
-                >쿠폰 코드 (로컬 보관)<input
-                  name="code"
-                  type="password"
+                <button type="button" id="show-reward-code">저장된 코드 보기</button
+                ><output id="reward-code"></output>
+              </fieldset>
+              <div id="outcome-proof"></div>
+              <button>결과·경품 저장</button
+              ><button type="button" id="check-outcome">저장한 발표 주소 지금 확인</button>
+              <fieldset>
+                <legend>검토용 회신 초안</legend>
+                <p class="hint">
+                  먼저 위 내용을 저장하세요. 요청받은 항목만 저장 프로필에서 가져옵니다. 초안을
+                  만드는 것은 개인정보 동의나 외부 전송이 아닙니다.
+                </p>
+                <label
+                  >안내를 읽고 선택한 동의 여부<select id="claim-consent">
+                    <option value="unset">아직 선택하지 않음</option>
+                    <option value="accept">동의</option>
+                    <option value="decline">미동의</option>
+                  </select></label
+                >
+                <button type="button" id="prepare-claim-reply">저장 프로필로 회신 초안 준비</button>
+                <p id="claim-reply-status" class="hint"></p>
+                <textarea
+                  id="claim-reply-draft"
+                  rows="7"
                   autocomplete="off"
-                  placeholder="비우면 저장된 코드 유지"
-              /></label>
-              <button type="button" id="show-reward-code">저장된 코드 보기</button
-              ><output id="reward-code"></output>
-            </fieldset>
-            <div id="outcome-proof"></div>
-            <button>결과·경품 저장</button
-            ><button type="button" id="check-outcome">저장한 발표 주소 지금 확인</button>
-            <fieldset>
-              <legend>검토용 회신 초안</legend>
-              <p class="hint">
-                먼저 위 내용을 저장하세요. 요청받은 항목만 저장 프로필에서 가져옵니다. 초안을 만드는
-                것은 개인정보 동의나 외부 전송이 아닙니다.
-              </p>
-              <label
-                >안내를 읽고 선택한 동의 여부<select id="claim-consent">
-                  <option value="unset">아직 선택하지 않음</option>
-                  <option value="accept">동의</option>
-                  <option value="decline">미동의</option>
-                </select></label
-              >
-              <button type="button" id="prepare-claim-reply">저장 프로필로 회신 초안 준비</button>
-              <p id="claim-reply-status" class="hint"></p>
-              <textarea
-                id="claim-reply-draft"
-                rows="7"
-                autocomplete="off"
-                placeholder="버튼을 누르면 이 화면에만 초안을 표시합니다."
-              ></textarea>
-              <button type="button" id="copy-claim-reply">검토한 초안 복사</button>
-              <button type="button" id="clear-claim-reply">초안 지우기</button>
-            </fieldset>
-          </form>
+                  placeholder="버튼을 누르면 이 화면에만 초안을 표시합니다."
+                ></textarea>
+                <button type="button" id="copy-claim-reply">검토한 초안 복사</button>
+                <button type="button" id="clear-claim-reply">초안 지우기</button>
+              </fieldset>
+            </form>
+          </dialog>
         </section>
         <footer>
           쌀-GPT · Local-first, open source. <span>실제 당첨·수령은 별도 확인이 필요합니다.</span>
@@ -1300,6 +1335,64 @@
     <dialog id="entry-manager" aria-labelledby="entry-manager-title">
       <div id="entry-manager-content"></div>
       <form method="dialog"><button>닫기</button></form>
+    </dialog>
+    <dialog
+      id="reward-progress-dialog"
+      class="reward-dialog"
+      aria-labelledby="reward-progress-title"
+    >
+      <button
+        type="button"
+        class="dialog-close"
+        data-close-dialog="reward-progress-dialog"
+        aria-label="경품 창 닫기"
+      >
+        닫기
+      </button>
+      <form id="reward-progress-form">
+        <h2 id="reward-progress-title">경품 진행 정리</h2>
+        <p id="reward-progress-event"></p>
+        <input type="hidden" name="eventId" />
+        <input type="hidden" name="expectedUpdatedAt" />
+        <fieldset class="progress-choices">
+          <legend>현재 어디까지 진행했나요?</legend>
+          <label><input type="radio" name="stage" value="needs_reply" />아직 회신 전</label>
+          <label
+            ><input type="radio" name="stage" value="replied" />회신 완료 · 경품 수령 대기</label
+          >
+          <label><input type="radio" name="stage" value="received" />경품 받음 · 종결</label>
+        </fieldset>
+        <fieldset id="reward-receipt-fields" hidden disabled>
+          <legend>받은 경품</legend>
+          <label>안내된 경품에서 선택<select id="reward-prize-choice"></select></label>
+          <label
+            >경품명<input name="rewardName" maxlength="200" required placeholder="실제로 받은 경품"
+          /></label>
+          <label
+            >경품 금액<select name="valueKind">
+              <option value="unknown">가치 미정 · 금액 없이 완료</option>
+              <option value="known">금액을 알고 있음</option>
+            </select></label
+          >
+          <label id="reward-value-field" hidden
+            >금액 (원)<input
+              name="faceValue"
+              type="number"
+              min="0"
+              max="100000000"
+              step="any"
+              inputmode="decimal"
+          /></label>
+          <p class="hint">
+            금액은 선택 사항입니다. 수령 금액을 실제 사용·판매 수익으로 계산하지 않습니다.
+          </p>
+        </fieldset>
+        <p class="hint">
+          직접 회신하거나 받은 결과를 기록합니다. 이 버튼으로 DM을 보내지는 않습니다.
+        </p>
+        <p id="reward-progress-error" class="error" role="alert" hidden></p>
+        <button type="submit" id="reward-progress-save">진행 상태 저장</button>
+      </form>
     </dialog>
   </body>
 </html>

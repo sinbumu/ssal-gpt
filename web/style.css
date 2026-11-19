@@ -895,6 +895,68 @@ dialog#entry-manager {
 dialog#entry-manager::backdrop {
   background: #17212b88;
 }
+.reward-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 18px;
+  padding: 24px;
+  color: #182128;
+  background: #fff;
+}
+.reward-dialog::backdrop {
+  background: #17212b88;
+}
+.reward-dialog form {
+  display: grid;
+  gap: 14px;
+}
+.reward-dialog form[hidden] {
+  display: none;
+}
+.reward-dialog h2,
+.reward-dialog h3 {
+  padding-right: 56px;
+}
+.dialog-close {
+  float: right;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.progress-choices {
+  display: grid;
+  gap: 10px;
+}
+.progress-choices label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d5ded6;
+  border-radius: 10px;
+}
+.progress-choices label:has(input:checked) {
+  background: #edf5ec;
+  border-color: #4e7657;
+}
+.progress-choices input {
+  width: auto;
+}
+.result-guide {
+  border: 1px solid #d5ded6;
+  background: #f5f8f3;
+  border-radius: 12px;
+  padding: 16px;
+}
+.result-guide p {
+  margin: 8px 0;
+}
+.reward-dialog fieldset[hidden],
+.reward-dialog label[hidden] {
+  display: none;
+}
 #entry-manager form {
   display: grid;
   gap: 12px;
@@ -939,4 +1001,43 @@ dialog#entry-manager::backdrop {
   border-color: #d4a0a0;
   background: #fff1f1;
   color: #902727;
+}
+
+#active-jobs > [hidden],
+#active-jobs-more[hidden],
+#active-jobs-less[hidden] {
+  display: none;
+}
+
+#reward-progress-form {
+  gap: 12px;
+}
+#reward-progress-form p,
+#reward-progress-form fieldset,
+#reward-progress-form label {
+  margin: 0;
+}
+#reward-progress-form fieldset {
+  padding: 12px;
+}
+#reward-receipt-fields {
+  display: grid;
+  gap: 10px;
+}
+#reward-receipt-fields > label {
+  display: grid;
+  gap: 5px;
+}
+#reward-progress-form .hint {
+  line-height: 1.5;
+}
+#reward-progress-save {
+  position: sticky;
+  bottom: 0;
+  background: #31583f;
+  color: white;
+}
+#reward-receipt-fields[hidden],
+#reward-value-field[hidden] {
+  display: none;
 }

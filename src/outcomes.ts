@@ -18,6 +18,7 @@ export const FollowUpSchema = z.object({
   deadlineText: z.string().max(500).default(''),
   deadlineUncertain: z.boolean().default(false),
   deliveryNote: z.string().max(500).default(''),
+  repliedAt: z.string().datetime().optional(),
 });
 
 export const OutcomeSchema = z.object({
@@ -35,6 +36,8 @@ export const OutcomeSchema = z.object({
       status: z.enum(['expected', 'received', 'used', 'expired']).default('expected'),
       expiresOn: z.string().date().nullable().default(null),
       faceValue: z.number().nonnegative().max(100000000).default(0),
+      valueKnown: z.boolean().optional(),
+      receivedAt: z.string().datetime().optional(),
       realizedValue: z.number().nonnegative().max(100000000).default(0),
       code: z.string().max(2000).default(''),
     })
@@ -84,15 +87,83 @@ export function saveOutcome(store: Store, input: z.infer<typeof OutcomeSchema>) 
       input.status === 'won'
         ? input.followUp === undefined
           ? prior?.followUp
-          : input.followUp
+          : input.followUp && {
+              ...input.followUp,
+              repliedAt: input.followUp.repliedAt || prior?.followUp?.repliedAt,
+            }
         : undefined,
     reward: input.reward
-      ? { ...input.reward, code: input.reward.code || prior?.reward?.code || '' }
+      ? {
+          ...input.reward,
+          receivedAt: ['received', 'used'].includes(input.reward.status)
+            ? input.reward.receivedAt || prior?.reward?.receivedAt
+            : undefined,
+          code: input.reward.code || prior?.reward?.code || '',
+        }
       : undefined,
     updatedAt: new Date().toISOString(),
     reportedBy: ['won', 'lost'].includes(input.status) ? 'user' : 'unconfirmed',
     check: prior?.check,
     dmChecks: prior?.dmChecks,
+  };
+  putOutcome(store, next);
+  return next;
+}
+
+export const RewardProgressSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    expectedUpdatedAt: z.string(),
+    stage: z.enum(['needs_reply', 'replied', 'received']),
+    rewardName: z.string().trim().max(200).optional(),
+    valueKnown: z.boolean().optional(),
+    faceValue: z.number().finite().nonnegative().max(100000000).nullable().optional(),
+  })
+  .strict();
+
+// Local user report only. Keep the win evidence, private code and browser history intact.
+export function saveRewardProgress(store: Store, input: z.infer<typeof RewardProgressSchema>) {
+  const old = outcomes(store).find((o) => o.eventId === input.eventId);
+  if (
+    !old ||
+    old.status !== 'won' ||
+    !store.completedEntries().some((e) => e.eventId === input.eventId)
+  )
+    throw new ServiceError('confirmed_win_required');
+  if (input.expectedUpdatedAt !== old.updatedAt) throw new ServiceError('reward_progress_changed');
+  if (input.stage !== 'received' && ['used', 'expired'].includes(old.reward?.status || ''))
+    throw new ServiceError('reward_progress_use_details');
+  if (
+    input.stage === 'received' &&
+    (!input.rewardName ||
+      input.valueKnown === undefined ||
+      (input.valueKnown && input.faceValue == null))
+  )
+    throw new ServiceError('reward_receipt_fields_required');
+  const now = new Date(Math.max(Date.now(), Date.parse(old.updatedAt) + 1)).toISOString();
+  const follow = old.followUp || FollowUpSchema.parse({ channel: 'other' });
+  const reward =
+    old.reward ||
+    OutcomeSchema.parse({ eventId: old.eventId, sourceUrl: old.sourceUrl, reward: {} }).reward!;
+  const next: Outcome = {
+    ...old,
+    updatedAt: now,
+    followUp: {
+      ...follow,
+      state: input.stage === 'received' ? 'done' : input.stage,
+      repliedAt: input.stage === 'replied' ? follow.repliedAt || now : follow.repliedAt,
+    },
+    reward:
+      input.stage === 'received'
+        ? {
+            ...reward,
+            name: input.rewardName!,
+            status: ['used', 'expired'].includes(reward.status) ? reward.status : 'received',
+            valueKnown: input.valueKnown,
+            faceValue: input.valueKnown ? input.faceValue! : 0,
+            receivedAt: reward.receivedAt || now,
+          }
+        : { ...reward, status: 'expected', receivedAt: undefined },
   };
   putOutcome(store, next);
   return next;

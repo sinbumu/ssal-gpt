@@ -22,6 +22,34 @@ let renderedBrowserEngine;
 let renderedInstagramRevision;
 let lastInboxAction;
 let rewardFollowupLimit = 20;
+let activeJobLimit = 2;
+function updateActiveJobVisibility() {
+  const cards = [...$('active-jobs').querySelectorAll('[data-activity-job]')];
+  cards.forEach((card, index) => {
+    card.hidden = index >= activeJobLimit;
+  });
+  const hidden = cards.slice(activeJobLimit);
+  const pending = hidden.filter((card) =>
+    ['needs_user', 'approval', 'submission_unknown'].includes(
+      state.jobs.find((j) => j.id === card.dataset.activityJob)?.status,
+    ),
+  ).length;
+  $('active-jobs-summary').textContent = cards.length
+    ? `최근 생성 순 · ${Math.min(activeJobLimit, cards.length)} / ${cards.length}건 표시${hidden.length ? ` · 접힌 항목 ${hidden.length}건${pending ? ` (사용자 확인 대기 ${pending}건 포함)` : ''}` : ''}`
+    : '';
+  $('active-jobs-more').hidden = hidden.length === 0;
+  $('active-jobs-more').textContent = `${Math.min(10, hidden.length)}건 더 보기`;
+  $('active-jobs-less').hidden = activeJobLimit <= 2 || cards.length <= 2;
+}
+$('active-jobs-more').onclick = () => {
+  activeJobLimit += 10;
+  updateActiveJobVisibility();
+};
+$('active-jobs-less').onclick = () => {
+  activeJobLimit = 2;
+  updateActiveJobVisibility();
+  $('attention').scrollIntoView({ block: 'start' });
+};
 const terminalJob = (job) => ['completed', 'stopped'].includes(job.status);
 const canAnswerInbox = (job) =>
   !job.archivedAt &&
@@ -232,7 +260,7 @@ function renderCompleted() {
     ${notificationHtml(e.winnerNotice)}<details><summary>접수 증거 확인</summary><blockquote>${esc(e.quote)}</blockquote>
     <p class="hint">${e.verification === 'user_reported' ? '사용자 완료 보고 · 앱 접수 검증 없음' : e.verification.includes('developer') ? '개발자 검토로 완료 상태 복구' : e.verification === 'autonomous_native_alert' ? '제출 응답과 연결된 접수 완료 알림 확인' : e.verification === 'autonomous_response_receipt' ? '제출 응답에서 접수 완료 확인' : e.verification === 'autonomous_semantic_receipt' ? '앱이 응답·알림·화면의 의미를 검토함' : '완료 화면 확인'}</p>
     ${e.screenshot ? `<a href="/evidence/${esc(e.screenshot)}" target="_blank" rel="noreferrer">접수 당시 화면 ↗</a>` : ''}</details>
-    ${renderReceiptCheck(e.receiptCheck)}${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
+    ${renderReceiptCheck(e.receiptCheck)}${renderConsents(e.consents)}<div class="card-actions"><button data-outcome="${esc(e.eventId)}">결과·경품 관리</button>${rewardProgressButtons(e.eventId)}${safeLink(e.sourceUrl, '이벤트 원문')}${safeLink(e.entryUrl, '참여 페이지')}</div></article>`,
         )
         .join('')
     : `<div class="empty">${query ? '검색 결과가 없습니다.' : '완료한 응모가 여기에 모입니다.'}</div>`;
@@ -573,7 +601,10 @@ function render() {
   renderOperations();
   renderOutcomeSummary();
   renderTelegramAndInbox();
-  $('result-attention').innerHTML = $('outcome-alerts').innerHTML + $('dm-reviews').innerHTML;
+  $('result-attention').innerHTML =
+    state.outcomeAlerts?.length || $('dm-reviews').textContent.trim()
+      ? '<p class="hint">당첨·경품 관련 확인은 <a href="#rewards">08 · 결과·경품 알림함</a>에서 볼 수 있습니다.</p>'
+      : '';
   const auth = state.auth;
   if (state.browser) {
     if (renderedBrowserEngine !== state.browser.engine) {
@@ -681,6 +712,7 @@ function render() {
   $('jobs').innerHTML =
     cards.filter((_, i) => !active(state.jobs[i])).join('') ||
     '<div class="empty compact">지난 실행 기록이 여기에 쌓입니다.</div>';
+  updateActiveJobVisibility();
   restoreInboxEdits();
 }
 async function refresh() {
@@ -1247,6 +1279,70 @@ document.addEventListener('click', (e) => {
   if (b) void guard(() => api('/api/schedules/delete', { id: b.dataset.scheduleDelete }))(e);
 });
 
+function resultGuide(e, o, compact = false) {
+  if (!e) return '';
+  const channels = new Set(e.winnerNotice?.channels || []);
+  if (/DM|디엠/i.test(o?.check?.quote || '') && /instagram\.com/i.test(o?.check?.url || ''))
+    channels.add('instagram_dm');
+  const instructions = {
+    instagram_dm: '인스타그램 DM · 응모한 계정의 받은 메시지와 메시지 요청함을 확인하세요.',
+    direct_message: '개별 메시지 · 원문에 안내된 서비스와 계정을 확인하세요.',
+    email: '이메일 · 응모할 때 등록한 주소의 받은편지함과 스팸함을 확인하세요.',
+    sms: '문자 · 응모할 때 등록한 전화번호의 문자 수신함을 확인하세요.',
+    phone: '전화 · 응모할 때 등록한 번호로 오는 주최자 연락을 확인하세요.',
+    post_comment: '게시물 댓글 · 아래 발표 게시물의 주최자 댓글을 확인하세요.',
+    site_notice: '홈페이지 공지 · 아래 발표 또는 이벤트 안내를 확인하세요.',
+    story: '주최자 스토리 · 이벤트 원문에서 주최자 계정으로 이동해 확인하세요.',
+  };
+  const links = new Map();
+  const add = (url, label) => {
+    if (url && !links.has(url) && safeLink(url, label)) links.set(url, label);
+  };
+  add(o?.check?.url, '발표를 확인한 게시물·페이지');
+  add(e.winnerNotice?.sourceUrl, '연락 방법 안내 원문');
+  if (o?.sourceUrl && !/instagram\.com\/direct\//i.test(o.sourceUrl))
+    add(o.sourceUrl, '저장된 결과 안내');
+  add(e.sourceUrl, '이벤트 안내');
+  add(e.entryUrl, '응모 페이지');
+  const dm = o?.dmChecks || [];
+  for (const d of dm) add(d.url, `@${d.organizer} DM 열기`);
+  if (/instagram\.com\/direct\//i.test(o?.sourceUrl || '')) add(o.sourceUrl, '받은 당첨 DM 열기');
+  const lines = [...channels].map((c) => instructions[c]).filter(Boolean);
+  return `<section class="result-guide" aria-label="결과 확인 경로"><strong>어디서 확인하나요?</strong><p>${lines.length ? lines.map(esc).join('<br>') : '연락 방법은 아직 확인되지 않았습니다. 아래 발표·이벤트 원문에서 안내를 확인하세요.'}${e.winnerNotice?.basis === 'inferred' ? '<br>기존 메모에 따른 예상 경로입니다.' : ''}</p><div class="card-actions">${[...links].map(([url, label]) => safeLink(url, label)).join('')}</div>${!compact && dm.length ? `<p class="hint">최근 DM 확인<br>${dm.map((d) => `@${esc(d.organizer)} · ${esc({ no_evidence: '현재 읽은 대화에서 당첨 근거 없음 · 낙첨 확정 아님', unavailable: '자동 확인 불가 · 직접 확인 필요', review: '행사 연결 검토 필요', won: '당첨 근거 확인' }[d.state])} · ${esc(new Date(d.at).toLocaleString())}`).join('<br>')}</p>` : ''}${!compact && o?.check?.quote ? `<details><summary>발표 확인 근거</summary><blockquote>${esc(o.check.quote)}</blockquote><p>${esc(o.check.reason || '')}</p></details>` : ''}</section>`;
+}
+function knownRewardValue(r) {
+  return r?.valueKnown ?? (r?.faceValue || 0) > 0;
+}
+function rewardProgressButtons(eventId) {
+  const o = state.outcomes?.find((x) => x.eventId === eventId);
+  if (o?.status !== 'won') return '';
+  if (['received', 'used'].includes(o.reward?.status))
+    return `<button data-reward-progress="${esc(eventId)}" data-stage="received">수령 기록 수정</button>`;
+  if (o.reward?.status === 'expired') return '';
+  return `${!o.followUp || o.followUp.state === 'needs_reply' ? `<button data-reward-progress="${esc(eventId)}" data-stage="replied">회신 완료로 기록</button>` : ''}<button data-reward-progress="${esc(eventId)}" data-stage="received">경품 받음 · 종결</button>`;
+}
+let receivedRewardLimit = 20;
+function renderReceivedRewards(won) {
+  const rows = won
+    .filter((o) => ['received', 'used'].includes(o.reward?.status))
+    .sort(
+      (a, b) =>
+        Date.parse(b.reward.receivedAt || b.updatedAt) -
+        Date.parse(a.reward.receivedAt || a.updatedAt),
+    );
+  $('reward-received').innerHTML =
+    rows
+      .slice(0, receivedRewardLimit)
+      .map((o) => {
+        const e = state.completedEntries.find((e) => e.eventId === o.eventId),
+          r = o.reward;
+        return `<article class="event-card"><span class="pill">${r.status === 'used' ? '사용·처분 완료' : '수령 완료 · 종결'}</span><h4>${esc(r.name || e?.prize || '경품')}</h4><p>${esc(e?.title || '응모')}</p><p>${knownRewardValue(r) ? `${Number(r.faceValue).toLocaleString()}원` : '가치 미정'}${r.receivedAt ? ` · 수령 기록 ${esc(new Date(r.receivedAt).toLocaleDateString())}` : ''}</p><div class="card-actions">${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록</button></div></article>`;
+      })
+      .join('') ||
+    '<p class="hint">아직 수령 완료로 기록한 경품이 없습니다. 경품을 받으면 ‘경품 받음 · 종결’로 정리하세요.</p>';
+  if (rows.length > receivedRewardLimit)
+    $('reward-received').innerHTML += '<button id="reward-received-more">20개 더 보기</button>';
+}
 function outcomeLabel(eventId) {
   const outcome = state.outcomes?.find((o) => o.eventId === eventId);
   if (outcome?.status === 'won' && outcome.reportedBy === 'agent')
@@ -1269,12 +1365,21 @@ function renderOutcomeSummary() {
     (sum, o) => sum + (o.reward?.status === 'used' ? o.reward.realizedValue : 0),
     0,
   );
+  renderReceivedRewards(won);
   $('outcome-summary').textContent =
     `접수 ${state.completedEntries.length}건 · 확인한 당첨 ${won.length}건 · 수령 ${won.filter((o) => ['received', 'used'].includes(o.reward?.status)).length}건 · 실현 가치 ${realized.toLocaleString()}원`;
   $('outcome-alerts').innerHTML = (state.outcomeAlerts || [])
     .map(
       (a) =>
-        `<p><button data-outcome="${esc(a.eventId)}">${esc(a.title)}</button> ${esc(a.message)}</p>`,
+        `<article class="event-card"><h4>${esc(a.title)}</h4><p>${esc(a.message)}</p><div class="card-actions"><button data-outcome="${esc(a.eventId)}">확인 경로·결과 열기</button>${rewardProgressButtons(a.eventId)}</div>${
+          state.outcomes.find((o) => o.eventId === a.eventId)?.status !== 'won'
+            ? resultGuide(
+                state.completedEntries.find((e) => e.eventId === a.eventId),
+                state.outcomes.find((o) => o.eventId === a.eventId),
+                true,
+              )
+            : ''
+        }</article>`,
     )
     .join('');
   const followStates = {
@@ -1285,17 +1390,15 @@ function renderOutcomeSummary() {
   };
   const followups = won.filter(
     (o) =>
-      o.followUp &&
-      o.followUp.state !== 'done' &&
-      !['received', 'used', 'expired'].includes(o.reward?.status),
+      o.followUp?.state !== 'done' && !['received', 'used', 'expired'].includes(o.reward?.status),
   );
   $('reward-followups').innerHTML =
     followups
       .slice(0, rewardFollowupLimit)
       .map((o) => {
-        const f = o.followUp,
+        const f = o.followUp || { state: 'awaiting_delivery' },
           e = state.completedEntries.find((e) => e.eventId === o.eventId);
-        return `<article class="event-card"><span class="pill warning">${esc(followStates[f.state])}</span><h3>${esc(e?.title || '당첨')}</h3><p>${esc(o.reward?.name || e?.prize || '경품 확인 필요')}</p><p>연락 대상 · ${esc(f.recipient || '확인 필요')}</p>${f.deadlineText ? `<p>회신 기한 · ${esc(f.deadlineText)}</p>` : ''}${f.deadlineUncertain ? '<p class="consent-notice">기한 안내가 불명확하거나 서로 다릅니다. 원문을 확인하세요.</p>' : ''}${f.deliveryNote ? `<p>${esc(f.deliveryNote)}</p>` : ''}<div class="card-actions"><button data-outcome="${esc(o.eventId)}">후속 처리·회신 초안</button><button data-followup-open="${esc(o.eventId)}">전용 브라우저에서 안내 열기</button></div></article>`;
+        return `<article class="event-card"><span class="pill warning">${esc(followStates[f.state])}</span><h3>${esc(e?.title || '당첨')}</h3><p>${esc(o.reward?.name || e?.prize || '경품 확인 필요')}</p><p>연락 대상 · ${esc(f.recipient || '확인 필요')}</p>${f.state === 'needs_reply' && f.deadlineText ? `<p>회신 기한 · ${esc(f.deadlineText)}</p>` : ''}${f.state === 'needs_reply' && f.deadlineUncertain ? '<p class="consent-notice">기한 안내가 불명확하거나 서로 다릅니다. 원문을 확인하세요.</p>' : ''}${f.deliveryNote ? `<p>${esc(f.deliveryNote)}</p>` : ''}<div class="card-actions">${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록·회신 초안</button><button data-followup-open="${esc(o.eventId)}">전용 브라우저에서 안내 열기</button></div></article>`;
       })
       .join('') +
     (followups.length > rewardFollowupLimit
@@ -1451,6 +1554,7 @@ document.addEventListener('click', (event) => {
   const b = event.target.closest('[data-outcome]');
   if (!b) return;
   const e = state.completedEntries.find((e) => e.eventId === b.dataset.outcome);
+  if (!e) return;
   const o = state.outcomes.find((o) => o.eventId === e.eventId),
     form = $('outcome-form');
   form.reset();
@@ -1483,6 +1587,7 @@ document.addEventListener('click', (event) => {
   for (const [k, v] of Object.entries(values)) form.elements.namedItem(k).value = v;
   form.elements.autoCheck.checked = !!o?.autoCheck;
   form.elements.hasFollowUp.checked = !!o?.followUp;
+  form.elements.valueKnown.checked = knownRewardValue(o?.reward);
   form.elements.deadlineUncertain.checked = !!o?.followUp?.deadlineUncertain;
   for (const input of form.querySelectorAll('input[name=requested]'))
     input.checked = !!o?.followUp?.requested.includes(input.value);
@@ -1490,7 +1595,9 @@ document.addEventListener('click', (event) => {
   $('outcome-proof').innerHTML = o?.check
     ? `<blockquote>${esc(o.check.quote)}</blockquote><p>${safeLink(o.check.url, '확인한 발표')} · ${esc(new Date(o.check.at).toLocaleString())}</p><a href="/evidence/${esc(o.check.screenshot)}" target="_blank">확인 당시 화면 ↗</a>`
     : '';
-  location.hash = 'rewards';
+  $('outcome-guide').innerHTML = resultGuide(e, o);
+  $('outcome-dialog').showModal();
+  $('outcome-dialog').scrollTop = 0;
 });
 $('outcome-form').onsubmit = guard(async () => {
   const f = new FormData($('outcome-form'));
@@ -1520,7 +1627,8 @@ $('outcome-form').onsubmit = guard(async () => {
             name: f.get('rewardName'),
             status: f.get('rewardStatus'),
             expiresOn: f.get('expiresOn') || null,
-            faceValue: Number(f.get('faceValue')),
+            faceValue: f.has('valueKnown') ? Number(f.get('faceValue')) : 0,
+            valueKnown: f.has('valueKnown'),
             realizedValue: Number(f.get('realizedValue')),
             code: f.get('code'),
           }
@@ -1528,6 +1636,7 @@ $('outcome-form').onsubmit = guard(async () => {
   });
   $('outcome-form').elements.code.value = '';
   $('reward-code').textContent = '';
+  $('outcome-dialog').close();
   toast('결과·경품을 저장했습니다.');
 });
 $('check-outcome').onclick = guard(async () => {
@@ -1574,6 +1683,131 @@ document.addEventListener('click', (e) => {
 });
 
 const rewardAlertPreference = 'ssal:reward-notifications';
+let rewardChoices = [];
+function explicitVoucherValue(name) {
+  if (/총|최대|상당/.test(name)) return undefined;
+  const amounts = [...name.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(만|천)?\s*원권/g)];
+  if (amounts.length !== 1) return undefined;
+  const match = amounts[0],
+    value = Number(match[1].replaceAll(',', '')) * ({ 만: 10000, 천: 1000 }[match[2]] || 1);
+  return Number.isFinite(value) && value <= 100000000 ? value : undefined;
+}
+function updateRewardProgressFields() {
+  const form = $('reward-progress-form'),
+    received = form.elements.stage.value === 'received';
+  $('reward-receipt-fields').hidden = !received;
+  $('reward-receipt-fields').disabled = !received;
+  const known = form.elements.valueKind.value === 'known';
+  $('reward-value-field').hidden = !known;
+  form.elements.faceValue.disabled = !received || !known;
+  form.elements.faceValue.required = received && known;
+  $('reward-progress-save').textContent = received ? '수령 완료로 저장' : '진행 상태 저장';
+}
+function chooseRewardPrize() {
+  const form = $('reward-progress-form'),
+    item = rewardChoices[Number($('reward-prize-choice').value)];
+  if ($('reward-prize-choice').value === 'custom') {
+    form.elements.rewardName.value = '';
+    form.elements.valueKind.value = 'unknown';
+    form.elements.faceValue.value = '';
+    form.elements.rewardName.focus();
+  } else if (item) {
+    form.elements.rewardName.value = item.name;
+    form.elements.valueKind.value = item.value === undefined ? 'unknown' : 'known';
+    form.elements.faceValue.value = item.value ?? '';
+  }
+  updateRewardProgressFields();
+}
+document.addEventListener('click', (event) => {
+  const close = event.target.closest('[data-close-dialog]');
+  if (close) $(close.dataset.closeDialog).close();
+  if (event.target.closest('#reward-received-more')) {
+    receivedRewardLimit += 20;
+    renderOutcomeSummary();
+  }
+  const button = event.target.closest('[data-reward-progress]');
+  if (!button) return;
+  const o = state.outcomes.find((o) => o.eventId === button.dataset.rewardProgress),
+    e = state.completedEntries.find((e) => e.eventId === o?.eventId);
+  if (!o || o.status !== 'won' || !e) return;
+  const form = $('reward-progress-form');
+  form.reset();
+  form.elements.eventId.value = o.eventId;
+  form.elements.expectedUpdatedAt.value = o.updatedAt;
+  form.elements.stage.value = button.dataset.stage || 'replied';
+  $('reward-progress-event').textContent = e.title;
+  rewardChoices = [
+    ...new Set([o.reward?.name, e.prize].filter(Boolean).map((n) => n.slice(0, 200))),
+  ].map((name) => ({
+    name,
+    value:
+      name === o.reward?.name && o.reward.valueKnown === false
+        ? undefined
+        : name === o.reward?.name && knownRewardValue(o.reward)
+          ? o.reward.faceValue
+          : explicitVoucherValue(name),
+  }));
+  $('reward-prize-choice').innerHTML =
+    rewardChoices.map((r, i) => `<option value="${i}">${esc(r.name)}</option>`).join('') +
+    '<option value="custom">기타 · 직접 입력</option>';
+  $('reward-prize-choice').value = rewardChoices.length ? '0' : 'custom';
+  chooseRewardPrize();
+  $('reward-progress-error').hidden = true;
+  $('reward-progress-dialog').showModal();
+});
+$('reward-progress-form').onchange = updateRewardProgressFields;
+$('reward-prize-choice').onchange = chooseRewardPrize;
+$('reward-progress-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget,
+    button = $('reward-progress-save');
+  if (button.disabled) return;
+  button.disabled = true;
+  $('reward-progress-error').hidden = true;
+  const f = new FormData(form),
+    received = f.get('stage') === 'received';
+  try {
+    await api('/api/outcomes/progress', {
+      eventId: f.get('eventId'),
+      expectedUpdatedAt: f.get('expectedUpdatedAt'),
+      stage: f.get('stage'),
+      ...(received
+        ? {
+            rewardName: f.get('rewardName'),
+            valueKnown: f.get('valueKind') === 'known',
+            faceValue: f.get('valueKind') === 'known' ? Number(f.get('faceValue')) : null,
+          }
+        : {}),
+    });
+    await refresh();
+    $('reward-progress-dialog').close();
+    toast(
+      received
+        ? '수령 완료로 정리했습니다. 수령한 경품 목록에서 다시 수정할 수 있습니다.'
+        : '회신·배송 상태를 기록했습니다.',
+    );
+  } catch (error) {
+    $('reward-progress-error').textContent =
+      {
+        reward_progress_changed:
+          '다른 작업에서 기록이 변경됐습니다. 창을 닫았다가 다시 열어 최신 내용을 확인하세요.',
+        confirmed_win_required: '당첨이 확인된 응모에서만 진행 상태를 기록할 수 있습니다.',
+        reward_progress_use_details: '이미 사용·만료된 경품은 상세 기록에서 수정하세요.',
+        reward_receipt_fields_required: '받은 경품명과 금액 확인 여부를 선택해 주세요.',
+        pause_before_updating_outcome:
+          '이 응모의 확인 작업이 진행 중입니다. 작업이 끝난 뒤 저장하세요.',
+      }[error.message] || error.message;
+    $('reward-progress-error').hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+};
+$('outcome-dialog').addEventListener('close', () => {
+  $('outcome-form').elements.code.value = '';
+  $('reward-code').textContent = '';
+  $('claim-reply-draft').value = '';
+  $('claim-reply-status').textContent = '';
+});
 const rewardAlertLedger = 'ssal:reward-notifications-seen';
 function notifyRewardAlerts() {
   const enabled = localStorage.getItem(rewardAlertPreference) === 'on';

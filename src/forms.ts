@@ -284,6 +284,40 @@ export async function inspectForm(page: Page) {
       )
         continue;
       if (!helpers.visible(el) && ![...(el.labels || [])].some(helpers.visible)) continue;
+      // Some forms place an unlabelled native mirror beside the labelled ARIA
+      // choice. Within one small container, one mirror and one explicit choice
+      // are a single widget; bind only the visible, labelled control.
+      if (['radio', 'checkbox'].includes(el.type) && !helpers.label(el).trim()) {
+        let block = el.parentElement;
+        let mirrored = false;
+        for (let depth = 0; block && depth < 4; depth++, block = block.parentElement) {
+          if (block.matches('form,body,html,main')) break;
+          const natives = [
+            ...block.querySelectorAll<HTMLInputElement>(`input[type=${el.type}]`),
+          ].filter(
+            (e) =>
+              !e.disabled && (helpers.visible(e) || [...(e.labels || [])].some(helpers.visible)),
+          );
+          const choices = [
+            ...block.querySelectorAll<HTMLElement>(`[role=${el.type}]:not(input)`),
+          ].filter(
+            (e) =>
+              helpers.visible(e) &&
+              e.getAttribute('aria-disabled') !== 'true' &&
+              ['true', 'false'].includes(e.getAttribute('aria-checked') || '') &&
+              (e.getAttribute('aria-label') || e.innerText).trim(),
+          );
+          if (natives.length > 1 || choices.length > 1) break;
+          if (natives[0] === el && choices.length === 1 && !choices[0]!.contains(el)) {
+            mirrored = true;
+            break;
+          }
+        }
+        if (mirrored) {
+          seen.add(index);
+          continue;
+        }
+      }
       // An unnamed aggregate checkbox is a UI shortcut, not an independent
       // consent answer. Plan/verify the individual notices to avoid accepting
       // optional terms or conflicting with the site's derived checked state.

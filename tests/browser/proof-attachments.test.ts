@@ -231,3 +231,29 @@ test('native checkbox inside labelled ARIA wrapper is recognized and filled exac
     await browser.close();
   }
 });
+
+test('unlabelled native sibling and labelled ARIA consent share one answer and preserve required hint', async () => {
+  const browser = await chromium.launch(),
+    page = await browser.newPage();
+  try {
+    await page.setContent(
+      `<form><fieldset><legend>답변 필수 개인정보 수집 및 이용 동의</legend><input type="checkbox" style="opacity:0"><div role="checkbox" aria-checked="false" aria-label="개인정보 수집 및 이용에 동의합니다." onclick="this.setAttribute('aria-checked','true');this.previousElementSibling.checked=true">개인정보 수집 및 이용에 동의합니다.</div></fieldset><button>제출</button></form>`,
+    );
+    const { view } = await inspectForm(page);
+    assert.equal(view.questions.length, 1);
+    const q = view.questions[0]!;
+    assert.equal(q.required, true);
+    assert.equal(q.options[0]!.label, '개인정보 수집 및 이용에 동의합니다.');
+    await applyAnswers(
+      page,
+      view,
+      new Map([[q.id, [q.options[0]!.id]]]),
+      () => {},
+      new AbortController().signal,
+    );
+    assert.equal(await page.locator('input').isChecked(), true);
+    assert.equal((await inspectForm(page)).view.fingerprint, view.fingerprint);
+  } finally {
+    await browser.close();
+  }
+});

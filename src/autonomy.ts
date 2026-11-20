@@ -83,7 +83,18 @@ export type SavedAnswer = {
   category: AnswerPlan['category'];
   at: string;
 };
+export type ProofAttachment = {
+  taskId: string;
+  screenshot: string;
+  sha256: string;
+  name: string;
+  size: number;
+  observedAt: number;
+  sourceUrl: string;
+  kind: string;
+};
 export type InboxItem = Question & {
+  proofAttachment?: ProofAttachment;
   reason: string;
   recommended?: string[];
   reviewDraft?: boolean;

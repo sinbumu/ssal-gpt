@@ -1041,3 +1041,20 @@ dialog#entry-manager::backdrop {
 #reward-value-field[hidden] {
   display: none;
 }
+
+.proof-attachment {
+  padding: 12px;
+  margin: 8px 0;
+  border: 1px solid var(--line, #d9ded9);
+  border-radius: 10px;
+}
+.proof-attachment img {
+  display: block;
+  max-width: 100%;
+  width: 380px;
+  max-height: 220px;
+  object-fit: contain;
+  object-position: left;
+  margin-top: 10px;
+  border-radius: 6px;
+}

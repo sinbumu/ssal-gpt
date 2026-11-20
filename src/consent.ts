@@ -96,7 +96,9 @@ const headings = [
 function noticeSections(q: Question) {
   let text = compact(q.description || '');
   // UI option labels are not part of the last retention/recipient section.
-  for (const option of [...q.options].sort((a, b) => b.label.length - a.label.length))
+  for (const option of q.options
+    .filter((o) => o.label.trim())
+    .sort((a, b) => b.label.length - a.label.length))
     text = text.split(option.label).join(' ');
   const re = new RegExp(headings.map((h) => `(${h.pattern})`).join('|'), 'gi');
   const matches = [...text.matchAll(re)];
@@ -119,7 +121,8 @@ function noticeSections(q: Question) {
 }
 function consentAnswer(q: Question, accept: boolean) {
   if (q.kind === 'text' || q.kind === 'select') return;
-  const yes = /^(?:동의(?:합니다|함)?|안내에\s*동의하고\s*진행|예|네|yes|agree|i agree)$/i;
+  const yes =
+    /^(?:(?:개인정보\s*수집\s*(?:및|·)\s*이용에\s*)?동의(?:합니다|함)?|안내에\s*동의하고\s*진행|예|네|yes|agree|i agree)[.!]?$/i;
   const no = /^(?:동의하지\s*않(?:습니다|음)|미동의|거부|아니[요오]|no|disagree|i do not agree)$/i;
   const options = q.options.filter((o) => (accept ? yes : no).test(o.label.trim()));
   if (options.length === 1) return [options[0]!.id];

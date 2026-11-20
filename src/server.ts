@@ -1,3 +1,4 @@
+import { approveProofAttachment, ProofAttachmentSchema } from './proof-attachments.js';
 import { dmCheckPlan, reviewDmFinding } from './instagram-dm.js';
 import { TelegramNotifications, type TelegramRequest } from './telegram.js';
 import { collectNotices, noticeInbox, readNotices } from './reward-notifications.js';
@@ -382,6 +383,13 @@ export async function createApp(options: {
         activeId: runner.activeId,
         selection: store.settings('selection', null),
       });
+    }
+    if (method === 'POST' && url.pathname === '/api/attachments/proof') {
+      return send(
+        response,
+        200,
+        await approveProofAttachment(store, ProofAttachmentSchema.parse(data)),
+      );
     }
     if (method === 'POST' && url.pathname === '/api/attachments') {
       return send(

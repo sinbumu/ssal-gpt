@@ -239,3 +239,15 @@ test('explicit week retention respects day limits and preserves manual, adaptive
   ])
     assert.equal(decideConsent(consentQ(notice('전화번호', undefined, period)), s).decision, 'ask');
 });
+
+test('full affirmative privacy label maps once and empty option labels never split the notice', () => {
+  const q = consentQ();
+  q.kind = 'checkbox';
+  q.options = [{ id: 'yes', label: '개인정보 수집 및 이용에 동의합니다.' }];
+  const state = setup('routine');
+  assert.deepEqual(decideConsent(q, state).answer, ['yes']);
+  q.options.push({ id: '', label: '' });
+  assert.equal(decideConsent(q, state).decision, 'accept');
+  q.options = [{ id: 'no', label: '개인정보 수집 및 이용에 동의하지 않습니다.' }];
+  assert.equal(decideConsent(q, state).decision, 'ask');
+});

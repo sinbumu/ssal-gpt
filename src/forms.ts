@@ -104,6 +104,10 @@ export async function inspectForm(page: Page) {
             .join(' ')
             .trim() ||
           localChoice ||
+          (['checkbox', 'radio'].includes(el.type)
+            ? el.closest(`[role=${el.type}]`)?.getAttribute('aria-label') ||
+              el.closest(`[role=${el.type}]`)?.textContent?.trim()
+            : '') ||
           [...(el.labels || [])].map((l) => l.textContent?.trim()).join(' ') ||
           el.getAttribute('placeholder') ||
           el.getAttribute('title') ||
@@ -514,7 +518,16 @@ export async function inspectForm(page: Page) {
     const aria = [...document.querySelectorAll<HTMLElement>('[role=radio],[role=checkbox]')];
     const visited = new Set<Element>();
     for (const control of aria) {
-      if (!helpers.visible(control) || control.matches('input') || visited.has(control)) continue;
+      if (
+        !helpers.visible(control) ||
+        control.matches('input') ||
+        visited.has(control) ||
+        // A labelled ARIA wrapper and its native control are one choice.
+        [...control.querySelectorAll<HTMLInputElement>('input')].some(
+          (el) => el.type === control.getAttribute('role') && seen.has(all.indexOf(el)),
+        )
+      )
+        continue;
       const ariaHelpers = {
         labelBy(el: Element) {
           return (el.getAttribute('aria-labelledby') || '')
@@ -563,7 +576,7 @@ export async function inspectForm(page: Page) {
         required:
           block.getAttribute('aria-required') === 'true' ||
           options.some((o) => o.getAttribute('aria-required') === 'true') ||
-          /\*/.test(label),
+          /\*|답변\s*필수/.test(label),
         multiple: kind === 'checkbox',
         indices: options.map((o) => aria.indexOf(o)),
         form: forms.indexOf(block.closest('form')!),

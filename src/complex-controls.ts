@@ -47,6 +47,8 @@ export type Upload = {
   fromDrive?: boolean;
   allowPicker?: boolean;
   beforeUpload?: () => void;
+  surface?: import('./file-controls.js').FileSurfaceReceipt;
+  confirmUpload?: (receipt: import('./file-controls.js').FileSurfaceReceipt) => void;
 };
 const confirmedSelections = new WeakMap<Page, Map<string, ElementHandle>>();
 const fileButton = /^(파일 추가|파일 업로드|add file|upload file)$/i;

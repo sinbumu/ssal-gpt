@@ -25,6 +25,7 @@ type Asset = {
   sha256: string;
   origin: string;
   attemptedAt?: number;
+  surface?: import('./file-controls.js').FileSurfaceReceipt;
   allowPicker?: boolean;
 };
 export async function addAttachment(
@@ -109,6 +110,12 @@ export async function loadAttachment(
     buffer,
     allowPicker: asset.allowPicker,
     fromDrive: false,
+    surface: asset.surface,
+    confirmUpload(surface: import('./file-controls.js').FileSurfaceReceipt) {
+      const current = store.settings<Asset | null>(`attachment:${id}`, null);
+      if (!current?.attemptedAt) throw new ServiceError('attachment_outside_grant');
+      store.setSettings(`attachment:${id}`, { ...current, surface });
+    },
     beforeUpload() {
       const current = store.settings<Asset | null>(`attachment:${id}`, null);
       if (!current || current.attemptedAt)

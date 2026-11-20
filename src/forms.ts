@@ -1,3 +1,4 @@
+import { applyNativeFile, verifiedFileName, fileSurface } from './file-controls.js';
 import type { Page } from 'playwright';
 import {
   applyRank,
@@ -118,13 +119,14 @@ export async function inspectForm(page: Page) {
     // Definition text excludes input values and control chrome. Keep visible
     // instructions/consent, including the outer question card, in the signature.
     const definitions = {
-      text(root: Element) {
+      text(root: Element, fileChrome = false) {
         const parts: string[] = [];
         const nodes = {
           walk(node: Node) {
             if (
               node instanceof Element &&
               (!helpers.visible(node) ||
+                (fileChrome && /^\d+\s*\/\s*\d+$/.test(node.textContent?.trim() || '')) ||
                 (location.hostname === 'docs.google.com' &&
                   /^\/forms\/d\//.test(location.pathname) &&
                   node.matches('[role=alert][jsname=Rfh2Tc]')) ||
@@ -279,7 +281,7 @@ export async function inspectForm(page: Page) {
       const el = all[index]!;
       if (
         seen.has(index) ||
-        el.disabled ||
+        (el.disabled && el.type !== 'file') ||
         ['hidden', 'submit', 'image', 'button', 'reset', 'password'].includes(el.type)
       )
         continue;
@@ -522,7 +524,7 @@ export async function inspectForm(page: Page) {
                   fieldset.matches('fieldset') &&
                   fieldset.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1
                 )
-              ? definitions.text(fieldset)
+              ? definitions.text(fieldset, kind === 'file')
               : '',
         ]
           .filter(Boolean)
@@ -1069,36 +1071,7 @@ export async function applyAnswers(
           )
         )
           throw new ServiceError('attachment_type_not_accepted');
-        const present = await control.evaluate(async (el) => {
-          const files = (el as HTMLInputElement).files;
-          return files?.length
-            ? {
-                name: files[0]!.name,
-                bytes: Array.from(new Uint8Array(await files[0]!.arrayBuffer())),
-              }
-            : null;
-        });
-        if (
-          !present ||
-          present.name !== file.name ||
-          !file.buffer.equals(Buffer.from(present.bytes))
-        ) {
-          file.beforeUpload?.();
-          await control.setInputFiles({
-            name: file.name,
-            mimeType: file.mimeType,
-            buffer: file.buffer,
-          });
-        }
-        const uploaded = await control.evaluate((el) =>
-          [...((el as HTMLInputElement).files || [])].map((f) => ({ name: f.name, size: f.size })),
-        );
-        if (
-          uploaded.length !== 1 ||
-          uploaded[0]!.name !== file.name ||
-          uploaded[0]!.size !== file.buffer.length
-        )
-          throw new ServiceError('field_verification_failed');
+        await applyNativeFile(page, control, question.signature, file, signal);
       } else if (question.kind === 'text') {
         if ((await control.inputValue()) !== answer[0]) await control.fill(answer[0] || '');
         control = controls.nth((await rebind()).indices[i]!);
@@ -1157,7 +1130,11 @@ export async function applyAnswers(
   }
 }
 export async function formValuesHash(page: Page) {
-  return hash(
+  const uploadSurfaces = await Promise.all(
+    (await page.locator('input[type=file]').all()).map(fileSurface),
+  );
+  return hash([
+    uploadSurfaces,
     await page
       .locator(
         'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[role=listbox][jsname=W85ice],[draggable=true],[role=listitem] a,fieldset a',
@@ -1187,7 +1164,7 @@ export async function formValuesHash(page: Page) {
               : undefined,
           })),
       ),
-  );
+  ]);
 }
 export async function moaformSnapshot(page: Page) {
   const { view, bindings } = await inspectForm(page);
@@ -1260,11 +1237,12 @@ export async function moaformSnapshot(page: Page) {
           checked: choice ? await control.isChecked() : undefined,
           value:
             q.kind === 'file'
-              ? await control.evaluate((el) =>
+              ? (await verifiedFileName(page, control, q.signature)) ||
+                (await control.evaluate((el) =>
                   Array.from((el as HTMLInputElement).files || [])
                     .map((f) => f.name)
                     .join(', '),
-                )
+                ))
               : await control.inputValue(),
           displayValue:
             q.kind === 'select'

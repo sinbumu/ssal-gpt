@@ -257,3 +257,68 @@ test('unlabelled native sibling and labelled ARIA consent share one answer and p
     await browser.close();
   }
 });
+
+test('async image uploads settle after disabled input, reset FileList and thumbnail counts without reupload', async () => {
+  const { Store } = await import('../../src/store.js');
+  const { addAttachment } = await import('../../src/attachments.js');
+  const { formValuesHash, moaformSnapshot } = await import('../../src/forms.js');
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-upload-settle-')),
+    store = new Store(dir);
+  const browser = await chromium.launch(),
+    page = await browser.newPage();
+  try {
+    await page.setContent(`<form><fieldset><legend>팔로우 인증 캡처</legend><input type="file" name="proof"><span class="count">0 / 1</span><div class="images"></div></fieldset><label>성함<input name="name"></label><button type="submit">제출</button></form><script>
+    window.uploads=0;document.querySelector('[type=file]').onchange=async function(){
+      window.uploads++;const image=URL.createObjectURL(this.files[0]);this.disabled=true;document.querySelector('[type=submit]').disabled=true;
+      setTimeout(()=>{this.value='';document.querySelector('.count').textContent='1 / 1';document.querySelector('.images').innerHTML='<img src="'+image+'" width="90"><button type="button" aria-label="첨부된 파일 삭제">X</button>';document.querySelector('[type=submit]').disabled=false;},450);
+    };</script>`);
+    const { view } = await inspectForm(page),
+      q = view.questions[0]!;
+    const job = {
+      id: randomUUID(),
+      kind: 'apply',
+      status: 'needs_user',
+      uncertain: false,
+      autonomy: createAutonomy(syntheticSettings, 'https://example.org'),
+    } as Job;
+    job.autonomy!.inbox = {
+      id: randomUUID(),
+      fingerprint: view.fingerprint,
+      items: [{ ...q, category: 'fact', reason: 'file' }],
+      createdAt: Date.now(),
+    };
+    store.saveJob(job);
+    const png = await page.screenshot();
+    const asset = await addAttachment(store, dir, {
+      jobId: job.id,
+      questionId: q.id,
+      name: 'proof.png',
+      base64: png.toString('base64'),
+      allowUpload: true,
+      allowPicker: false,
+    });
+    const resolve = () => loadAttachment(store, dir, job.id, q.id, asset.id);
+    const answers = new Map([
+      [q.id, [asset.id]],
+      [view.questions[1]!.id, ['fixture']],
+    ]);
+    await applyAnswers(page, view, answers, () => {}, new AbortController().signal, resolve);
+    assert.equal((await inspectForm(page)).view.fingerprint, view.fingerprint);
+    assert.equal((await moaformSnapshot(page))[0]!.fields[0]!.value, 'proof.png');
+    assert.equal(await page.locator('[name=name]').inputValue(), 'fixture');
+    await applyAnswers(page, view, answers, () => {}, new AbortController().signal, resolve);
+    assert.equal(await page.evaluate(() => (window as any).uploads), 1);
+    const before = await formValuesHash(page);
+    await page.locator('.images').evaluate((el) => el.replaceChildren());
+    assert.notEqual(await formValuesHash(page), before);
+    await assert.rejects(
+      applyAnswers(page, view, answers, () => {}, new AbortController().signal, resolve),
+      /attachment_upload_state_unknown/,
+    );
+    assert.equal(await page.evaluate(() => (window as any).uploads), 1);
+  } finally {
+    await browser.close();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

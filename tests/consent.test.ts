@@ -266,3 +266,32 @@ test('비동의 is a refusal for both explicit user choice and optional-consent 
   const delegated = setup('routine');
   assert.deepEqual(decideConsent(q, delegated).answer, ['no']);
 });
+
+test('geographic 동의 is a public quiz, while actual consent remains outside research', async () => {
+  const { consentQuestion, publicResearchQuestion } = await import('../src/autonomy.js');
+  const q = consentQ();
+  for (const label of [
+    '예시동의 2024년 1인 가구 수는?',
+    '가상구 시험3동의 사업체 수는?',
+    '동의대학교의 설립 연도는?',
+  ]) {
+    q.label = label;
+    assert.equal(consentQuestion(q), false, label);
+    assert.equal(publicResearchQuestion(q), true, label);
+  }
+  for (const label of [
+    '동의',
+    '비동의',
+    '개인정보동의',
+    '개인정보 수집 및 이용에 동의합니다',
+    '제3자 제공 동의',
+    '마케팅 수신 동의',
+    '약관 확인',
+    '동의하시나요?',
+    'I agree',
+  ]) {
+    q.label = label;
+    assert.equal(consentQuestion(q), true, label);
+    assert.equal(publicResearchQuestion(q), false, label);
+  }
+});

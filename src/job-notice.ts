@@ -130,6 +130,8 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       code,
     );
   const messages: Record<string, string> = {
+    research_question_not_available:
+      '공개 정답 조사 요청을 현재 문항·허용 범위에 연결하지 못했습니다. 입력·제출 전에 중단했습니다.',
     form_button_missing:
       '현재 문항을 진행할 버튼을 인식하지 못했습니다. 기존 입력·첨부 상태를 확인한 뒤 재개하세요.',
     form_button_unselected:

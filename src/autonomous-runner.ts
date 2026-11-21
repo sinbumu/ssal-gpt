@@ -24,6 +24,7 @@ import {
   resolveAnswer,
   personalKey,
   verificationQuestion,
+  publicResearchQuestion,
   settings,
   otherTextCondition,
   textDraftEligible,
@@ -452,9 +453,8 @@ export async function runAutonomous(
           const question = view.questions.find((q) => q.id === step.questionId);
           if (
             !question ||
-            verificationQuestion(question) ||
+            !publicResearchQuestion(question) ||
             !step.text ||
-            /이름|연락처|이메일|동의|약관|경험|회원|구매|직업|생년/.test(question.label) ||
             state.researched?.includes(question.signature)
           )
             throw new ServiceError('research_question_not_available');
@@ -549,8 +549,7 @@ export async function runAutonomous(
           const research = inbox.find(
             (q) =>
               q.category === 'knowledge' &&
-              !verificationQuestion(q) &&
-              !/이름|연락처|이메일|동의|약관|경험|회원|직업|생년/.test(q.label) &&
+              publicResearchQuestion(q) &&
               !state.researched?.includes(q.signature),
           );
           if (research) {

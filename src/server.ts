@@ -37,6 +37,7 @@ import {
   syntheticSettings,
   validateAnswer,
   verificationQuestion,
+  publicResearchQuestion,
   otherTextCondition,
   textDraftEligible,
   consentQuestion,
@@ -1137,10 +1138,7 @@ export async function createApp(options: {
         const state = job.autonomy;
         const questions =
           state?.inbox?.items.filter(
-            (q) =>
-              q.category === 'knowledge' &&
-              !verificationQuestion(q) &&
-              !/이름|연락처|이메일|동의|약관|경험|회원|직업|생년/.test(q.label),
+            (q) => q.category === 'knowledge' && publicResearchQuestion(q),
           ) || [];
         if (
           runner.isBusy() ||

@@ -305,7 +305,18 @@ function shippingField(q: Question, questions: Question[]) {
   return 'review';
 }
 export function consentQuestion(q: Question) {
-  return /동의|약관|마케팅|consent|agree|marketing/i.test(q.label);
+  // Korean place names followed by 의 (e.g. 예시동의 인구) are not consent.
+  // Require a consent word boundary or an explicit privacy/terms phrase.
+  return /(?:^|[\s·/([—:])(?:동의|비동의|미동의)(?=$|[\s·/)\]—:?!.,]|하|함|서|여부)|(?:개인정보|수집|이용|제공|처리|위탁|수신|전체|모두)\s*(?:에|을|를|및|과|와|·|\s)*동의|약관|마케팅|consent|agree|marketing/i.test(
+    q.label,
+  );
+}
+export function publicResearchQuestion(q: Question) {
+  return (
+    !verificationQuestion(q) &&
+    !consentQuestion(q) &&
+    !/이름|연락처|이메일|경험|회원|구매|직업|생년/.test(q.label)
+  );
 }
 export function verificationQuestion(q: Question) {
   return /인증\s*문자|보안\s*문자|자동\s*(?:기입|입력)\s*방지|captcha|verification code/i.test(

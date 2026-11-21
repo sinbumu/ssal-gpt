@@ -123,7 +123,8 @@ function consentAnswer(q: Question, accept: boolean) {
   if (q.kind === 'text' || q.kind === 'select') return;
   const yes =
     /^(?:(?:개인정보\s*수집\s*(?:및|·)\s*이용에\s*)?동의(?:합니다|함)?|안내에\s*동의하고\s*진행|예|네|yes|agree|i agree)[.!]?$/i;
-  const no = /^(?:동의하지\s*않(?:습니다|음)|미동의|거부|아니[요오]|no|disagree|i do not agree)$/i;
+  const no =
+    /^(?:동의하지\s*않(?:습니다|음)|미동의|비동의|거부|아니[요오]|no|disagree|i do not agree)$/i;
   const options = q.options.filter((o) => (accept ? yes : no).test(o.label.trim()));
   if (options.length === 1) return [options[0]!.id];
   if (!accept && !q.required && q.kind === 'checkbox') return [];
@@ -292,7 +293,7 @@ export function userConsentDecision(q: Question, answer: string[]): ConsentDecis
   const accept =
     answer.length > 0 &&
     !selected.some((label) =>
-      /동의\s*하지|미동의|거부|아니[요오]|^no$|disagree|do not agree/i.test(label),
+      /동의\s*하지|미동의|비동의|거부|아니[요오]|^no$|disagree|do not agree/i.test(label),
     );
   return {
     decision: accept ? 'accept' : 'decline',

@@ -15,6 +15,8 @@ import { googleFormId, googleFormState } from './google-form-dom.js';
 export type FormView = {
   url: string;
   fingerprint: string;
+  inputFingerprint?: string;
+  hasNumberedChoices?: boolean;
   questions: Question[];
   buttons: {
     id: string;
@@ -32,7 +34,14 @@ export type FormView = {
 type Binding = {
   indices: number[];
   optionValues: string[];
-  custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'google-select' | 'rank' | 'picker';
+  custom?:
+    | 'moa-radio'
+    | 'notice'
+    | 'aria-choice'
+    | 'google-select'
+    | 'rank'
+    | 'picker'
+    | 'numbered-choice';
 };
 export const isMoaform = (page: Page) => new URL(page.url()).hostname === 'answer.moaform.com';
 // Bind rendered controls only; never read provider-private response state.
@@ -176,9 +185,69 @@ export async function inspectForm(page: Page) {
       indices: number[];
       form: number;
       choiceBounds?: { min?: number; max: number };
-      custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'google-select' | 'rank' | 'picker';
+      custom?:
+        | 'moa-radio'
+        | 'notice'
+        | 'aria-choice'
+        | 'google-select'
+        | 'rank'
+        | 'picker'
+        | 'numbered-choice';
     }[] = [];
     const forms = [...document.forms];
+    // A bounded rendered widget contract: one heading, sequential numbered
+    // buttons with adjacent answer text, and a visible .select state. Never
+    // read a site's answer key or invoke its handlers instead of real clicks.
+    const numbered = [
+      ...document.querySelectorAll<HTMLButtonElement>('section .chk_wrap .answer > button.num'),
+    ];
+    const numberedControls = new Set<Element>();
+    const numberedSections = new Set(
+      numbered.filter(helpers.visible).map((b) => b.closest('section')!),
+    );
+    for (const section of numberedSections) {
+      const heading = section.querySelector<HTMLElement>(':scope > h3');
+      const choices = [
+        ...section.querySelectorAll<HTMLButtonElement>(':scope > .chk_wrap > .answer > button.num'),
+      ];
+      const labels = choices.map((b) => {
+        const copy = b.parentElement!.cloneNode(true) as HTMLElement;
+        copy.querySelector('button')?.remove();
+        return copy.textContent?.trim() || '';
+      });
+      if (
+        !heading ||
+        !helpers.visible(heading) ||
+        !heading.innerText.trim() ||
+        choices.length < 2 ||
+        choices.length > 10 ||
+        section.querySelectorAll('button,input,textarea,select').length !== choices.length ||
+        choices.some(
+          (b, i) =>
+            b.form ||
+            b.disabled ||
+            !helpers.visible(b) ||
+            b.textContent?.trim() !== String(i + 1) ||
+            b.parentElement?.querySelectorAll('button,a,input,textarea,select').length !== 1 ||
+            !labels[i],
+        ) ||
+        new Set(labels).size !== labels.length ||
+        choices.filter((b) => b.classList.contains('select')).length > 1
+      )
+        throw new Error('unsupported_numbered_choice');
+      choices.forEach((b) => numberedControls.add(b));
+      groups.push({
+        label: heading.innerText.trim(),
+        description: definitions.text(section).slice(0, 3000),
+        kind: 'radio',
+        required: true,
+        multiple: false,
+        form: -1,
+        custom: 'numbered-choice',
+        indices: choices.map((b) => numbered.indexOf(b)),
+        options: choices.map((b, i) => ({ label: `${i + 1}. ${labels[i]}`, value: String(i + 1) })),
+      });
+    }
     if (location.hostname === 'docs.google.com' && /^\/forms\/d\//.test(location.pathname)) {
       const lists = [...document.querySelectorAll<HTMLElement>('[role=listbox][jsname=W85ice]')];
       lists.forEach((list, index) => {
@@ -463,6 +532,25 @@ export async function inspectForm(page: Page) {
           ? definitions.text(localBlock).slice(0, 3000)
           : '';
       let nearbyConsent = '';
+      if (
+        kind === 'radio' &&
+        group.every((choice) => /동의|agree|consent/i.test(helpers.label(choice)))
+      ) {
+        let block = el.closest('table')?.parentElement;
+        for (let depth = 0; block && depth < 3; depth++, block = block.parentElement) {
+          if (block.matches('body,html,main,form')) break;
+          const previous = block.previousElementSibling;
+          if (
+            previous instanceof HTMLElement &&
+            helpers.visible(previous) &&
+            !previous.querySelector('input,textarea,select,button') &&
+            /개인정보.{0,20}수집|privacy|personal information/i.test(previous.innerText)
+          ) {
+            nearbyConsent = previous.innerText.slice(0, 3000);
+            break;
+          }
+        }
+      }
       if (kind === 'checkbox' && group.length === 1 && /동의|consent/i.test(helpers.label(el))) {
         let block = el.parentElement;
         for (let depth = 0; block && depth < 3; depth++, block = block.parentElement) {
@@ -774,6 +862,8 @@ export async function inspectForm(page: Page) {
         visible: helpers.visible(b),
         disabled: b.disabled,
         type: b.type,
+        explicitType: b.getAttribute('type'),
+        numberedChoice: numberedControls.has(b),
         role: b.getAttribute('role'),
         jsname: b.getAttribute('jsname'),
         providerControl:
@@ -796,10 +886,12 @@ export async function inspectForm(page: Page) {
         (b) =>
           b.visible &&
           !b.disabled &&
+          !b.numberedChoice &&
           (b.reveals ||
             (b.anchor
               ? b.localAnchor && /^(참여하기|응모하기|제출하기)$/i.test(b.label)
-              : ['submit', 'image'].includes(b.type) ||
+              : (['submit', 'image'].includes(b.type) &&
+                  (b.form !== -1 || ['submit', 'image'].includes(b.explicitType || ''))) ||
                 /^(다음|next|continue|제출(?:하기)?|응모하기|submit)$/i.test(b.label))),
       );
     return {
@@ -833,7 +925,7 @@ export async function inspectForm(page: Page) {
     const code =
       error instanceof Error &&
       error.message.match(
-        /^(?:page\.evaluate: )?(?:Error: )?(multiple_active_form_dialogs|unlabelled_custom_choice|unsupported_choice_state|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
+        /^(?:page\.evaluate: )?(?:Error: )?(multiple_active_form_dialogs|unlabelled_custom_choice|unsupported_choice_state|unsupported_numbered_choice|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
       )?.[1];
     if (code) throw new ServiceError(code);
     throw error;
@@ -919,6 +1011,19 @@ export async function inspectForm(page: Page) {
     buttons,
     googlePage,
     dialog: raw.dialog,
+    hasNumberedChoices: raw.groups.some((g) => g.custom === 'numbered-choice') || undefined,
+    inputFingerprint: hash({
+      url: page.url(),
+      questions,
+      dialog: raw.dialog,
+      forms: raw.forms,
+      constraints: raw.constraints,
+      bindings: [...bindings].map(([id, b]) => [
+        id,
+        b.custom,
+        ['aria-choice', 'moa-radio'].includes(b.custom || '') ? undefined : b.optionValues,
+      ]),
+    }),
     fingerprint: hash({
       url: page.url(),
       questions,
@@ -958,10 +1063,14 @@ export async function applyAnswers(
   onField: () => void,
   signal: AbortSignal,
   attachment?: (ref: string, question: Question) => Promise<Upload>,
+  inputOnly = false,
 ) {
   const initial = await inspectForm(page);
-  if (initial.view.fingerprint !== expected.fingerprint)
-    throw new ServiceError('form_structure_changed');
+  const matches = (view: FormView) =>
+    inputOnly
+      ? !!expected.inputFingerprint && view.inputFingerprint === expected.inputFingerprint
+      : view.fingerprint === expected.fingerprint;
+  if (!matches(initial.view)) throw new ServiceError('form_structure_changed');
   for (const q of expected.questions) {
     const answer = answers.get(q.id);
     if (answer && !validateAnswer(q, answer)) throw new ServiceError('invalid_form_answer');
@@ -977,16 +1086,34 @@ export async function applyAnswers(
     const answer = answers.get(question.id);
     if (!answer) continue;
     const fresh = await inspectForm(page);
-    if (fresh.view.fingerprint !== expected.fingerprint)
-      throw new ServiceError('form_structure_changed');
+    if (!matches(fresh.view)) throw new ServiceError('form_structure_changed');
     const binding = fresh.bindings.get(question.id)!;
     const rebind = async () => {
       const current = await inspectForm(page);
-      if (current.view.fingerprint !== expected.fingerprint)
-        throw new ServiceError('form_structure_changed');
+      if (!matches(current.view)) throw new ServiceError('form_structure_changed');
       return current.bindings.get(question.id)!;
     };
     if (binding.custom === 'notice') continue;
+    if (binding.custom === 'numbered-choice') {
+      signal.throwIfAborted();
+      const selected = question.options.findIndex((o) => o.id === answer[0]);
+      if (answer.length !== 1 || selected < 0) throw new ServiceError('invalid_form_answer');
+      const choices = page.locator('section .chk_wrap .answer > button.num');
+      const target = choices.nth((await rebind()).indices[selected]!);
+      if (!(await target.evaluate((b) => b.classList.contains('select'))))
+        await target.click({ timeout: 3000 });
+      const current = await rebind();
+      for (let i = 0; i < current.indices.length; i++)
+        if (
+          (await choices
+            .nth(current.indices[i]!)
+            .evaluate((b) => b.classList.contains('select'))) !==
+          (i === selected)
+        )
+          throw new ServiceError('field_verification_failed');
+      onField();
+      continue;
+    }
     if (binding.custom === 'google-select') {
       signal.throwIfAborted();
       if (answer.length !== 1 || !question.options.some((o) => o.id === answer[0]))
@@ -1156,7 +1283,7 @@ export async function applyAnswers(
             // A styled input can be covered by its label. Check state before fallback.
             control = controls.nth((await rebind()).indices[i]!);
             if ((await control.isChecked()) !== checked) {
-              if ((await inspectForm(page)).view.fingerprint !== expected.fingerprint)
+              if (!matches((await inspectForm(page)).view))
                 throw new ServiceError('form_structure_changed');
               const label = await control.evaluateHandle(
                 (el) => (el as HTMLInputElement).labels?.[0],
@@ -1195,7 +1322,7 @@ export async function formValuesHash(page: Page) {
     uploadSurfaces,
     await page
       .locator(
-        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[role=listbox][jsname=W85ice],[draggable=true],[role=listitem] a,fieldset a',
+        'input,textarea,select,.js-question .select-one-and-many,[role=radio],[role=checkbox],[role=listbox][jsname=W85ice],[draggable=true],[role=listitem] a,fieldset a,section .chk_wrap .answer > button.num',
       )
       .evaluateAll((els) =>
         els
@@ -1219,7 +1346,9 @@ export async function formValuesHash(page: Page) {
             })),
             selected: el.matches('.select-one-and-many')
               ? el.classList.contains('clicked')
-              : undefined,
+              : el.matches('section .chk_wrap .answer > button.num')
+                ? el.classList.contains('select')
+                : undefined,
           })),
       ),
   ]);
@@ -1262,7 +1391,7 @@ export async function moaformSnapshot(page: Page) {
       });
       continue;
     }
-    if (b.custom === 'moa-radio' || b.custom === 'aria-choice') {
+    if (b.custom === 'moa-radio' || b.custom === 'aria-choice' || b.custom === 'numbered-choice') {
       for (let i = 0; i < b.indices.length; i++)
         fields.push({
           label: q.label,
@@ -1274,13 +1403,17 @@ export async function moaformSnapshot(page: Page) {
             .locator(
               b.custom === 'aria-choice'
                 ? '[role=radio],[role=checkbox]'
-                : '.js-question .select-one-and-many',
+                : b.custom === 'numbered-choice'
+                  ? 'section .chk_wrap .answer > button.num'
+                  : '.js-question .select-one-and-many',
             )
             .nth(b.indices[i]!)
             .evaluate((e) =>
               e.hasAttribute('aria-checked')
                 ? e.getAttribute('aria-checked') === 'true'
-                : e.classList.contains('clicked'),
+                : e.matches('button.num')
+                  ? e.classList.contains('select')
+                  : e.classList.contains('clicked'),
             ),
         });
     } else {

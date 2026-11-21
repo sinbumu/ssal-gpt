@@ -113,7 +113,8 @@ export type AutonomyState = {
   organizer?: string;
   consents?: ConsentAudit[];
   synthetic?: boolean;
-  plan?: { fingerprint: string; answers: AnswerPlan[]; buttonId?: string };
+  plan?: { fingerprint: string; answers: AnswerPlan[]; buttonId?: string; inputOnly?: boolean };
+  localInput?: { definition: string; at: number; blockedRequests: number; count: number };
   overrides: Record<string, string[]>;
   reused?: Record<string, string[]>;
   privateAnswers?: string[];

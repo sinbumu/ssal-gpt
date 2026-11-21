@@ -1186,7 +1186,7 @@ export class Browser {
     if (
       isMoaform(this.page!) ||
       (await this.page!.locator(
-        '[role=radio]:not(input),[role=checkbox]:not(input),[role=listbox][jsname=W85ice],[draggable=true],fieldset button,[role=listitem] [role=button]',
+        '[role=radio]:not(input),[role=checkbox]:not(input),[role=listbox][jsname=W85ice],[draggable=true],fieldset button,[role=listitem] [role=button],section .chk_wrap .answer > button.num',
       ).count())
     )
       return moaformSnapshot(this.page!);

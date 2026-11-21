@@ -95,6 +95,16 @@ export const StepSchema = z
     evidenceQuote: z.string().max(2000).optional(),
     answers: z.array(AnswerPlanSchema).max(80).optional(),
     buttonId: z.string().optional(),
+    handoffReason: z
+      .enum([
+        'login',
+        'verification',
+        'personal_answer',
+        'consent',
+        'unsupported_form',
+        'ambiguous_control',
+      ])
+      .optional(),
     searchEngine: z.enum(['naver', 'google']).optional(),
     skipCategory: z.enum(['ended', 'requirements', 'access', 'restricted', 'other']).optional(),
     questionId: z.string().optional(),

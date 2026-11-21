@@ -251,3 +251,18 @@ test('full affirmative privacy label maps once and empty option labels never spl
   q.options = [{ id: 'no', label: '개인정보 수집 및 이용에 동의하지 않습니다.' }];
   assert.equal(decideConsent(q, state).decision, 'ask');
 });
+
+test('비동의 is a refusal for both explicit user choice and optional-consent delegation', () => {
+  const q = consentQ();
+  q.options = [
+    { id: 'yes', label: '동의' },
+    { id: 'no', label: '비동의' },
+  ];
+  const state = setup('manual');
+  state.overrides[q.signature] = ['no'];
+  assert.equal(resolveAnswer(q, undefined, state, [], '').consent?.decision, 'decline');
+  q.label = '선택 마케팅 동의';
+  q.required = false;
+  const delegated = setup('routine');
+  assert.deepEqual(decideConsent(q, delegated).answer, ['no']);
+});

@@ -98,6 +98,29 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
       phase,
       at: Date.now(),
     };
+  if (
+    [
+      'unsupported_numbered_choice',
+      'form_widget_unsupported',
+      'form_button_not_revealed',
+      'form_local_input_limit',
+    ].includes(code)
+  )
+    return {
+      category: 'technical',
+      title: '기술 오류 · 폼 조작 지원 필요',
+      reason:
+        code === 'form_button_not_revealed'
+          ? '허용된 답변을 입력했지만 진행·제출 버튼이 나타나지 않았습니다. 입력을 반복하거나 제출하지 않았습니다.'
+          : code === 'form_local_input_limit'
+            ? '입력 후 진행 버튼을 찾는 단계가 반복되어 중단했습니다. 제출하지 않았습니다.'
+            : '문항·선택 상태 또는 진행 버튼을 앱이 안전하게 연결하지 못했습니다. 로그인·인증 요청이 아닌 폼 조작 지원 문제입니다.',
+      nextAction:
+        '현재 화면과 입력은 보존합니다. 같은 재개를 반복하기보다 폼 지원을 보완하거나 수동 진행을 선택하세요. 직접 제출했다면 수동 완료로 기록하세요.',
+      code,
+      phase,
+      at: Date.now(),
+    };
   const normal =
     /^(?:discovery_(?:decision_limit|switch_limit|no_alternative)|selection_(?:call_limit|token_limit)|daily_.+|session_time_limit|budget_.+|unstable_source_recovery_limit)$/.test(
       code,

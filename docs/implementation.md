@@ -1757,4 +1757,4 @@ R67-e3를 실서비스 검증 완료로 갱신했다. 이 결과는 앱에 등�
 
 검토한 1차 자료: [CDP Target.createTarget](https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-createTarget), [Chromium BrowserWebContentsDelegate의 AddNewContents](https://github.com/chromium/chromium/blob/main/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc), [Playwright의 배경 페이지 요청](https://github.com/microsoft/playwright/issues/4822). 공개 소스와 설치 버전 구현은 2026-11-21 확인했다.
 
-적용 상태: 수정본과 빌드는 준비됐으나, 실행 중인 전용 브라우저가 직접 조작 모드이고 별도 응모가 답변 대기 중이어서 서버를 즉시 재시작하지 않았다. 현재 종료 방식은 전용 브라우저도 닫으므로 미전송 입력 보존 여부를 확인한 뒤 적용한다. 사용량 한도·프로필·위임 정책은 변경하지 않았다.
+적용 상태: 전용 브라우저가 직접 조작 모드이고 별도 응모가 답변 대기 중이어서 최초 재시작은 보류했다. 사용자가 창을 닫아도 된다고 확인한 뒤 2026-11-21 수정본을 빌드하고 SQLite 백업·정상 종료·서버 재시작을 완료했다. 재시작 전후 모든 저장 설정과 작업·이벤트·접수 테이블이 동일하며 완료 목록 건수도 보존됐다. 프로필·위임 정책·운영/선정 한도는 변경하지 않았고 브라우저를 자동으로 다시 열지 않았다. 사이트 팝업의 포커스 한계는 그대로 남아 있다.

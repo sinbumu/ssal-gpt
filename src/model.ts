@@ -81,6 +81,7 @@ export const StepSchema = z
       'needs_user',
       'form_plan',
       'research',
+      'query',
     ]),
     observationId: z.string().min(1),
     reason: z.string().min(1).max(500),

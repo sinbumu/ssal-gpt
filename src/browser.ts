@@ -26,6 +26,13 @@ import { ServiceError } from './auth.js';
 import { acceptsSubmissionConfirm } from './submission-confirm.js';
 import type { Step } from './model.js';
 import { searchUrl } from './evidence.js';
+import {
+  statisticsPage,
+  statisticsSelectors,
+  inspectStatisticsControl,
+  statisticsReadRequest,
+  type StatisticsControl,
+} from './statistics-query.js';
 import { isMoaform, moaformSnapshot } from './forms.js';
 import { observeGoogleConfirmation, type GoogleConfirmationView } from './google-receipt.js';
 import {
@@ -46,6 +53,7 @@ export type VisibleElement = {
   context?: string;
   href?: string;
   navigationOnly?: boolean;
+  statisticsQuery?: StatisticsControl;
   mediaNavigation?: 'next' | 'previous';
   mediaKey?: string;
   readDisclosure?: 'caption';
@@ -432,6 +440,12 @@ export class Browser {
         if (
           (this.readOnlyMode || this.readOnlyPages.has(route.request().frame().page())) &&
           !['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) &&
+          !statisticsReadRequest(
+            route.request().frame().url(),
+            route.request().method(),
+            url,
+            route.request().postData(),
+          ) &&
           !(
             this.dmReadPage === route.request().frame().page() &&
             dmReadRequest(route.request().method(), url, route.request().postData())
@@ -629,7 +643,12 @@ export class Browser {
     this.handles.clear();
     const id = randomUUID();
     progress.stage = 'controls';
-    const handles = await page.locator(observableControls).elementHandles();
+    const handles = await page
+      .locator(
+        observableControls +
+          (this.readOnlyPages.has(page) && statisticsPage(url) ? statisticsSelectors : ''),
+      )
+      .elementHandles();
     const elements: VisibleElement[] = [];
     const social = instagram
       ? await inspectInstagram(page, instagram, observableControls, handles)
@@ -832,6 +851,12 @@ export class Browser {
       const item = JSON.parse(serialized) as
         | (Omit<VisibleElement, 'ref'> & { mediaIdentity?: string; disclosureIdentity?: string })
         | null;
+      if (item && this.readOnlyPages.has(page) && statisticsPage(url)) {
+        item.statisticsQuery = await handle
+          .evaluate(inspectStatisticsControl)
+          .catch(() => undefined);
+        if (item.statisticsQuery) item.label = item.statisticsQuery.label;
+      }
       if (!item) {
         await handle.dispose();
         continue;
@@ -1350,6 +1375,32 @@ export class Browser {
       )
         await page.mouse.click(step.x, step.y);
       else throw new ServiceError('invalid_click_target');
+    } else if (step.action === 'query') {
+      const control = o.elements.find((e) => e.ref === step.ref)?.statisticsQuery;
+      if (!target || !control || !this.readOnlyPages.has(page) || !statisticsPage(page.url()))
+        throw new ServiceError('statistics_query_not_allowed');
+      const current = await target.evaluate(inspectStatisticsControl);
+      if (JSON.stringify(current) !== JSON.stringify(control))
+        throw new ServiceError('stale_observation');
+      if (control.kind === 'click') {
+        await target.click();
+      } else {
+        if (!step.text || !control.options?.includes(step.text))
+          throw new ServiceError('statistics_option_not_observed');
+        if (control.kind === 'select') {
+          await target.selectOption({ label: step.text });
+          if ((await target.evaluate(inspectStatisticsControl))?.value !== step.text)
+            throw new ServiceError('statistics_selection_unverified');
+        } else {
+          await target.press('Home');
+          for (let i = 0; i < control.options.indexOf(step.text); i++)
+            await target.press('ArrowRight');
+          const after = await target.evaluate(inspectStatisticsControl);
+          const expected = (control.options.indexOf(step.text) * 100) / 3;
+          if (!after?.value?.endsWith('%') || Math.abs(parseFloat(after.value) - expected) > 0.1)
+            throw new ServiceError('statistics_selection_unverified');
+        }
+      }
     } else if (step.action === 'type') {
       if (!target || step.text === undefined) throw new ServiceError('input_target_required');
       await target.fill(step.text);

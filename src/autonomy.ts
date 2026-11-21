@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Store } from './store.js';
 import { searchPage, observedQuote, type SourceEvidence } from './evidence.js';
 import { maskPrivateText } from './private-text.js';
+import type { ResearchProgress } from './research-policy.js';
 import {
   ConsentPolicySchema,
   ConsentAssessmentSchema,
@@ -122,6 +123,7 @@ export type AutonomyState = {
   entryChannel?: string;
   researched?: string[];
   researchRetries?: number;
+  researchProgress?: ResearchProgress;
   introAdvances?: number;
   inbox?: {
     id: string;
@@ -185,6 +187,7 @@ export function createAutonomy(config: Settings, origin: string, synthetic = fal
     synthetic,
     expires: Date.now() + 24 * 60 * 60_000,
     overrides: {},
+    researchProgress: { calls: 0, searches: [], failedUrls: [], stops: [] },
     metrics: {
       modelCalls: 0,
       modelMs: 0,

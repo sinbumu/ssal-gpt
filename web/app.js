@@ -130,7 +130,9 @@ async function api(path, data) {
           ? '작업 위임이 만료되었거나 변경됐습니다. 해당 작업의 「위임 갱신하고 현재 화면에서 재개」를 이용해 주세요.'
           : value.error === 'delegation_changed_refresh_required'
             ? '방금 프로필·정책이 변경됐습니다. 새로고침 후 현재 정책으로 다시 확인해 주세요.'
-            : value.error || '요청을 완료하지 못했습니다.',
+            : value.error === 'budget_decision_limit'
+              ? '이 작업의 누적 판단 한도를 모두 사용했습니다. 현재 한도에서는 추가 AI 판단을 재개할 수 없습니다.'
+              : value.error || '요청을 완료하지 못했습니다.',
     );
   return value;
 }
@@ -586,7 +588,26 @@ function renderOutcome(j) {
 }
 function renderJobBudget(j) {
   const b = j.budget;
-  return `<div class="job-meta">${b ? `AI 호출 ${b.calls}/${b.callLimit}회 · 이 작업 남은 판단 최대 ${b.remainingDecisions}회<br>` : ''}판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${b?.blocked ? `<p class="warning-text">${b.blocked === 'selection_call_limit' ? `운영 설정의 호출 한도 ${b.callLimit}회 소진` : '운영 설정의 토큰 한도 소진'} · 작업 한도 ${j.maxSteps}회와 별도로 적용됩니다. 같은 설정으로는 추가 AI 판단을 실행할 수 없습니다.</p>` : ''}`;
+  const progress = j.autonomy?.researchProgress;
+  const research = progress?.calls || progress?.stops?.length ? progress : undefined;
+  const stop = research?.stops?.at(-1)?.code;
+  const researchReason =
+    {
+      research_budget_reserved: '입력·검토에 필요한 판단 횟수를 남기고 조사를 중단했습니다.',
+      research_allocation_used: '이 문항에 배분한 조사 횟수를 사용했습니다.',
+      research_repeated_query: '같거나 유사한 검색 반복을 중단했습니다.',
+      research_no_progress: '같은 화면에서 새 근거가 없어 조사를 중단했습니다.',
+      research_rejection_limit: '읽기 차단·실패 주소 등으로 재계획한 뒤에도 진행하지 못했습니다.',
+      research_engine_switch_limit: '검색 엔진 사이의 반복 전환을 중단했습니다.',
+      research_action_not_read_only: '조회 범위를 벗어나는 동작을 실행하지 않았습니다.',
+      research_controls_or_evidence_unavailable:
+        '현재 조회 컨트롤 또는 공개 정답 근거가 부족합니다.',
+      research_evidence_review: '관찰한 근거를 답변 준비 단계에서 검증합니다.',
+    }[stop] ||
+    (stop
+      ? '공개 근거 조사를 중단했습니다. 실행 기록에서 원인을 확인하세요.'
+      : '공개 근거를 조사하고 있습니다.');
+  return `<div class="job-meta">${b ? `AI 호출 ${b.calls}/${b.callLimit}회 · 이 작업 남은 판단 최대 ${b.remainingDecisions}회<br>` : ''}판단 ${j.steps}/${j.maxSteps}회 · 입력 ${j.inputTokens.toLocaleString()} / 출력 ${j.outputTokens.toLocaleString()} 토큰</div>${research ? `<p class="hint"><strong>공개 정답 조사 · ${research.calls}회</strong><br>${esc(researchReason)} 아직 확인하지 못한 정답은 추측해 제출하지 않습니다.</p>` : ''}${b?.blocked ? `<p class="warning-text">${b.blocked === 'selection_call_limit' ? `운영 설정의 호출 한도 ${b.callLimit}회 소진` : '운영 설정의 토큰 한도 소진'} · 작업 한도 ${j.maxSteps}회와 별도로 적용됩니다. 같은 설정으로는 추가 AI 판단을 실행할 수 없습니다.</p>` : ''}`;
 }
 function renderDiscoveryBudgetHint() {
   if (!state?.selectionPolicy) return;

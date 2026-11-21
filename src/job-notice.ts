@@ -337,14 +337,18 @@ export function jobNotice(job: Job): JobNotice | undefined {
       category: 'normal',
       title: '정상 중단 · 일시정지/조건/한도',
       reason:
-        job.status === 'stopped' &&
-        job.note === '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.'
-          ? '작업을 중지했습니다. 추가 답변이나 재개 없이 실행 기록만 보관합니다.'
-          : job.note,
+        job.status === 'paused' && job.steps >= job.maxSteps
+          ? '이 작업의 누적 판단 한도를 모두 사용했습니다. 재개나 앱 재시작으로 사용량이 초기화되지 않습니다.'
+          : job.status === 'stopped' &&
+              job.note === '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.'
+            ? '작업을 중지했습니다. 추가 답변이나 재개 없이 실행 기록만 보관합니다.'
+            : job.note,
       nextAction:
-        job.status === 'stopped'
-          ? '중지한 기록입니다. 필요한 경우 기회 목록에서 처리 방법을 선택하세요.'
-          : '일시정지 이유와 남은 한도를 확인한 뒤 재개하거나 보관하세요.',
+        job.status === 'paused' && job.steps >= job.maxSteps
+          ? '현재 한도에서는 추가 AI 판단이 불가능합니다. 기존 기록을 보관하거나 수동 진행을 선택할 수 있습니다. 저장된 제출 증거 확인은 별도입니다.'
+          : job.status === 'stopped'
+            ? '중지한 기록입니다. 필요한 경우 기회 목록에서 처리 방법을 선택하세요.'
+            : '일시정지 이유와 남은 한도를 확인한 뒤 재개하거나 보관하세요.',
     };
   return {
     category: 'user',

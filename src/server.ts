@@ -14,6 +14,7 @@ import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
 import { StorageManager } from './storage.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { pendingFormAction, pendingFormReveal } from './form-execution.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1296,6 +1297,16 @@ export async function createApp(options: {
         await runner.pause(id, action === 'stop');
       } else if (action === 'resume') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
+        if (
+          job.autonomy &&
+          (!job.tasks?.length || job.taskFormStarted) &&
+          job.steps >= job.maxSteps &&
+          data.extraSteps !== 20 &&
+          !pendingFormAction(job) &&
+          !pendingFormReveal(job) &&
+          !(job.autonomy?.plan && job.autonomy.finalApproval)
+        )
+          throw new ServiceError('budget_decision_limit', 409);
         if (job.autonomy && !job.uncertain && delegationIssue(job.autonomy, settings(store)))
           throw new ServiceError('delegation_expired_or_changed', 409);
         if (job.status === 'approval') throw new ServiceError('review_pending_action_first');

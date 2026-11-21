@@ -133,6 +133,8 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     browser_observation_failed: '브라우저 화면을 읽는 중 분류되지 않은 오류가 발생했습니다.',
     browser_observation_timeout: '브라우저 화면 읽기 시간이 초과됐습니다.',
     browser_closed: '작업에 연결된 브라우저나 탭이 닫혔습니다.',
+    browser_background_tab_failed:
+      '배경 탭을 만들지 못했습니다. 창을 강제로 앞으로 열지 않고 중단했습니다. 기존 응모 화면은 보존합니다.',
     observation_target_changed: '관찰 중 작업 대상 탭이 바뀌어 기존 화면을 사용하지 않았습니다.',
     unclassified_error: '분류되지 않은 기술 오류로 작업을 중단했습니다.',
     ambiguous_form_questions:

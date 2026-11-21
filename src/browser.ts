@@ -1,4 +1,5 @@
 import { dmReadRequest, inspectDm } from './instagram-dm.js';
+import { backgroundPage, scriptWindowFocusGuard } from './browser-background.js';
 import {
   chromium,
   type BrowserContext,
@@ -204,8 +205,16 @@ export class Browser {
       this.attach(saved);
       this.ownerJobId = id;
     } else if (this.ownerJobId && this.ownerJobId !== id) {
-      this.attach(await this.context!.newPage());
-      this.ownerJobId = undefined;
+      const original = this.page!;
+      const owner = this.ownerJobId;
+      try {
+        this.attach(await backgroundPage(this.context!, original));
+        this.ownerJobId = undefined;
+      } catch (error) {
+        if (!original.isClosed()) this.attach(original);
+        this.ownerJobId = owner;
+        throw error;
+      }
     }
     this.jobPages.set(id, this.page!);
     this.invalidate();
@@ -364,16 +373,18 @@ export class Browser {
     const owner = this.ownerJobId;
     const previousReadOnly = this.readOnlyMode;
     this.readOnlyMode = true;
-    const tab = await this.context!.newPage();
-    this.attach(tab);
-    this.readOnlyPages.add(tab);
+    let tab: Page | undefined;
     try {
+      tab = await backgroundPage(this.context!, original);
+      this.attach(tab);
+      this.readOnlyPages.add(tab);
       return await read();
     } finally {
       for (const popup of this.context?.pages() || []) {
-        if (popup !== tab && (await popup.opener()) === tab) await popup.close().catch(() => {});
+        if (tab && popup !== tab && (await popup.opener()) === tab)
+          await popup.close().catch(() => {});
       }
-      await tab.close().catch(() => {});
+      await tab?.close().catch(() => {});
       this.readOnlyMode = previousReadOnly;
       this.attach(original);
       this.ownerJobId = owner;
@@ -435,6 +446,7 @@ export class Browser {
         await route.abort('blockedbyclient').catch(() => {});
       }
     });
+    await this.context.addInitScript(scriptWindowFocusGuard);
     await this.context.addInitScript(() => {
       (window as any).__ssalRevision = 0;
       new MutationObserver((mutations) => {
@@ -474,6 +486,7 @@ export class Browser {
     this.context.on('page', (page) => this.attach(page));
     this.page = this.context.pages()[0] || (await this.context.newPage());
     this.attach(this.page);
+    await this.page.evaluate(scriptWindowFocusGuard);
     const context = this.context;
     this.context.on('close', () => {
       if (this.context !== context) return;
@@ -1474,7 +1487,7 @@ export class Browser {
     await selected.evaluate(track);
     this.setManual(true);
     this.setReadOnlyMode(false);
-    await selected.bringToFront();
+    // Connecting a tab grants control, not native-window activation.
   }
   async disconnectPending() {
     await this.pendingExternal?.close();

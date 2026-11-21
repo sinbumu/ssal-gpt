@@ -51,12 +51,22 @@ $('active-jobs-less').onclick = () => {
   $('attention').scrollIntoView({ block: 'start' });
 };
 const terminalJob = (job) => ['completed', 'stopped'].includes(job.status);
+function delegationIssue(job) {
+  const a = job.autonomy;
+  if (!a || a.synthetic || job.uncertain || terminalJob(job) || job.archivedAt) return;
+  if (!state.autonomy.policy.enabled) return 'disabled';
+  if (state.autonomy.revision !== a.revision) return 'changed';
+  if (a.expires < Date.now()) return 'expired';
+}
 const canAnswerInbox = (job) =>
   !job.archivedAt &&
   job.status === 'needs_user' &&
   job.autonomy?.inbox &&
+  !delegationIssue(job) &&
   (job.autonomy.synthetic || state.autonomy.revision === job.autonomy.revision);
 function jobNote(job) {
+  if (job.note === 'delegation_expired_or_changed')
+    return job.notice?.reason || '작업 위임을 갱신해야 합니다.';
   return job.status === 'stopped' &&
     job.note === '브라우저를 직접 조작할 수 있습니다. 재개 시 새 화면부터 확인합니다.'
     ? '작업을 중지했습니다. 추가 답변이나 재개 없이 실행 기록만 보관합니다.'
@@ -73,7 +83,8 @@ function renderJobNotice(j) {
   };
   const outcomes = { retrying: '자동 재관찰', recovered: '복구 완료', stopped: '재관찰 중단' };
   const rows = j.observationDiagnostics || [];
-  return `${n ? `<div class="job-notice ${esc(n.category)}"><strong>${esc(n.title)}</strong><p><b>다음 조치</b> · ${esc(n.nextAction)}</p></div>` : ''}${n?.code || rows.length ? `<details class="job-diagnostics"><summary>원인·복구 기록${rows.length ? ` · ${rows.length}건` : ''}</summary>${n?.code ? `<p>${esc(n.code)} · 발생 단계: ${esc(n.phase || '기록 없음')}</p>` : ''}<ul>${rows.map((d) => `<li>${esc(new Date(d.at).toLocaleString())} · ${esc(stages[d.stage] || d.stage)} · ${esc(outcomes[d.outcome] || d.outcome)} (${esc(d.attempt)}회)<br><small>${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">화면을 다시 읽은 기록입니다. 클릭·입력·제출을 재실행한 횟수가 아닙니다.</p></details>` : ''}${renderModelDiagnostics(j)}`;
+  const formRows = j.formDiagnostics || [];
+  return `${n ? `<div class="job-notice ${esc(n.category)}"><strong>${esc(n.title)}</strong><p><b>다음 조치</b> · ${esc(n.nextAction)}</p></div>` : ''}${n?.code || rows.length || formRows.length ? `<details class="job-diagnostics"><summary>원인·복구 기록${rows.length + formRows.length ? ` · ${rows.length + formRows.length}건` : ''}</summary>${n?.code ? `<p>${esc(n.code)} · 발생 단계: ${esc(n.phase || '기록 없음')}</p>` : ''}${rows.length ? `<ul>${rows.map((d) => `<li>${esc(new Date(d.at).toLocaleString())} · ${esc(stages[d.stage] || d.stage)} · ${esc(outcomes[d.outcome] || d.outcome)} (${esc(d.attempt)}회)<br><small>${esc(d.code)}</small></li>`).join('')}</ul><p class="hint">화면을 다시 읽은 기록입니다. 클릭·입력·제출을 재실행한 횟수가 아닙니다.</p>` : ''}${formRows.length ? `<ul>${formRows.map((d) => `<li>${esc(new Date(d.at).toLocaleString())} · 폼 ${esc({ retrying: '재관찰·재계획', recovered: '입력 검증 복구 완료', stopped: '복구 중단' }[d.outcome])} · ${d.attempt}회 · ${esc(d.code)} (${esc(d.phase)})</li>`).join('')}</ul><p class="hint">폼 복구는 이미 입력한 값도 다시 검증할 수 있습니다. 제출 재시도 횟수가 아닙니다.</p>` : j.autonomy?.metrics.recoveries ? `<p>이전 폼 자동 복구 ${j.autonomy.metrics.recoveries}회가 있습니다. 구버전의 세부 기록은 실행 기록에서 확인할 수 있습니다.</p>` : ''}</details>` : ''}${renderModelDiagnostics(j)}`;
 }
 function renderModelDiagnostics(j) {
   if (!j.modelDiagnostics?.length) return '';
@@ -115,7 +126,11 @@ async function api(path, data) {
     throw new Error(
       value.error === 'consent_decision_required'
         ? '개인정보 동의에서 동의 또는 거부를 직접 선택해 주세요.'
-        : value.error || '요청을 완료하지 못했습니다.',
+        : value.error === 'delegation_expired_or_changed'
+          ? '작업 위임이 만료되었거나 변경됐습니다. 해당 작업의 「위임 갱신하고 현재 화면에서 재개」를 이용해 주세요.'
+          : value.error === 'delegation_changed_refresh_required'
+            ? '방금 프로필·정책이 변경됐습니다. 새로고침 후 현재 정책으로 다시 확인해 주세요.'
+            : value.error || '요청을 완료하지 못했습니다.',
     );
   return value;
 }
@@ -423,11 +438,11 @@ function renderInbox(job) {
         ? `<button data-review-consent="${job.id}">동의 선택 다시 검토</button>`
         : '')
     );
-  const changed = !a.synthetic && state.autonomy.revision !== a.revision;
-  if (changed && !['completed', 'stopped'].includes(job.status))
+  const issue = delegationIssue(job);
+  if (issue)
     return (
       metrics +
-      `<p class="warning-text">설정이 변경되어 기존 위임이 만료되었습니다.</p><button data-action="delegation" data-job="${job.id}">이 작업에 새 정책 적용</button>`
+      `<div class="delegation-review"><strong>${issue === 'expired' ? '작업 위임 24시간 만료' : issue === 'disabled' ? '자율 응모 위임 꺼짐' : '프로필·위임 정책 변경'}</strong><p>${issue === 'expired' ? '저장된 답변과 사용량은 보존되어 있습니다. 이 작업에 같은 정책을 다시 적용하면 현재 화면에서 이어갑니다.' : issue === 'disabled' ? '05 프로필·위임 정책에서 위임을 켠 뒤 이 작업에 적용해 주세요.' : '변경된 프로필·정책으로 답변을 다시 검토합니다. 이전 자동 판단과 제출 승인은 재사용하지 않습니다.'}</p><p class="hint">대상: ${esc(a.origin)} · 기존 만료: ${esc(new Date(a.expires).toLocaleString())}<br>최종 제출: ${state.autonomy.policy.finalSubmit === 'auto' ? '자동' : '확인함에서 직접 확인'} · 사용량·복구 한도는 초기화하지 않습니다.</p>${issue === 'disabled' ? '<a href="#autonomy">프로필·위임 정책 보기</a>' : `<button data-action="renew-resume-current" data-job="${job.id}" ${state.busy ? 'disabled' : ''}>위임 갱신하고 현재 화면에서 재개</button>`}</div>`
     );
   const box = a.inbox;
   if (!box) return metrics;
@@ -441,7 +456,7 @@ function renderInbox(job) {
   const uncertainStage = box.final && /^(다음|next|continue)$/i.test(box.buttonLabel || '');
   return (
     metrics +
-    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}" ${q.condition ? `data-condition-parent="${esc(q.condition.questionId)}" data-condition-option="${esc(q.condition.optionId)}"` : ''}><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.category === 'consent' && q.kind === 'checkbox' && q.options.length === 1 ? `<label class="check"><input type="radio" name="${esc(q.id)}" value="${esc(q.options[0].id)}" required>동의합니다</label><label class="check"><input type="radio" name="${esc(q.id)}" value="__ssal_decline__" required>동의하지 않습니다</label>` : q.kind === 'file' ? renderAttachmentQuestion(q, a.origin) : q.kind === 'rank' ? q.options.map((_, i) => `<label>${i + 1}순위<select name="${esc(q.id)}" required><option value="">선택</option>${q.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`).join('') : q.kind === 'text' ? (q.reviewDraft || q.draftEligible ? `<textarea name="${esc(q.id)}" rows="3" ${q.required ? 'required' : ''} maxlength="${Math.min(q.maxLength ?? 2000, 2000)}" autocomplete="off">${esc(q.recommended?.[0] || '')}</textarea>` : `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="${Math.min(q.maxLength ?? 2000, 2000)}" autocomplete="off">`) : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.kind === 'text' && q.maxLength !== undefined ? `<p class="hint">사이트 입력 제한: ${q.maxLength}자</p>` : ''}${q.condition ? '<p class="hint">앞 문항에서 ‘기타’를 선택한 경우에만 작성합니다.</p>' : ''}${q.reviewDraft ? '<p class="hint">AI 검토용 초안 · 내용을 확인하고 필요하면 수정하세요. 실제 이용 경험을 확인한 답변은 아닙니다.</p>' : ''}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.proofAttachment ? '캡처를 직접 만들 필요 없이, 준비한 이미지와 첨부 동의만 확인하세요.' : q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `${box.drafts?.reason ? `<p class="hint">${esc(box.drafts.reason)}</p>` : ''}${!state.browser.open && !box.final && !m.fields && !m.batches ? `<button type="button" data-restore-form="${job.id}">입력 전 응모 화면 복원</button>` : ''}${!box.drafts && box.items.some((q) => q.draftEligible && !q.recommended) ? `<button type="button" data-prepare-drafts="${job.id}">서술형 AI 초안 준비</button>` : box.drafts?.status === 'preparing' ? '<p class="hint">AI 초안을 준비하고 있습니다…</p>' : ''}<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit" ${box.drafts?.status === 'preparing' ? 'disabled' : ''}>한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
+    `<div class="approval"><h3>확인함 · ${box.final ? (uncertainStage ? '이 단계 전송 검토' : '최종 제출') : `${box.items.length}개 답변`}</h3><form data-inbox="${job.id}" data-inbox-id="${box.id}">${box.final ? `<p>${uncertainStage ? '이 단계의 답변을 전송합니다. 마지막 단계인지 확인되지 않았으며, 추가 문항이 나오면 계속 진행합니다.' : '입력 내용을 확인한 뒤 이 응모의 최종 제출을 허용합니다.'}</p>${renderFormReview(box.review, job.currentUrl)}<button type="submit" class="primary">${uncertainStage ? '확인한 답변 전송하고 계속' : '최종 제출하고 결과 확인'}</button>` : box.items.map((q) => `<fieldset data-question="${esc(q.id)}" ${q.condition ? `data-condition-parent="${esc(q.condition.questionId)}" data-condition-option="${esc(q.condition.optionId)}"` : ''}><legend>${esc(q.label)}</legend>${q.description ? `<details><summary>질문 설명·동의 내용</summary><p>${esc(q.description)}</p></details>` : ''}${q.category === 'consent' && q.kind === 'checkbox' && q.options.length === 1 ? `<label class="check"><input type="radio" name="${esc(q.id)}" value="${esc(q.options[0].id)}" required>동의합니다</label><label class="check"><input type="radio" name="${esc(q.id)}" value="__ssal_decline__" required>동의하지 않습니다</label>` : q.kind === 'file' ? renderAttachmentQuestion(q, a.origin) : q.kind === 'rank' ? q.options.map((_, i) => `<label>${i + 1}순위<select name="${esc(q.id)}" required><option value="">선택</option>${q.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`).join('') : q.kind === 'text' ? (q.reviewDraft || q.draftEligible ? `<textarea name="${esc(q.id)}" rows="3" ${q.required ? 'required' : ''} maxlength="${Math.min(q.maxLength ?? 2000, 2000)}" autocomplete="off">${esc(q.recommended?.[0] || '')}</textarea>` : `<input name="${esc(q.id)}" ${q.required ? 'required' : ''} maxlength="${Math.min(q.maxLength ?? 2000, 2000)}" autocomplete="off">`) : q.options.map((o) => `<label class="check"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="${esc(q.id)}" value="${esc(o.id)}" ${!q.multiple && q.required ? 'required' : ''}>${esc(o.label)}</label>`).join('')}${q.multiple && q.maxChoices ? `<p class="hint">${q.minChoices === q.maxChoices ? `정확히 ${q.maxChoices}개 선택` : `최대 ${q.maxChoices}개 선택`}</p>` : ''}${q.kind === 'text' && q.maxLength !== undefined ? `<p class="hint">사이트 입력 제한: ${q.maxLength}자</p>` : ''}${q.condition ? '<p class="hint">앞 문항에서 ‘기타’를 선택한 경우에만 작성합니다.</p>' : ''}${q.reviewDraft ? '<p class="hint">AI 검토용 초안 · 내용을 확인하고 필요하면 수정하세요. 실제 이용 경험을 확인한 답변은 아닙니다.</p>' : ''}${q.recommended ? `<p class="hint">추천: ${q.recommended.map(esc).join(', ')}</p>` : `<p class="hint">${q.proofAttachment ? '캡처를 직접 만들 필요 없이, 준비한 이미지와 첨부 동의만 확인하세요.' : q.category === 'consent' ? esc(q.reason) : '저장된 답이 없어 직접 확인이 필요합니다.'}</p>`}</fieldset>`).join('') + `${box.drafts?.reason ? `<p class="hint">${esc(box.drafts.reason)}</p>` : ''}${!state.browser.open && !box.final && !m.fields && !m.batches ? `<button type="button" data-restore-form="${job.id}">입력 전 응모 화면 복원</button>` : ''}${!box.drafts && box.items.some((q) => q.draftEligible && !q.recommended) ? `<button type="button" data-prepare-drafts="${job.id}">서술형 AI 초안 준비</button>` : box.drafts?.status === 'preparing' ? '<p class="hint">AI 초안을 준비하고 있습니다…</p>' : ''}<button type="button" data-recommend="${job.id}">추천 답변 모두 선택</button><label class="check"><input type="checkbox" name="remember"> 이 사이트의 같은 질문에 답변 재사용${a.synthetic ? ' (합성 테스트에서는 저장하지 않음)' : ''}</label><button class="primary" type="submit" ${box.drafts?.status === 'preparing' ? 'disabled' : ''}>한 번에 답변하고 재개</button>`}</form>${!box.final && box.items.some((q) => q.category === 'knowledge') && (a.researchRetries || 0) < 2 ? `<button type="button" data-action="retry-research" data-job="${job.id}">공개 근거 다시 찾기</button>` : ''}</div>`
   );
 }
 function renderAttachmentQuestion(q, origin) {
@@ -589,6 +604,8 @@ function renderJobActions(j) {
   if (j.status === 'running')
     return `<div class="card-actions">${b('pause', '일시정지 · 직접 조작')}${b('stop', '중지')}</div>`;
   if (['completed', 'stopped'].includes(j.status)) return '';
+  if (delegationIssue(j))
+    return `<div class="card-actions">${b('archive', '진행 목록에서 보관', state.busy)}</div>`;
   return `<div class="card-actions">${j.status === 'approval' ? b('pause', '취소 · 직접 조작') : j.autonomy?.inbox ? '' : b('resume', budgetBlocked ? '운영 한도 소진 · 재개 불가' : j.steps >= j.maxSteps ? '20회 추가해 재개' : j.kind === 'discover' ? `남은 최대 ${j.budget?.remainingDecisions ?? j.maxSteps - j.steps}회로 탐색 재개` : '새 화면에서 재개', state.busy || budgetBlocked)}${['paused', 'failed', 'needs_user', 'submission_unknown'].includes(j.status) ? b('resume-current', '현재 브라우저 화면에서 재개', state.busy || budgetBlocked) : ''}${j.uncertain ? b('verify-result', '저장된 접수 증거 다시 확인', state.busy) + b('reconcile', '미제출 직접 확인', state.busy) : ''}${b('archive', j.uncertain ? '미확인 상태로 보관' : '진행 목록에서 보관', state.busy)}</div>`;
 }
 function render() {
@@ -976,6 +993,16 @@ document.addEventListener('submit', (event) => {
     const answers = Object.fromEntries(
       box.items.filter((q) => q.kind !== 'file').map((q) => [q.id, f.getAll(q.id)]),
     );
+    for (const q of box.items.filter((q) => q.multiple && q.kind !== 'file')) {
+      const count = (answers[q.id] || []).length;
+      if (
+        (q.minChoices && count < q.minChoices && (q.required || count > 0)) ||
+        (q.maxChoices && count > q.maxChoices)
+      )
+        throw new Error(
+          `${q.label}: ${q.minChoices === q.maxChoices ? `정확히 ${q.maxChoices}개` : `최대 ${q.maxChoices}개`}를 선택해 주세요.`,
+        );
+    }
     const explicitDeclines = [];
     for (const q of box.items)
       if (
@@ -1076,6 +1103,20 @@ const handleAction = guard(async (event) => {
   if (!button) return;
   const { action, job: id, approval: approvalId } = button.dataset;
   const job = state.jobs.find((j) => j.id === id);
+  if (action === 'renew-resume-current' || action === 'delegation') {
+    if (
+      !confirm(
+        `${state.events.find((e) => e.id === job.eventId)?.title || '이 작업'}\n대상: ${job.autonomy.origin}\n\n현재 저장된 프로필·위임 정책을 이 작업에 24시간 적용합니다.\n최종 제출: ${state.autonomy.policy.finalSubmit === 'auto' ? '자동' : '확인함에서 직접 확인'}\n사용량·복구 횟수와 접수 기록은 유지합니다. 현재 화면에서 이어갈까요?`,
+      )
+    )
+      return;
+    await api(`/api/jobs/${id}/renew-delegation`, {
+      revision: state.autonomy.revision,
+      useCurrentPage: true,
+    });
+    toast('위임을 갱신했습니다. 현재 화면에서 이어서 진행합니다.');
+    return;
+  }
   if (
     action === 'reconcile' &&
     !confirm(

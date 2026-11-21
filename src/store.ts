@@ -57,6 +57,13 @@ export type Job = {
   formExecution?: import('./form-execution.js').FormExecution;
   stopReason?: JobNotice;
   observationDiagnostics?: ObservationDiagnostic[];
+  formDiagnostics?: {
+    at: number;
+    code: string;
+    phase: string;
+    attempt: number;
+    outcome: 'retrying' | 'recovered' | 'stopped';
+  }[];
   retryEventId?: string;
   retryFromJobId?: string;
   readTraces?: ReadTraceSummary[];

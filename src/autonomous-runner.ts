@@ -106,6 +106,18 @@ export async function runAutonomous(
     job.note = message;
     store.saveJob(job);
   };
+  const formDiagnostic = (code: string, outcome: 'retrying' | 'recovered' | 'stopped') => {
+    job.formDiagnostics = [
+      ...(job.formDiagnostics || []),
+      {
+        at: Date.now(),
+        code,
+        phase,
+        attempt: state.metrics.recoveries,
+        outcome,
+      },
+    ].slice(-30);
+  };
   try {
     // Repair the old no-button plan only while no site input or transmission occurred.
     // Dashboard overrides remain available to the new plan after restart.
@@ -586,6 +598,8 @@ export async function runAutonomous(
           if (view.questions.some((q) => q.signature === audit.signature && answers.has(q.id)))
             audit.appliedAt = new Date().toISOString();
         state.metrics.browserMs += Date.now() - begin;
+        if (job.formDiagnostics?.at(-1)?.outcome === 'retrying')
+          formDiagnostic(job.formDiagnostics.at(-1)!.code, 'recovered');
         state.metrics.batches++;
         // A conditional question can appear after the last field, too.
         const after = await inspectForm(browser.page!);
@@ -725,6 +739,7 @@ export async function runAutonomous(
           state.metrics.recoveries < state.policy.maxRecoveries
         ) {
           state.metrics.recoveries++;
+          formDiagnostic(code, 'retrying');
           delete state.plan;
           delete state.finalApproval;
           record(
@@ -732,6 +747,7 @@ export async function runAutonomous(
           );
           continue;
         }
+        if (phase.startsWith('form_') && code) formDiagnostic(code, 'stopped');
         throw error;
       }
     }

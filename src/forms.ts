@@ -8,7 +8,7 @@ import {
   pickerContainer,
   type Upload,
 } from './complex-controls.js';
-import { hash, type Question } from './autonomy.js';
+import { hash, validateAnswer, type Question } from './autonomy.js';
 import { ServiceError } from './auth.js';
 import { googleFormId, googleFormState } from './google-form-dom.js';
 
@@ -59,6 +59,7 @@ export async function inspectForm(page: Page) {
   }
   const pending = page.evaluate(() => {
     const moa = location.hostname === 'answer.moaform.com';
+    const naver = location.hostname === 'form.naver.com' && /^\/response\//.test(location.pathname);
     const scope = {
       shown(el: Element) {
         const s = getComputedStyle(el);
@@ -119,6 +120,27 @@ export async function inspectForm(page: Page) {
     // Definition text excludes input values and control chrome. Keep visible
     // instructions/consent, including the outer question card, in the signature.
     const definitions = {
+      validation(el: Element) {
+        if (
+          !naver ||
+          !el.matches('p.nsv_survey_question_guide_alert[id^="nsv-survey-question-guide-alert-"]')
+        )
+          return false;
+        const group = el.closest('[role=group]');
+        const guide = group?.querySelector(
+          '.nsv_survey_question_guide:not(.nsv_survey_question_guide_alert)',
+        );
+        const exact =
+          guide && helpers.visible(guide)
+            ? guide.textContent?.trim().match(/^(\d+)개만 선택 가능$/)?.[1]
+            : undefined;
+        return (
+          !!exact &&
+          el.textContent?.trim() === `${exact}개만 선택 가능합니다.` &&
+          !!group?.querySelector('input[type=checkbox]') &&
+          !el.querySelector('input,button,a')
+        );
+      },
       text(root: Element, fileChrome = false) {
         const parts: string[] = [];
         const nodes = {
@@ -126,6 +148,7 @@ export async function inspectForm(page: Page) {
             if (
               node instanceof Element &&
               (!helpers.visible(node) ||
+                definitions.validation(node) ||
                 (fileChrome && /^\d+\s*\/\s*\d+$/.test(node.textContent?.trim() || '')) ||
                 (location.hostname === 'docs.google.com' &&
                   /^\/forms\/d\//.test(location.pathname) &&
@@ -152,6 +175,7 @@ export async function inspectForm(page: Page) {
       options: { label: string; value: string }[];
       indices: number[];
       form: number;
+      choiceBounds?: { min?: number; max: number };
       custom?: 'moa-radio' | 'notice' | 'aria-choice' | 'google-select' | 'rank' | 'picker';
     }[] = [];
     const forms = [...document.forms];
@@ -492,6 +516,21 @@ export async function inspectForm(page: Page) {
           : kind === 'radio' || kind === 'checkbox'
             ? group.map((e) => ({ label: helpers.label(e).slice(0, 500), value: e.value }))
             : [];
+      const guide =
+        naver && kind === 'checkbox'
+          ? fieldset?.querySelector(
+              '.nsv_survey_question_guide:not(.nsv_survey_question_guide_alert)',
+            )
+          : undefined;
+      const countGuide =
+        guide && helpers.visible(guide)
+          ? guide.textContent?.trim().match(/^(?:(최대)\s*)?(\d+)개(만)? 선택 가능$/)
+          : undefined;
+      const count = Number(countGuide?.[2]);
+      const choiceBounds =
+        count > 0 && count <= options.length && (countGuide?.[1] || countGuide?.[3])
+          ? { min: countGuide?.[3] ? count : undefined, max: count }
+          : undefined;
       groups.push({
         label: questionLabel,
         description: [
@@ -544,6 +583,7 @@ export async function inspectForm(page: Page) {
           ) ||
           /답변\s*필수/.test(questionLabel),
         multiple: kind === 'checkbox' || (el instanceof HTMLSelectElement && el.multiple),
+        choiceBounds,
         options,
         indices,
         form: linkedConsent?.element === el ? linkedConsent.form : forms.indexOf(el.form!),
@@ -829,9 +869,23 @@ export async function inspectForm(page: Page) {
           ? Number(raw.constraints[i]![0]![3])
           : undefined,
       maxChoices: g.multiple
-        ? Number((g.label + ' ' + g.description).match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) ||
+        ? g.choiceBounds?.max ||
+          Number((g.label + ' ' + g.description).match(/(?:최대|max(?:imum)?)\s*(\d+)/i)?.[1]) ||
           undefined
         : 1,
+      minChoices: g.choiceBounds?.min,
+      legacySignatures: g.choiceBounds?.min
+        ? [
+            hash({
+              label: g.label.replace(/\s+/g, ' ').trim(),
+              description: `${g.description} ${g.choiceBounds.min}개만 선택 가능합니다.`
+                .replace(/\s+/g, ' ')
+                .trim(),
+              kind: g.kind,
+              options: options.map((o) => o.label),
+            }),
+          ]
+        : undefined,
       options,
     };
   });
@@ -908,6 +962,10 @@ export async function applyAnswers(
   const initial = await inspectForm(page);
   if (initial.view.fingerprint !== expected.fingerprint)
     throw new ServiceError('form_structure_changed');
+  for (const q of expected.questions) {
+    const answer = answers.get(q.id);
+    if (answer && !validateAnswer(q, answer)) throw new ServiceError('invalid_form_answer');
+  }
   for (const q of expected.questions) {
     if (
       initial.bindings.get(q.id)?.custom === 'notice' &&

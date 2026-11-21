@@ -57,8 +57,11 @@ export type Question = {
   required: boolean;
   options: { id: string; label: string }[];
   multiple: boolean;
+  minChoices?: number;
   maxChoices?: number;
   maxLength?: number;
+  // Compatibility only for a provider's previously hashed validation chrome.
+  legacySignatures?: string[];
 };
 export const AnswerPlanSchema = z
   .object({
@@ -193,6 +196,28 @@ export function createAutonomy(config: Settings, origin: string, synthetic = fal
       startedAt: Date.now(),
     },
   };
+}
+export function delegationIssue(state: AutonomyState, config: Settings) {
+  if (!state.policy.enabled || (!state.synthetic && !config.policy.enabled)) return 'disabled';
+  if (!state.synthetic && state.revision !== config.revision) return 'changed';
+  if (state.expires < Date.now()) return 'expired';
+}
+export function renewAutonomy(state: AutonomyState, config: Settings): AutonomyState {
+  const next = {
+    ...state,
+    revision: config.revision,
+    profile: { ...config.profile },
+    policy: PolicySchema.parse(config.policy),
+    expires: Date.now() + 24 * 60 * 60_000,
+    // A time renewal retains explicit answers. A changed profile/policy needs
+    // fresh resolution; never revive a prior automatic decision or approval.
+    overrides: state.revision === config.revision ? state.overrides : {},
+  };
+  delete next.inbox;
+  delete next.plan;
+  delete next.finalApproval;
+  delete next.reused;
+  return next;
 }
 export const syntheticSettings: Settings = {
   revision: 'synthetic-v1',
@@ -355,6 +380,7 @@ export function validateAnswer(q: Question, answer: string[]): string[] | undefi
       : undefined;
   if (q.kind === 'rank' && answer.length !== q.options.length) return undefined;
   if (!q.multiple && answer.length > 1) return undefined;
+  if (q.minChoices && answer.length > 0 && answer.length < q.minChoices) return undefined;
   if (q.maxChoices && answer.length > q.maxChoices) return undefined;
   if (q.required && !answer.length) return undefined;
   return answer.every((a) => q.options.some((o) => o.id === a)) &&
@@ -371,7 +397,18 @@ export function resolveAnswer(
   questions: Question[] = [],
 ): { answer?: string[]; source: string; recommendation?: string[]; consent?: ConsentDecision } {
   const isConsent = consentQuestion(q) || plan?.category === 'consent';
-  const override = state.overrides[q.signature];
+  let override = state.overrides[q.signature];
+  if (
+    (!override || !validateAnswer(q, override)) &&
+    !isConsent &&
+    q.kind === 'checkbox' &&
+    q.legacySignatures
+  ) {
+    const compatible = q.legacySignatures
+      .map((signature) => state.overrides[signature])
+      .filter((answer): answer is string[] => !!answer && !!validateAnswer(q, answer));
+    if (compatible.length && new Set(compatible.map(hash)).size === 1) override = compatible[0];
+  }
   if (q.kind === 'file') {
     const answer = state.overrides[q.id];
     return {

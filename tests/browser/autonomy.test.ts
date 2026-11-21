@@ -425,12 +425,21 @@ test('revoked delegation stops before input; settings and profile are not copied
     app.runner.model.decide = syntheticModel().decide;
     app.runner.start(j.id);
     await app.runner.finished();
-    assert.equal(app.store.job(j.id)!.note, 'delegation_expired_or_changed');
+    assert.equal(app.store.job(j.id)!.stopReason?.code, 'delegation_expired_or_changed');
+    assert.match(app.store.job(j.id)!.note, /24시간 위임/);
     assert.equal(app.store.job(j.id)!.steps, 0);
     assert.equal(await app.browser.page!.locator('input').first().inputValue(), '');
     const s = await fetch(app.origin + '/api/state').then((r) => r.text());
     assert.ok(!s.includes('demo@example.invalid'));
-    assert.equal((await post(app, `/api/jobs/${j.id}/delegation`, {})).status, 200);
+    assert.equal((await post(app, `/api/jobs/${j.id}/delegation`, {})).status, 400);
+    assert.equal(
+      (
+        await post(app, `/api/jobs/${j.id}/renew-delegation`, {
+          revision: JSON.parse(s).autonomy.revision,
+        })
+      ).status,
+      200,
+    );
     app.runner.start(j.id);
     await app.runner.finished();
     assert.equal(app.store.job(j.id)!.status, 'completed');

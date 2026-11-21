@@ -29,6 +29,8 @@ import { demoPage } from './demo.js';
 import {
   SettingsSchema,
   createAutonomy,
+  delegationIssue,
+  renewAutonomy,
   settings,
   memories,
   saveAnswer,
@@ -903,7 +905,7 @@ export async function createApp(options: {
       return send(response, 201, { id });
     }
     const match = url.pathname.match(
-      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|prepare-drafts|restore-form|review-consent|delegation|retry-research|archive|unarchive|hold-note|task)$/,
+      /^\/api\/jobs\/([a-f0-9-]+)\/(pause|stop|resume|approve|notes|reconcile|verify-result|context|inbox|prepare-drafts|restore-form|review-consent|delegation|renew-delegation|retry-research|archive|unarchive|hold-note|task)$/,
     );
     if (match) {
       const id = match[1]!;
@@ -1249,21 +1251,46 @@ export async function createApp(options: {
           manualNavigation = false;
         }
       }
-      if (action === 'delegation') {
+      if (action === 'delegation' || action === 'renew-delegation') {
         if (
           runner.isBusy() ||
+          manualNavigation ||
           !job.autonomy ||
           job.autonomy.synthetic ||
           job.uncertain ||
           ['completed', 'stopped'].includes(job.status)
         )
           throw new ServiceError('cannot_update_job_delegation');
-        const priorConsents = job.autonomy.consents;
-        job.autonomy = createAutonomy(settings(store), job.autonomy.origin);
-        job.autonomy.consents = priorConsents;
+        const config = settings(store);
+        if (!config.policy.enabled) throw new ServiceError('delegation_not_enabled');
+        if (data.revision !== config.revision)
+          throw new ServiceError('delegation_changed_refresh_required');
+        const current = browser.page?.url();
+        if (data.useCurrentPage === true) {
+          if ((job.browserEngine || 'chromium') !== browser.engine)
+            throw new ServiceError('job_browser_profile_mismatch');
+          if (
+            !current ||
+            new URL(current).origin !== job.autonomy.origin ||
+            !job.allowedOrigins.includes(new URL(current).origin)
+          )
+            throw new ServiceError('current_page_outside_job_scope');
+        }
+        job.autonomy = renewAutonomy(job.autonomy, config);
         job.autonomy.organizer = store.event(job.eventId || '')?.organizer;
+        delete job.stopReason;
+        delete job.approval;
+        if (data.useCurrentPage === true) {
+          browser.ownerJobId = id;
+          browser.invalidate();
+          job.currentUrl = current;
+        }
         job.status = 'paused';
+        job.note =
+          '현재 정책으로 이 작업의 위임을 24시간 갱신했습니다. 사용량·복구 횟수는 유지합니다.';
         store.saveJob(job);
+        store.note(id, job.note);
+        if (data.useCurrentPage === true) runner.start(id);
         return send(response, 200, { ok: true });
       }
       if (action === 'pause' || action === 'stop') {
@@ -1271,6 +1298,8 @@ export async function createApp(options: {
         await runner.pause(id, action === 'stop');
       } else if (action === 'resume') {
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
+        if (job.autonomy && !job.uncertain && delegationIssue(job.autonomy, settings(store)))
+          throw new ServiceError('delegation_expired_or_changed', 409);
         if (job.status === 'approval') throw new ServiceError('review_pending_action_first');
         if (job.autonomy?.inbox && data.useCurrentPage !== true)
           throw new ServiceError('answer_inbox_first');

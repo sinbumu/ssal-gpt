@@ -36,6 +36,105 @@ async function fixture(
 }
 const signal = () => new AbortController().signal;
 
+test('Naver exact-choice validation appears and clears during a batch without changing its definition', async () =>
+  fixture(
+    `<form><label>앞 문항<input name="first"></label><div role="group">
+    <strong role="heading">관심 분야 (최대 3개)</strong>
+    <p class="nsv_survey_question_guide">3개만 선택 가능</p>
+    ${['A', 'B', 'C', 'D'].map((value) => `<label><input type="checkbox" name="choices" value="${value}">${value}</label>`).join('')}
+    <p id="nsv-survey-question-guide-alert-1" class="nsv_survey_question_guide nsv_survey_question_guide_alert" hidden>3개만 선택 가능합니다.</p>
+    </div><button>제출</button></form><script>
+    document.querySelector('form').onsubmit=e=>e.preventDefault();
+    document.querySelectorAll('[name=choices]').forEach(input=>input.onchange=()=>{
+      document.querySelector('.nsv_survey_question_guide_alert').hidden=document.querySelectorAll('[name=choices]:checked').length===3;
+    });</script>`,
+    async (page) => {
+      const { view } = await inspectForm(page);
+      const q = view.questions[1]!;
+      assert.equal(q.minChoices, 3);
+      assert.equal(q.maxChoices, 3);
+      let fields = 0;
+      await applyAnswers(
+        page,
+        view,
+        new Map([
+          [view.questions[0]!.id, ['fixture']],
+          [q.id, ['A', 'B', 'C']],
+        ]),
+        () => fields++,
+        signal(),
+      );
+      assert.equal(fields, 2);
+      assert.equal((await inspectForm(page)).view.fingerprint, view.fingerprint);
+      assert.equal(await page.locator('input:checked').count(), 3);
+      await page.getByLabel('A', { exact: true }).uncheck();
+      assert.equal((await inspectForm(page)).view.fingerprint, view.fingerprint);
+      await applyAnswers(page, view, new Map([[q.id, ['A', 'B', 'C']]]), () => {}, signal());
+      assert.equal(await page.locator('.nsv_survey_question_guide_alert').isVisible(), false);
+      await assert.rejects(
+        applyAnswers(page, view, new Map([[q.id, ['A']]]), () => {}, signal()),
+        /invalid_form_answer/,
+      );
+      assert.equal(
+        await page.locator('input:checked').count(),
+        3,
+        'bad counts are rejected before input',
+      );
+      await page.locator('.nsv_survey_question_guide_alert').evaluate((el) => {
+        el.removeAttribute('hidden');
+        el.textContent = '개인정보를 다른 수신자에게 제공하며 2년 보관합니다.';
+      });
+      await assert.rejects(
+        applyAnswers(page, view, new Map([[q.id, ['A', 'B', 'C']]]), () => {}, signal()),
+        /form_structure_changed/,
+      );
+    },
+    'https://form.naver.com/response/syntheticChoice',
+  ));
+
+test('Naver choice constraints and only exact prior validation signatures reuse valid explicit answers', async () =>
+  fixture(
+    `<div role="group"><strong role="heading">선호 (최대 2개)</strong><p class="nsv_survey_question_guide">3개만 선택 가능</p>${['A', 'B', 'C', 'D'].map((v) => `<label><input type="checkbox" name="c">${v}</label>`).join('')}</div>`,
+    async (page) => {
+      const { resolveAnswer, createAutonomy, syntheticSettings, hash } =
+        await import('../../src/autonomy.js');
+      const { view } = await inspectForm(page);
+      const q = view.questions[0]!;
+      assert.equal(q.minChoices, 3);
+      assert.equal(
+        q.maxChoices,
+        3,
+        'rendered provider constraint takes precedence over author title',
+      );
+      const oldSignature = hash({
+        label: q.label,
+        description: q.description + ' 3개만 선택 가능합니다.',
+        kind: q.kind,
+        options: q.options.map((o) => o.label),
+      });
+      assert.deepEqual(q.legacySignatures, [oldSignature]);
+      const state = createAutonomy(syntheticSettings, 'https://form.naver.com');
+      state.overrides[q.signature] = ['A'];
+      state.overrides[oldSignature] = ['A', 'B', 'C'];
+      assert.deepEqual(resolveAnswer(q, undefined, state, [], '').answer, ['A', 'B', 'C']);
+      state.overrides[q.signature] = ['B', 'C', 'D'];
+      assert.deepEqual(resolveAnswer(q, undefined, state, [], '').answer, ['B', 'C', 'D']);
+      state.overrides[q.signature] = ['A'];
+      assert.equal(
+        resolveAnswer({ ...q, label: '개인정보 동의' }, undefined, state, [], '').answer,
+        undefined,
+      );
+      await page
+        .locator('.nsv_survey_question_guide')
+        .evaluate((el) => (el.textContent = '최대 1개 선택 가능'));
+      const changed = (await inspectForm(page)).view;
+      assert.equal(changed.questions[0]!.maxChoices, 1);
+      assert.equal(changed.questions[0]!.minChoices, undefined);
+      assert.notEqual(changed.fingerprint, view.fingerprint);
+    },
+    'https://form.naver.com/response/syntheticConstraint',
+  ));
+
 test('Google dropdown opens visible choices, rebinds, verifies selection and binds other text without submitting', async () =>
   fixture(
     `<style>[role=listbox][aria-expanded=false] [role=option]:not([aria-selected=true]){display:none}[role=listbox][aria-expanded=true] [jsname=d9BH4c]{display:none}[role=listbox][aria-expanded=false] .popup{display:none}</style>

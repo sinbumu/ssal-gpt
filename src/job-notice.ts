@@ -50,6 +50,17 @@ export function errorNotice(error: unknown, phase: string): JobNotice {
     error instanceof ServiceError && /^[a-z0-9_:-]{1,150}$/.test(error.code)
       ? error.code
       : 'unclassified_error';
+  if (code === 'delegation_expired_or_changed')
+    return {
+      category: 'user',
+      title: '사용자 확인 필요 · 작업 위임 갱신',
+      reason: '이 작업의 24시간 위임이 만료되었거나 프로필·정책이 변경되어 재개를 멈췄습니다.',
+      nextAction:
+        '아래 위임 안내에서 현재 정책을 확인하고 「위임 갱신하고 현재 화면에서 재개」를 누르세요. 일반 재개 버튼만 반복해도 갱신되지는 않습니다.',
+      code,
+      phase,
+      at: Date.now(),
+    };
   if (
     [
       'expected_one_browser_step',
@@ -231,6 +242,14 @@ export function jobNotice(job: Job): JobNotice | undefined {
       nextAction: '저장된 접수 증거를 확인하세요. 중복 제출 방지를 위해 자동 재시도하지 않습니다.',
     };
   if (['running', 'queued', 'completed'].includes(job.status)) return;
+  if (job.stopReason?.code === 'delegation_expired_or_changed')
+    return {
+      ...errorNotice(
+        new ServiceError(job.stopReason.code),
+        job.stopReason.phase || 'form_navigation',
+      ),
+      at: job.stopReason.at,
+    };
   if (job.stopReason) return job.stopReason;
   if (
     job.tasks?.some(

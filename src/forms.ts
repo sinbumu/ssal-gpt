@@ -174,10 +174,24 @@ export async function inspectForm(page: Page) {
         nodes.walk(root);
         return parts.join(' ').replace(/\s+/g, ' ').trim();
       },
+      material(root: Element | null | undefined | false) {
+        if (!root || !helpers.visible(root) || root.matches('body,html,main,form')) return;
+        const text = definitions.text(root);
+        const links = [...root.querySelectorAll<HTMLAnchorElement>('a[href]')]
+          .filter((a) => helpers.visible(a) && /^https?:/.test(a.href))
+          .map((a) => ({ label: definitions.text(a).slice(0, 200), url: a.href }))
+          .slice(0, 8);
+        const imageAlts = [...root.querySelectorAll<HTMLImageElement>('img')]
+          .filter(helpers.visible)
+          .map((img) => img.alt.slice(0, 200))
+          .slice(0, 8);
+        return { text: text.slice(0, 6000), links, imageAlts, truncated: text.length > 6000 };
+      },
     };
     const groups: {
       label: string;
       description: string;
+      material?: Question['material'];
       kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file' | 'rank';
       required: boolean;
       multiple: boolean;
@@ -239,6 +253,7 @@ export async function inspectForm(page: Page) {
       groups.push({
         label: heading.innerText.trim(),
         description: definitions.text(section).slice(0, 3000),
+        material: definitions.material(section),
         kind: 'radio',
         required: true,
         multiple: false,
@@ -277,6 +292,7 @@ export async function inspectForm(page: Page) {
         groups.push({
           label,
           description: definitions.text(list.closest('[role=listitem]') || list),
+          material: definitions.material(list.closest('[role=listitem]') || list),
           kind: 'select',
           required: list.getAttribute('aria-required') === 'true',
           multiple: false,
@@ -621,6 +637,7 @@ export async function inspectForm(page: Page) {
           : undefined;
       groups.push({
         label: questionLabel,
+        material: definitions.material(fieldset || (localText ? localBlock : undefined)),
         description: [
           describedBy,
           localText && localText !== helpers.label(el) ? localText : '',
@@ -736,6 +753,7 @@ export async function inspectForm(page: Page) {
       groups.push({
         label,
         description: definitions.text(block.closest('[role=listitem]') || block).slice(0, 3000),
+        material: definitions.material(block.closest('[role=listitem]') || block),
         kind,
         required:
           block.getAttribute('aria-required') === 'true' ||
@@ -784,6 +802,7 @@ export async function inspectForm(page: Page) {
         groups.push({
           label,
           description: label,
+          material: definitions.material(block),
           kind: 'radio',
           required: !!block.querySelector('.wf-icon-required'),
           multiple: false,
@@ -952,6 +971,7 @@ export async function inspectForm(page: Page) {
       signature,
       label: g.label,
       description: g.description,
+      material: g.material,
       kind: g.kind,
       required: g.required,
       multiple: g.multiple,
@@ -1014,7 +1034,7 @@ export async function inspectForm(page: Page) {
     hasNumberedChoices: raw.groups.some((g) => g.custom === 'numbered-choice') || undefined,
     inputFingerprint: hash({
       url: page.url(),
-      questions,
+      questions: questions.map(({ material: _material, ...q }) => q),
       dialog: raw.dialog,
       forms: raw.forms,
       constraints: raw.constraints,
@@ -1026,7 +1046,7 @@ export async function inspectForm(page: Page) {
     }),
     fingerprint: hash({
       url: page.url(),
-      questions,
+      questions: questions.map(({ material: _material, ...q }) => q),
       buttons,
       googlePage,
       dialog: raw.dialog,

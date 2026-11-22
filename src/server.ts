@@ -1,3 +1,4 @@
+import { knowledgeBlocker, knowledgeSummary } from './question-answering.js';
 import { statisticsUpgradeRetry, STATISTICS_RESEARCH_VERSION } from './statistics-navigation.js';
 import { approveProofAttachment, ProofAttachmentSchema } from './proof-attachments.js';
 import { dmCheckPlan, reviewDmFinding } from './instagram-dm.js';
@@ -321,6 +322,9 @@ export async function createApp(options: {
                 ...job.autonomy,
                 statisticsUpgradeRetry: statisticsUpgradeRetry(job.autonomy),
                 researchBudget: researchBudget(job),
+                knowledgeSummary: knowledgeSummary(job),
+                preparedKnowledge: undefined,
+                questionResearch: undefined,
                 profile: undefined,
                 evidence: undefined,
                 overrides: undefined,
@@ -333,6 +337,7 @@ export async function createApp(options: {
                       items: job.autonomy.inbox.items.map((q) => ({
                         ...q,
                         draftEligible: textDraftEligible(q),
+                        blocker: knowledgeBlocker(job, q),
                         condition: otherTextCondition(q, job.autonomy!.inbox!.items),
                       })),
                     }

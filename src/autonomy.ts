@@ -54,6 +54,12 @@ export type Question = {
   signature: string;
   label: string;
   description?: string;
+  material?: {
+    text: string;
+    links: { label: string; url: string }[];
+    imageAlts: string[];
+    truncated: boolean;
+  };
   kind: 'text' | 'radio' | 'checkbox' | 'select' | 'file' | 'rank';
   picker?: boolean;
   required: boolean;
@@ -69,7 +75,7 @@ export const AnswerPlanSchema = z
   .object({
     questionId: z.string(),
     category: z.enum(['fact', 'preference', 'evaluation', 'knowledge', 'consent']),
-    source: z.enum(['profile', 'memory', 'recommendation', 'evidence', 'unknown']),
+    source: z.enum(['profile', 'memory', 'recommendation', 'evidence', 'question', 'unknown']),
     sourceId: z.string().optional(),
     answer: z.array(z.string().max(2000)).max(30).optional(),
     evidenceQuote: z.string().max(1000).optional(),
@@ -126,6 +132,23 @@ export type AutonomyState = {
   researchRetries?: number;
   researchVersion?: string;
   researchProgress?: ResearchProgress;
+  questionResearch?: {
+    signature: string;
+    questionId: string;
+    startedAt: number;
+    finishedAt?: number;
+    calls: number;
+    stopCode?: string;
+    lastError?: string;
+    sourceIds: string[];
+  }[];
+  preparedKnowledge?: {
+    signature: string;
+    materialHash: string;
+    label: string;
+    plan: AnswerPlan;
+    evidence?: SourceEvidence;
+  }[];
   introAdvances?: number;
   inbox?: {
     id: string;
@@ -249,7 +272,8 @@ const personal = {
   name: /성명|성함|이름|\bname\b/i,
   email: /이메일|전자우편|\be-?mail\b/i,
   phone: /연락처|전화|휴대|\bphone\b|\bmobile\b/i,
-  region: /거주|지역|\bregion\b/i,
+  region:
+    /거주|^(?:[Qq]?\d+[.)]\s*)?지역(?:\s*\([^)]*\))?(?:을?\s*(?:선택|입력)(?:해\s*주세요|하세요|해주세요)?)?[?？:\s]*$|\bregion\b/i,
   occupation: /직업|\boccupation\b/i,
   ageRange: /연령|나이|age/i,
 };
@@ -472,7 +496,15 @@ export function resolveAnswer(
   // Legacy automatic reuse has no provenance. Do not carry an inferred entry
   // channel into personal awareness. Explicit user overrides above and saved
   // site-scoped human answers below still apply.
-  if (state.reused?.[q.signature] && !serviceAwareness)
+  const prepared = state.preparedKnowledge?.find((p) => p.signature === q.signature);
+  const knowledgeContextChanged =
+    prepared && prepared.materialHash !== hash([q.signature, q.material || null]);
+  if (
+    state.reused?.[q.signature] &&
+    !serviceAwareness &&
+    !knowledgeContextChanged &&
+    plan?.category !== 'knowledge'
+  )
     return { answer: validateAnswer(q, state.reused[q.signature]!), source: 'job_memory' };
   const shipping = shippingField(q, questions);
   if (shipping) {
@@ -576,6 +608,18 @@ export function resolveAnswer(
   if (!q.multiple && answer.length > 1 && state.policy.singleChoice === 'first')
     answer = answer.slice(0, 1);
   const valid = validateAnswer(q, answer);
+  if (
+    plan.source === 'question' &&
+    plan.category === 'knowledge' &&
+    !factual &&
+    valid &&
+    publicResearchQuestion(q) &&
+    plan.evidenceQuote &&
+    q.material?.text &&
+    observedQuote(q.material.text, plan.evidenceQuote) &&
+    ![q.label, ...q.options.map((o) => o.label)].some((s) => observedQuote(s, plan.evidenceQuote!))
+  )
+    return { answer: valid, source: 'observed_question_material' };
   if (plan.source === 'evidence' && plan.category === 'knowledge' && !factual && valid) {
     const source = state.evidence?.find((s) => s.id === plan.sourceId);
     if (

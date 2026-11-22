@@ -1,3 +1,4 @@
+import { knowledgeBlocker } from './question-answering.js';
 import { ServiceError, safeMessage } from './auth.js';
 import { ModelOutputError } from './model-output.js';
 import type { Job } from './store.js';
@@ -303,6 +304,28 @@ export function jobNotice(job: Job): JobNotice | undefined {
     )
   )
     return { ...errorNotice(new ServiceError(job.note), 'form_legacy'), at: undefined };
+  const knowledgeStops =
+    job.autonomy?.inbox?.items?.flatMap((q) => {
+      const issue = knowledgeBlocker(job, q);
+      return issue ? [issue] : [];
+    }) || [];
+  if (job.status === 'needs_user' && !job.autonomy?.inbox?.final && knowledgeStops.length) {
+    const technical = knowledgeStops.find((b) => b.kind === 'technical');
+    const budget = knowledgeStops.find((b) => b.kind === 'budget');
+    return {
+      category: technical ? 'technical' : 'normal',
+      title: technical
+        ? '정답 조사 중단 · 조회 기능 확인'
+        : budget
+          ? '정답 조사 중단 · 배정 한도 소진'
+          : '정답 조사 중단 · 근거 부족',
+      reason: `공개 퀴즈 ${knowledgeStops.length}개의 답안을 준비하지 못했습니다. 개인 답변·동의 요청과 구분해 표시합니다.`,
+      code: (technical || budget || knowledgeStops[0])!.code,
+      phase: 'knowledge_research',
+      nextAction:
+        '문항별 조사 사유와 준비된 답안을 확인하세요. 남은 조사 한도에서 재조사하거나, 직접 답을 아는 경우 수동 입력을 선택할 수 있습니다.',
+    };
+  }
   const diagnostic = job.observationDiagnostics?.at(-1);
   if (
     diagnostic?.outcome === 'stopped' &&

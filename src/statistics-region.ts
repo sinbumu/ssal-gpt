@@ -22,13 +22,21 @@ export async function selectStatisticsRegion(
   const assertScope = () => {
     if (page.url() !== url || !statisticsPage(url)) throw new ServiceError('stale_observation');
   };
-  if (!house) await target.click();
+  if (!house && !(await page.locator('ul[id^=sidoSelect_] li').filter({ visible: true }).count()))
+    await target.click();
   for (let i = 0; i < names.length; i++) {
     assertScope();
     const selector = house
       ? `#housingLayer .area-select.${i === 0 ? 'sido' : 'sgg'}`
       : `ul[id^=${['sidoSelect_', 'sggSelect_', 'admSelect_'][i]}]`;
-    if (house) await page.locator(selector).filter({ visible: true }).click();
+    if (
+      house &&
+      !(await page
+        .locator(selector + ' li')
+        .filter({ visible: true })
+        .count())
+    )
+      await page.locator(selector).filter({ visible: true }).click();
     const options = page.locator(selector + ' li').filter({ visible: true });
     const option = options.filter({
       hasText: new RegExp('^\\s*' + names[i]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'),
@@ -48,11 +56,17 @@ export async function selectStatisticsRegion(
   }
   await page.waitForTimeout(250);
   assertScope();
-  const selected = house
-    ? await target.evaluate((el) =>
-        [...el.querySelectorAll('.placeholder')].map((e) => e.textContent || '').join(' '),
-      )
-    : await target.innerText();
-  if (!names.every((n) => selected.replace(/\s/g, '').includes(n.replace(/\s/g, ''))))
-    throw new ServiceError('statistics_region_unverified');
+  // Selection updates after the map finishes its asynchronous region lookup.
+  // Poll rendered selection only; never repeat clicks on a slow response.
+  for (let attempt = 0; attempt < 25; attempt++) {
+    assertScope();
+    const selected = house
+      ? await target.evaluate((el) =>
+          [...el.querySelectorAll('.placeholder')].map((e) => e.textContent || '').join(' '),
+        )
+      : await target.innerText();
+    if (names.every((n) => selected.replace(/\s/g, '').includes(n.replace(/\s/g, '')))) return;
+    await page.waitForTimeout(200);
+  }
+  throw new ServiceError('statistics_region_unverified');
 }

@@ -1,7 +1,7 @@
 import type { AutonomyState } from './autonomy.js';
 import type { SourceEvidence } from './evidence.js';
 
-export const STATISTICS_RESEARCH_VERSION = 'sgis-visible-lookups-v2';
+export const STATISTICS_RESEARCH_VERSION = 'sgis-visible-lookups-v3';
 export type StatisticsSource = { url: string; label: string };
 
 export function statisticsRoute(raw: string) {
@@ -9,7 +9,7 @@ export function statisticsRoute(raw: string) {
     const u = new URL(raw);
     if (u.origin !== 'https://sgis.mods.go.kr' || u.username || u.password) return;
     if (
-      !/^\/(?:view\/(?:index|common\/(?:analMapMain|serviceMain)|thematicMap\/categoryList|map\/(?:interactiveMap(?:Main|\/(?:companyView|publicDataView))?|thematicMap)|house\/houseAnalysisMap|syrStats\/main|indrStats\/indrStatsMap)|publicsmodel\/newAging(?:2)?\.vw)?$/.test(
+      !/^\/(?:view\/(?:index|common\/(?:analMapMain|serviceMain)|thematicMap\/(?:categoryList|thematicMapMain(?:Old)?)|map\/(?:interactiveMap(?:Main|\/(?:companyView|publicDataView))?|thematicMap)|house\/houseAnalysisMap|syrStats\/main|indrStats\/indrStatsMap)|publicsmodel\/newAging(?:2)?\.vw)?$/.test(
         u.pathname,
       )
     )
@@ -50,7 +50,11 @@ export function statisticsSourceRank(source: StatisticsSource, hint: string) {
   if (/고령화|85세/.test(compact) && path === '/publicsmodel/newAging2.vw') return 90;
   if (/살고싶은|연립.*다세대/.test(compact) && path === '/view/house/houseAnalysisMap') return 100;
   if (/업종통계|생활서비스업/.test(compact) && path === '/view/indrStats/indrStatsMap') return 100;
-  if (/통계주제도|1인가구변화/.test(compact) && /categoryList|thematicMap$/.test(path)) return 100;
+  if (
+    /통계주제도|1인가구변화/.test(compact) &&
+    /categoryList|thematicMap(?:Main(?:Old)?)?$/.test(path)
+  )
+    return 100;
   if (/사업체/.test(compact) && /companyView$/.test(path)) return 110;
   if (/공공데이터|정부청사역/.test(compact) && /publicDataView$/.test(path)) return 110;
   if (/대화형|사업체|정부청사역/.test(compact) && /interactiveMap$/.test(path)) return 100;

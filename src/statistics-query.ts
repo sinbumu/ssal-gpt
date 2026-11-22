@@ -12,6 +12,8 @@ export function statisticsPage(raw: string) {
         '/view/map/interactiveMap/companyView',
         '/view/map/interactiveMap/publicDataView',
         '/view/map/thematicMap',
+        '/view/thematicMap/thematicMapMain',
+        '/view/thematicMap/thematicMapMainOld',
         '/view/indrStats/indrStatsMap',
         '/view/house/houseAnalysisMap',
         '/publicsmodel/newAging2.vw',
@@ -25,7 +27,7 @@ export function statisticsPage(raw: string) {
 }
 
 export const statisticsSelectors =
-  ',.interactiveSelect,[id^=sidoSelect_] li,[id^=sggSelect_] li,[id^=admSelect_] li,#navi-confirm,#navi-cancel,#publicDataSlide .ui-slider-handle,a[onclick^="pageMove"],.quickBox .radioType label,#housingLayer .area-select-wrap,#housingLayer .area-select,#housingLayer .area-select li,#housingLayer .index-checked li,[data-category][data-id],.sop-overlay-pane svg path.sop-interactive,.radio_ul li[onclick],.tab_ul li[onclick],.graph_ul li[onclick]';
+  ',a.btn_stepSearch,#publicDataLeftList a,#publicDataLeftList label,#publicDataList a,a[id^=board_tabs_],#searchResultBox .pagenation a,.interactiveSelect,[id^=sidoSelect_] li,[id^=sggSelect_] li,[id^=admSelect_] li,#navi-confirm,#navi-cancel,#publicDataSlide .ui-slider-handle,a[onclick^="pageMove"],.quickBox .radioType label,#housingLayer .area-select-wrap,#housingLayer .area-select,#housingLayer .area-select li,#housingLayer .index-checked li,[data-category][data-id],.sop-overlay-pane svg path.sop-interactive,.radio_ul li[onclick],.tab_ul li[onclick],.graph_ul li[onclick]';
 
 export type StatisticsControl = {
   kind: 'click' | 'select' | 'radius' | 'region' | 'map';
@@ -41,10 +43,13 @@ export function inspectStatisticsControl(el: HTMLElement): string {
       if (
         location.origin !== 'https://sgis.mods.go.kr' ||
         ![
+          '/view/thematicMap/categoryList',
           '/view/map/interactiveMap',
           '/view/map/interactiveMap/companyView',
           '/view/map/interactiveMap/publicDataView',
           '/view/map/thematicMap',
+          '/view/thematicMap/thematicMapMain',
+          '/view/thematicMap/thematicMapMainOld',
           '/view/indrStats/indrStatsMap',
           '/view/house/houseAnalysisMap',
           '/publicsmodel/newAging.vw',
@@ -160,6 +165,11 @@ export function inspectStatisticsControl(el: HTMLElement): string {
           options: ['100m', '300m', '500m', '1000m'],
           value: el.style.left,
         };
+      if (
+        location.pathname === '/view/thematicMap/categoryList' &&
+        el.matches('a[id^=board_tabs_],#searchResultBox .pagenation a')
+      )
+        return { kind: 'click', label };
       const region = el.closest('ul[id^=sidoSelect_],ul[id^=sggSelect_],ul[id^=admSelect_]');
       if (
         (region && el.matches('li,a') && /^[가-힣\d·\s()]+$/.test(label)) ||
@@ -167,7 +177,7 @@ export function inspectStatisticsControl(el: HTMLElement): string {
           '.interactiveSelect[id^=location_],.navi-action #navi-confirm,.navi-action #navi-cancel',
         ) ||
         (el.matches(
-          '#companyBtn a,#publicDataBtn a,#publicDataLeftList a,#publicDataList a,#map_left_btn,a.interactiveDataBoard,#buttonMakeBtn',
+          '#companyBtn a,#publicDataBtn a,#publicDataLeftList a,#publicDataLeftList label,#publicDataList a,#map_left_btn,a.interactiveDataBoard,#buttonMakeBtn',
         ) &&
           label.length > 0) ||
         (el.matches('a.btn_stepSearch') && label === '검색') ||
@@ -213,6 +223,11 @@ export function statisticsReadRequest(
     const u = new URL(raw);
     if (u.origin !== 'https://sgis.mods.go.kr' || u.search) return false;
     const pagePath = new URL(pageUrl).pathname;
+    if (
+      pagePath === '/view/thematicMap/categoryList' &&
+      u.pathname === '/ServiceAPI/thematicMap/GetCategory.json'
+    )
+      return !body;
     if (pagePath === '/view/syrStats/main') {
       if (
         /^\/view\/syrStats\/(?:ygmnBaseYrList|mainYgmnYrTotList|mainYgmnYrHousPsnList|mainYgmnYrCllUseDtl)$/.test(
@@ -273,6 +288,63 @@ export function statisticsReadRequest(
     const params = new URLSearchParams(body || '');
     const keys = [...params.keys()];
     if (new Set(keys).size !== keys.length) return false;
+    if (
+      /^\/view\/map\/interactiveMap(?:\/(?:companyView|publicDataView))?$/.test(pagePath) &&
+      u.pathname === '/ServiceAPI/bizStats/poietcmetroppln.json'
+    ) {
+      return (
+        keys.length === 4 &&
+        [...params].every(
+          ([k, v]) => ['minx', 'miny', 'maxx', 'maxy'].includes(k) && /^\d{1,8}(?:\.\d+)?$/.test(v),
+        ) &&
+        Number(params.get('minx')) < Number(params.get('maxx')) &&
+        Number(params.get('miny')) < Number(params.get('maxy'))
+      );
+    }
+
+    if (
+      pagePath === '/view/thematicMap/categoryList' &&
+      u.pathname === '/ServiceAPI/thematicMap/GetStatsThemeMapList.json'
+    ) {
+      return (
+        keys.length > 0 &&
+        [...params].every(([k, v]) => {
+          if (k === 'resultCnt' || k === 'p') return /^\d{1,2}$/.test(v);
+          if (k === 'cate_id') return /^CTGR_\d{3}$/.test(v);
+          if (k === 'sort_type') return /^[a-z_]{1,20}$/.test(v);
+          if (k !== 'categoryList') return false;
+          try {
+            const rows = JSON.parse(v);
+            return (
+              Array.isArray(rows) &&
+              rows.length <= 20 &&
+              rows.every(
+                (row) =>
+                  row &&
+                  typeof row === 'object' &&
+                  !Array.isArray(row) &&
+                  Object.entries(row).every(([key, val]) => {
+                    if (typeof val !== 'string') return false;
+                    if (key === 'category_icon_url') return /^\/img\/ico\/[a-z_]+\.png$/.test(val);
+                    if (key === 'thema_map_category') return /^CTGR_\d{3}$/.test(val);
+                    if (key === 'category_icon_id') return /^\d{1,8}$/.test(val);
+                    if (key === 'reg_id') return /^admin\d{0,2}$/.test(val);
+                    if (key === 'reg_ts') return /^[\d .:-]{0,30}$/.test(val);
+                    if (key === 'srv_yn') return /^[YN]$/.test(val);
+                    return (
+                      ['category_nm', 'en', 'exp'].includes(key) &&
+                      /^[가-힣 A-Za-z·]{0,100}$/.test(val)
+                    );
+                  }),
+              )
+            );
+          } catch {
+            return false;
+          }
+        })
+      );
+    }
+
     if (
       /^\/publicsmodel\/newAging(?:2)?\.vw$/.test(pagePath) &&
       /^\/publicsmodel\/getStatValues_2018(?:_2)?\.do$/.test(u.pathname)

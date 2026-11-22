@@ -800,3 +800,117 @@ test('map coordinates must hit the observed SVG region and cannot click an entry
     assert.doesNotMatch(o.text, /BAD/);
   });
 });
+
+test('public query reobserves once after decoration changes but rejects changed options', async (t) => {
+  const { app } = await fixture(t);
+  await app.browser.context!.route(map, (r) =>
+    r.fulfill({ contentType: 'text/html; charset=utf-8', body: mapHtml }),
+  );
+  await app.browser.inReadOnlyTab(async () => {
+    await app.browser.navigate(map);
+    let o = await app.browser.observe();
+    let e = o.elements.find((e) => e.statisticsQuery?.kind === 'select')!;
+    await app.browser.page!.evaluate(() => document.body.appendChild(document.createElement('hr')));
+    assert.equal(
+      await app.browser.act({
+        action: 'query',
+        observationId: o.id,
+        ref: e.ref,
+        text: '2024',
+        reason: 'unchanged control',
+      }),
+      true,
+    );
+    assert.equal(await app.browser.page!.locator('#company_year').inputValue(), '2024');
+    o = await app.browser.observe();
+    e = o.elements.find((e) => e.statisticsQuery?.kind === 'select')!;
+    await app.browser.page!.evaluate(() =>
+      document.querySelector('#company_year')!.appendChild(new Option('2025', '2025')),
+    );
+    await assert.rejects(
+      app.browser.act({
+        action: 'query',
+        observationId: o.id,
+        ref: e.ref,
+        text: '2023',
+        reason: 'changed choices',
+      }),
+      /stale_observation/,
+    );
+    assert.equal(await app.browser.page!.locator('#company_year').inputValue(), '2024');
+  });
+});
+test('dependent region query waits for asynchronous visible selection without repeating clicks', async (t) => {
+  const { app } = await fixture(t);
+  await app.browser.context!.route(map, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<h1>지역 조회</h1><div id="location_mapNavi_1" class="interactiveSelect" onclick="document.querySelector('#picker').hidden=false">선택</div><div id="picker" hidden><ul id="sidoSelect_mapNavi_1"><li>가상도</li></ul><div class="navi-action"><button id="navi-confirm" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;setTimeout(()=>{document.querySelector('.interactiveSelect').textContent='가상도';document.querySelector('#picker').hidden=true},850)">확인</button></div></div>`,
+    }),
+  );
+  await app.browser.inReadOnlyTab(async () => {
+    await app.browser.navigate(map);
+    const o = await app.browser.observe();
+    const e = o.elements.find((e) => e.statisticsQuery?.kind === 'region')!;
+    await app.browser.act({
+      action: 'query',
+      observationId: o.id,
+      ref: e.ref,
+      text: '가상도',
+      reason: 'async region',
+    });
+    assert.equal(await app.browser.page!.locator('.interactiveSelect').innerText(), '가상도');
+    assert.equal(await app.browser.page!.locator('#navi-confirm').getAttribute('data-clicks'), '1');
+  });
+});
+
+test('last allocated public lookup is observed before closing without spending another decision', async (t) => {
+  const { app, job, original } = await fixture(t);
+  job.maxSteps = 10;
+  job.steps = 5;
+  job.autonomy!.researchProgress!.calls = 5;
+  job.autonomy!.evidence = [
+    {
+      id: 'source',
+      url: map,
+      title: '대화형통계지도',
+      text: '통계',
+      screenshot: '',
+      observedAt: Date.now(),
+    },
+  ];
+  await app.browser.context!.route(map, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: '<h1>공개 통계지도</h1><a class="btn_stepSearch" onclick="document.querySelector(\'#data\').textContent=\'2024 가상군 사업체 42개\'">검색</a><p id="data">지역과 지표를 고른 후 검색으로 결과를 확인합니다.</p>',
+    }),
+  );
+  let calls = 0;
+  const model = {
+    async decide(_p: any, _i: any, c: any) {
+      calls++;
+      return {
+        step: {
+          action: 'query',
+          observationId: c.observation.id,
+          ref: c.observation.elements.find((e: any) => e.statisticsQuery?.label === '검색').ref,
+          reason: 'lookup',
+        },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    },
+  } as any;
+  await researchQuestion(
+    app.store,
+    app.browser,
+    model,
+    job,
+    '대화형통계지도 사업체',
+    new AbortController().signal,
+  );
+  assert.equal(calls, 1);
+  assert.equal(job.steps, 6);
+  assert.ok(job.autonomy!.evidence.some((e) => e.text.includes('사업체 42개')));
+  assert.equal(app.browser.page, original);
+});

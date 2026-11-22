@@ -169,6 +169,7 @@ export async function researchQuestion(
           }
           if (loadingWaits++ < 1) {
             await browser.page!.waitForTimeout(750);
+            i--; // A bounded loading wait is not a model decision.
             continue;
           }
         }
@@ -270,7 +271,14 @@ export async function researchQuestion(
         try {
           if (step.action === 'navigate')
             progress.retryUrls = progress.retryUrls?.filter((url) => url !== step.url);
-          await browser.act({ ...step, searchEngine: engine }, secrets);
+          if (await browser.act({ ...step, searchEngine: engine }, secrets)) {
+            progress.controlReobservations = (progress.controlReobservations || 0) + 1;
+            record(
+              'research_control_reobserved',
+              '새 화면에서 같은 공개 조회 컨트롤을 확인한 뒤 실행했습니다.',
+              o.url,
+            );
+          }
         } catch (error) {
           if (!(error instanceof ServiceError)) throw error;
           if (step.action === 'navigate' && step.url && error.code !== 'stale_observation')
@@ -303,6 +311,18 @@ export async function researchQuestion(
             return;
           }
         }
+      }
+      // The last lookup can finish on the final allocated call. Capture its
+      // rendered result before closing the research tab, without another model
+      // decision or action. The planner still validates any cited answer.
+      try {
+        const final = await browser.observe(false, secrets);
+        researchUrls.add(final.url);
+        state.evidence = collectEvidence(state.evidence || [], final);
+        progress.mapSources = collectStatisticsSources(progress.mapSources || [], state.evidence);
+      } catch (error) {
+        if (!(error instanceof ServiceError)) throw error;
+        record('research_final_observation_unavailable', error.code);
       }
       stop('research_allocation_used');
     });

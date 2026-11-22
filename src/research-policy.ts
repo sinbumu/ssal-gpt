@@ -5,6 +5,7 @@ import type { Job } from './store.js';
 export type ResearchProgress = {
   calls: number;
   mapSources?: StatisticsSource[];
+  controlReobservations?: number;
   priorAllocation?: number;
   capacity?: number;
   searches: string[];

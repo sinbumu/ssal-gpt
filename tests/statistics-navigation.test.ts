@@ -123,3 +123,47 @@ test('capability retry is restricted to unresolved public SGIS questions and one
   s.inbox.items[0]!.category = 'consent';
   assert.equal(statisticsUpgradeRetry(s), false);
 });
+
+test('thematic catalog permits only public catalog metadata and rejects private fields', () => {
+  const page = origin + '/view/thematicMap/categoryList';
+  const path = origin + '/ServiceAPI/thematicMap/';
+  assert.equal(statisticsReadRequest(page, 'POST', path + 'GetCategory.json', null), true);
+  assert.equal(statisticsReadRequest(page, 'POST', path + 'GetCategory.json', 'user=x'), false);
+  const body = new URLSearchParams({
+    resultCnt: '4',
+    categoryList: JSON.stringify([
+      {
+        thema_map_category: 'CTGR_001',
+        category_nm: '인구와가구',
+        reg_id: 'admin',
+        category_icon_url: '/img/ico/population.png',
+      },
+    ]),
+  }).toString();
+  assert.equal(statisticsReadRequest(page, 'POST', path + 'GetStatsThemeMapList.json', body), true);
+  assert.equal(
+    statisticsReadRequest(
+      page,
+      'POST',
+      path + 'GetStatsThemeMapList.json',
+      body + '&phone=01000000000',
+    ),
+    false,
+  );
+  assert.equal(
+    statisticsReadRequest(page, 'POST', path + 'AddStatsThemeMapParamInfo.json', body),
+    false,
+  );
+});
+
+test('subway public lookup allows only bounded map coordinates on the official map', () => {
+  const url = origin + '/ServiceAPI/bizStats/poietcmetroppln.json';
+  const page = origin + '/view/map/interactiveMap/publicDataView';
+  assert.equal(statisticsReadRequest(page, 'POST', url, 'minx=1&miny=2&maxx=3&maxy=4'), true);
+  for (const body of [
+    'minx=3&miny=2&maxx=1&maxy=4',
+    'minx=1&miny=2&maxx=3&maxy=4&user=x',
+    'minx=https://evil.invalid&miny=2&maxx=3&maxy=4',
+  ])
+    assert.equal(statisticsReadRequest(page, 'POST', url, body), false);
+});

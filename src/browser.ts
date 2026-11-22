@@ -1308,9 +1308,17 @@ export class Browser {
       if (
         !(error instanceof ServiceError) ||
         error.code !== 'stale_observation' ||
-        step.action !== 'click' ||
+        !['click', 'query'].includes(step.action) ||
         prior?.id !== step.observationId ||
-        !((old?.mediaNavigation && old.mediaKey) || (old?.readDisclosure && old.disclosureKey)) ||
+        !(
+          (step.action === 'click' &&
+            ((old?.mediaNavigation && old.mediaKey) ||
+              (old?.readDisclosure && old.disclosureKey))) ||
+          (step.action === 'query' &&
+            old?.statisticsQuery &&
+            old.statisticsQuery.kind !== 'map' &&
+            statisticsPage(prior!.url))
+        ) ||
         !this.page ||
         !this.readOnlyPages.has(this.page) ||
         this.page.url() !== prior.url
@@ -1319,7 +1327,8 @@ export class Browser {
       const fresh = await this.observe(false, secrets);
       const matches = fresh.elements.filter(
         (e) =>
-          e.mediaNavigation === old.mediaNavigation &&
+          JSON.stringify(e.statisticsQuery) === JSON.stringify(old!.statisticsQuery) &&
+          e.mediaNavigation === old!.mediaNavigation &&
           e.mediaKey === old.mediaKey &&
           e.readDisclosure === old.readDisclosure &&
           e.disclosureKey === old.disclosureKey &&

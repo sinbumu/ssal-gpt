@@ -320,6 +320,7 @@ export async function createApp(options: {
             ? {
                 ...job.autonomy,
                 statisticsUpgradeRetry: statisticsUpgradeRetry(job.autonomy),
+                researchBudget: researchBudget(job),
                 profile: undefined,
                 evidence: undefined,
                 overrides: undefined,

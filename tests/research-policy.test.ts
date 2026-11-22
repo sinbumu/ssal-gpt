@@ -1,12 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { researchBudget, repeatedSearch, searchTerms } from '../src/research-policy.js';
+import {
+  extendDecisionBudget,
+  researchBudget,
+  repeatedSearch,
+  searchTerms,
+} from '../src/research-policy.js';
 import { statisticsPage, statisticsReadRequest } from '../src/statistics-query.js';
 import { jobNotice } from '../src/job-notice.js';
 import type { Job } from '../src/store.js';
 
 const job = (steps: number, calls = 0) =>
   ({ maxSteps: 40, steps, autonomy: { researchProgress: { calls } } }) as Job;
+test('explicit extension grants research to an exhausted legacy job without resetting usage', () => {
+  const legacy = {
+    maxSteps: 40,
+    steps: 40,
+    inputTokens: 12345,
+    outputTokens: 678,
+    autonomy: { researched: ['prior-question'] },
+  } as Job;
+  assert.equal(researchBudget(legacy).remaining, 0);
+  assert.equal(extendDecisionBudget(legacy, 20), 20);
+  legacy.autonomy!.researched = [];
+  assert.deepEqual(researchBudget(legacy, 7), { reserve: 9, remaining: 11, allowance: 2 });
+  assert.equal(legacy.autonomy!.researchProgress!.priorAllocation, 40);
+  assert.deepEqual([legacy.steps, legacy.inputTokens, legacy.outputTokens], [40, 12345, 678]);
+  const restored = JSON.parse(JSON.stringify(legacy));
+  assert.deepEqual(researchBudget(restored), researchBudget(legacy));
+  restored.steps = 51;
+  assert.equal(researchBudget(restored).remaining, 0);
+});
+test('extensions preserve research history and actual calls and respect the job ceiling', () => {
+  const j = job(28, 26);
+  j.autonomy!.researchProgress!.searches = ['previous'];
+  j.autonomy!.researchProgress!.stops = [{ code: 'research_no_progress', at: 1 }];
+  assert.equal(extendDecisionBudget(j, 80), 80);
+  assert.equal(researchBudget(j, 7).allowance, 8);
+  assert.equal(j.autonomy!.researchProgress!.calls, 26);
+  assert.deepEqual(j.autonomy!.researchProgress!.searches, ['previous']);
+  assert.equal(j.autonomy!.researchProgress!.stops.length, 1);
+  j.maxSteps = 295;
+  assert.equal(extendDecisionBudget(j, 20), 5);
+  assert.equal(j.maxSteps, 300);
+  assert.equal(extendDecisionBudget(j, 80), 0);
+});
 test('research shares the existing cap and reserves planning/input/review decisions across restarts', () => {
   assert.deepEqual(researchBudget(job(2), 7), { reserve: 6, remaining: 26, allowance: 4 });
   assert.equal(researchBudget(job(12, 25)).allowance, 1);

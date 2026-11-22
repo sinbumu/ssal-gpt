@@ -49,6 +49,105 @@ async function fixture(t: any) {
 }
 
 const map = 'https://sgis.mods.go.kr/view/map/interactiveMap';
+test('explicit retry extends only the target legacy job and makes research usable without approving the inbox', async (t) => {
+  const { app, job, original } = await fixture(t);
+  job.steps = 41;
+  job.maxSteps = 60;
+  job.inputTokens = 12345;
+  job.outputTokens = 678;
+  job.status = 'needs_user';
+  delete job.autonomy!.researchProgress;
+  job.autonomy!.researched = ['public'];
+  job.autonomy!.inbox = {
+    id: randomUUID(),
+    fingerprint: 'fixture',
+    createdAt: Date.now(),
+    items: [
+      {
+        id: 'public',
+        signature: 'public',
+        label: '공식 통계 수치는?',
+        kind: 'radio',
+        required: true,
+        multiple: false,
+        options: [{ id: 'one', label: '1' }],
+        category: 'knowledge',
+        reason: 'answer_required',
+      },
+    ],
+  };
+  app.store.saveJob(job);
+  const other = { ...job, id: randomUUID() };
+  app.store.saveJob(other);
+  const savedOther = app.store.job(other.id);
+  const config = app.store.settings('autonomy', null);
+  const ops = app.store.settings('operations', null);
+  const started: string[] = [];
+  app.runner.start = (id) => {
+    started.push(id);
+  };
+  const state: any = await fetch(app.origin + '/api/state').then((r) => r.json());
+  const request = (extraSteps?: number) =>
+    fetch(app.origin + `/api/jobs/${job.id}/retry-research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: JSON.stringify({ extraSteps }),
+    });
+  const denied = await request();
+  assert.equal(denied.status, 409);
+  assert.match(await denied.text(), /budget_decision_limit/);
+  assert.equal(app.store.job(job.id)!.autonomy!.researchRetries, undefined);
+  const r = await request(80);
+  assert.equal(r.status, 200);
+  const saved = app.store.job(job.id)!;
+  assert.deepEqual(
+    [saved.steps, saved.maxSteps, saved.inputTokens, saved.outputTokens],
+    [41, 140, 12345, 678],
+  );
+  assert.equal(saved.autonomy!.researchProgress!.priorAllocation, 41);
+  assert.equal(saved.autonomy!.researchProgress!.capacity, 93);
+  assert.equal(saved.autonomy!.researchRetries, 1);
+  assert.deepEqual(saved.autonomy!.researched, []);
+  assert.deepEqual(saved.autonomy!.overrides, {});
+  assert.equal(saved.autonomy!.finalApproval, undefined);
+  assert.equal(saved.uncertain, false);
+  assert.deepEqual(app.store.job(other.id), savedOther);
+  assert.deepEqual(app.store.settings('autonomy', null), config);
+  assert.deepEqual(app.store.settings('operations', null), ops);
+  assert.deepEqual(started, [job.id]);
+  await app.browser.context!.route('https://search.naver.com/**', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<p>공식 자료를 찾아야 하는 공개 통계 검색 결과입니다. 검색 결과의 숫자는 답안 근거로 사용하지 않습니다.</p>',
+    }),
+  );
+  let calls = 0;
+  const model = {
+    async decide(_p: unknown, _i: string, c: any) {
+      calls++;
+      return {
+        step: { action: 'done', observationId: c.observation.id, reason: 'fixture stop' },
+        inputTokens: 10,
+        outputTokens: 2,
+      };
+    },
+  } as unknown as Model;
+  await researchQuestion(
+    app.store,
+    app.browser,
+    model,
+    saved,
+    '공개 통계',
+    new AbortController().signal,
+    { pending: 7 },
+  );
+  assert.equal(calls, 1);
+  assert.equal(saved.steps, 42);
+  assert.equal(saved.inputTokens, 12355);
+  assert.equal(saved.autonomy!.researchProgress!.calls, 1);
+  assert.equal(app.browser.page, original);
+  assert.equal(saved.autonomy!.metrics.fields, 0);
+});
 const mapHtml = `<h1>공개 통계지도</h1><div id="location_mapNavi_1" class="interactiveSelect">지역 선택</div>
 <ul id="sidoSelect_mapNavi_1"><li onclick="document.querySelector('#region').textContent=this.textContent">가상도</li></ul>
 <label>조사년도<select id="company_year"><option>2023</option><option>2024</option></select></label>

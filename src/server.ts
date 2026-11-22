@@ -12,6 +12,7 @@ import {
 } from './result-batch.js';
 import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
+import { extendDecisionBudget, researchBudget } from './research-policy.js';
 import { StorageManager } from './storage.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pendingFormAction, pendingFormReveal } from './form-execution.js';
@@ -1136,6 +1137,10 @@ export async function createApp(options: {
         }
       }
       if (action === 'retry-research') {
+        const extra = z
+          .union([z.literal(20), z.literal(40), z.literal(80)])
+          .optional()
+          .parse(data.extraSteps);
         const state = job.autonomy;
         const questions =
           state?.inbox?.items.filter(
@@ -1152,6 +1157,17 @@ export async function createApp(options: {
           (state.researchRetries || 0) >= 2
         )
           throw new ServiceError('research_retry_unavailable');
+        if (delegationIssue(state, settings(store)))
+          throw new ServiceError('delegation_expired_or_changed', 409);
+        if (extra) extendDecisionBudget(job, extra);
+        if (!researchBudget(job).remaining) throw new ServiceError('budget_decision_limit', 409);
+        state.researchProgress ??= {
+          calls: 0,
+          priorAllocation: state.researched?.length ? job.steps : 0,
+          searches: [],
+          failedUrls: [],
+          stops: [],
+        };
         state.researchRetries = (state.researchRetries || 0) + 1;
         state.researched = state.researched?.filter(
           (s) => !questions.some((q) => q.signature === s),
@@ -1161,6 +1177,11 @@ export async function createApp(options: {
         delete state.finalApproval;
         job.status = 'paused';
         store.saveJob(job);
+        if (extra)
+          store.note(
+            id,
+            `이 작업의 판단 한도를 ${job.maxSteps}회로 늘리고 공개 조사 예산을 배정했습니다. 전역 한도와 누적 사용량은 유지합니다.`,
+          );
         runner.start(id);
         return send(response, 200, { ok: true });
       }
@@ -1296,12 +1317,16 @@ export async function createApp(options: {
         store.setSettings('operations', { ...operations(store), queueEnabled: false });
         await runner.pause(id, action === 'stop');
       } else if (action === 'resume') {
+        const extra = z
+          .union([z.literal(20), z.literal(40), z.literal(80)])
+          .optional()
+          .parse(data.extraSteps);
         if (manualNavigation) throw new ServiceError('browser_busy', 409);
         if (
           job.autonomy &&
           (!job.tasks?.length || job.taskFormStarted) &&
           job.steps >= job.maxSteps &&
-          data.extraSteps !== 20 &&
+          !extra &&
           !pendingFormAction(job) &&
           !pendingFormReveal(job) &&
           !(job.autonomy?.plan && job.autonomy.finalApproval)
@@ -1330,9 +1355,13 @@ export async function createApp(options: {
           }
           store.saveJob(job);
         }
-        if (data.extraSteps === 20) {
-          job.maxSteps = Math.min(300, job.maxSteps + 20);
+        if (extra) {
+          extendDecisionBudget(job, extra);
           store.saveJob(job);
+          store.note(
+            id,
+            `이 작업의 판단 한도를 ${job.maxSteps}회로 늘렸습니다. 전역 한도와 누적 사용량은 유지합니다.`,
+          );
         }
         runner.start(id);
       } else if (action === 'approve') {

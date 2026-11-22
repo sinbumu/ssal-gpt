@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import type { StatisticsSource } from './statistics-navigation.js';
 import type { Job } from './store.js';
 
 export type ResearchProgress = {
   calls: number;
+  mapSources?: StatisticsSource[];
   priorAllocation?: number;
   capacity?: number;
   searches: string[];

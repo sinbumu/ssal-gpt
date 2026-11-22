@@ -1,5 +1,7 @@
 import { dmReadRequest, inspectDm } from './instagram-dm.js';
 import { backgroundPage, scriptWindowFocusGuard } from './browser-background.js';
+import { statisticsMenuDestination } from './statistics-navigation.js';
+import { selectStatisticsRegion } from './statistics-region.js';
 import {
   chromium,
   type BrowserContext,
@@ -865,10 +867,12 @@ export class Browser {
       const item = JSON.parse(serialized) as
         | (Omit<VisibleElement, 'ref'> & { mediaIdentity?: string; disclosureIdentity?: string })
         | null;
+      if (item?.href && this.readOnlyPages.has(page))
+        item.href = statisticsMenuDestination(url, item.href, item.label) || item.href;
       if (item && this.readOnlyPages.has(page) && statisticsPage(url)) {
-        item.statisticsQuery = await handle
-          .evaluate(inspectStatisticsControl)
-          .catch(() => undefined);
+        item.statisticsQuery =
+          JSON.parse(await handle.evaluate(inspectStatisticsControl).catch(() => 'null')) ||
+          undefined;
         if (item.statisticsQuery) item.label = item.statisticsQuery.label;
       }
       if (!item) {
@@ -1390,30 +1394,55 @@ export class Browser {
         await page.mouse.click(step.x, step.y);
       else throw new ServiceError('invalid_click_target');
     } else if (step.action === 'query') {
-      const control = o.elements.find((e) => e.ref === step.ref)?.statisticsQuery;
-      if (!target || !control || !this.readOnlyPages.has(page) || !statisticsPage(page.url()))
-        throw new ServiceError('statistics_query_not_allowed');
-      const current = await target.evaluate(inspectStatisticsControl);
-      if (JSON.stringify(current) !== JSON.stringify(control))
-        throw new ServiceError('stale_observation');
-      if (control.kind === 'click') {
-        await target.click();
-      } else {
-        if (!step.text || !control.options?.includes(step.text))
-          throw new ServiceError('statistics_option_not_observed');
-        if (control.kind === 'select') {
-          await target.selectOption({ label: step.text });
-          if ((await target.evaluate(inspectStatisticsControl))?.value !== step.text)
-            throw new ServiceError('statistics_selection_unverified');
+      try {
+        const control = o.elements.find((e) => e.ref === step.ref)?.statisticsQuery;
+        if (!target || !control || !this.readOnlyPages.has(page) || !statisticsPage(page.url()))
+          throw new ServiceError('statistics_query_not_allowed');
+        const current = JSON.parse(await target.evaluate(inspectStatisticsControl));
+        if (JSON.stringify(current) !== JSON.stringify(control))
+          throw new ServiceError('stale_observation');
+        if (control.kind === 'region') {
+          if (!step.text) throw new ServiceError('statistics_region_invalid');
+          await selectStatisticsRegion(page, target, step.text);
+        } else if (control.kind === 'map') {
+          if (
+            step.x === undefined ||
+            step.y === undefined ||
+            step.x >= o.width ||
+            step.y >= o.height
+          )
+            throw new ServiceError('statistics_map_point_required');
+          if (
+            !(await target.evaluate((el, p) => document.elementFromPoint(p.x, p.y) === el, {
+              x: step.x,
+              y: step.y,
+            }))
+          )
+            throw new ServiceError('statistics_map_point_unverified');
+          await page.mouse.click(step.x, step.y);
+        } else if (control.kind === 'click') {
+          await target.click();
         } else {
-          await target.press('Home');
-          for (let i = 0; i < control.options.indexOf(step.text); i++)
-            await target.press('ArrowRight');
-          const after = await target.evaluate(inspectStatisticsControl);
-          const expected = (control.options.indexOf(step.text) * 100) / 3;
-          if (!after?.value?.endsWith('%') || Math.abs(parseFloat(after.value) - expected) > 0.1)
-            throw new ServiceError('statistics_selection_unverified');
+          if (!step.text || !control.options?.includes(step.text))
+            throw new ServiceError('statistics_option_not_observed');
+          if (control.kind === 'select') {
+            await target.selectOption({ label: step.text });
+            if (JSON.parse(await target.evaluate(inspectStatisticsControl))?.value !== step.text)
+              throw new ServiceError('statistics_selection_unverified');
+          } else {
+            await target.press('Home');
+            for (let i = 0; i < control.options.indexOf(step.text); i++)
+              await target.press('ArrowRight');
+            const after = JSON.parse(await target.evaluate(inspectStatisticsControl));
+            const expected = (control.options.indexOf(step.text) * 100) / 3;
+            if (!after?.value?.endsWith('%') || Math.abs(parseFloat(after.value) - expected) > 0.1)
+              throw new ServiceError('statistics_selection_unverified');
+          }
         }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'TimeoutError')
+          throw new ServiceError('statistics_query_unavailable');
+        throw error;
       }
     } else if (step.action === 'type') {
       if (!target || step.text === undefined) throw new ServiceError('input_target_required');

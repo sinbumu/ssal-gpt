@@ -1,3 +1,4 @@
+import { statisticsUpgradeRetry, STATISTICS_RESEARCH_VERSION } from './statistics-navigation.js';
 import { approveProofAttachment, ProofAttachmentSchema } from './proof-attachments.js';
 import { dmCheckPlan, reviewDmFinding } from './instagram-dm.js';
 import { TelegramNotifications, type TelegramRequest } from './telegram.js';
@@ -318,6 +319,7 @@ export async function createApp(options: {
           autonomy: job.autonomy
             ? {
                 ...job.autonomy,
+                statisticsUpgradeRetry: statisticsUpgradeRetry(job.autonomy),
                 profile: undefined,
                 evidence: undefined,
                 overrides: undefined,
@@ -1154,7 +1156,7 @@ export async function createApp(options: {
           !state ||
           state.inbox?.final ||
           !questions.length ||
-          (state.researchRetries || 0) >= 2
+          ((state.researchRetries || 0) >= 2 && !statisticsUpgradeRetry(state))
         )
           throw new ServiceError('research_retry_unavailable');
         if (delegationIssue(state, settings(store)))
@@ -1168,7 +1170,8 @@ export async function createApp(options: {
           failedUrls: [],
           stops: [],
         };
-        state.researchRetries = (state.researchRetries || 0) + 1;
+        if ((state.researchRetries || 0) >= 2) state.researchVersion = STATISTICS_RESEARCH_VERSION;
+        else state.researchRetries = (state.researchRetries || 0) + 1;
         // A deliberate retry may recheck each failed public URL once. Keep the
         // failure history and all network restrictions; normal runs cannot reset it.
         state.researchProgress.retryUrls = [...state.researchProgress.failedUrls];

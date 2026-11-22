@@ -66,7 +66,7 @@ test('blocked background iframe POST does not discard a readable public GET page
   );
   await app.browser.context!.route(app.origin + '/demo/main-write', (r) =>
     r.fulfill({
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       body: `<form id="write" method="post" action="${app.origin}/demo/main-submit"></form><script>document.getElementById('write').submit()</script>`,
     }),
   );
@@ -159,7 +159,7 @@ test('explicit retry extends only the target legacy job and makes research usabl
   assert.deepEqual(started, [job.id]);
   await app.browser.context!.route('https://search.naver.com/**', (route) =>
     route.fulfill({
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       body: '<p>공식 자료를 찾아야 하는 공개 통계 검색 결과입니다. 검색 결과의 숫자는 답안 근거로 사용하지 않습니다.</p>',
     }),
   );
@@ -204,7 +204,7 @@ test('statistics lookup uses observed region/year/radius controls and restores t
   const { app, job, original } = await fixture(t);
   await app.browser.context!.route('https://search.naver.com/**', (r) =>
     r.fulfill({
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       body: `<p>Official source for a synthetic public quiz</p><a href="${map}">통계지도</a>`,
     }),
   );
@@ -279,7 +279,7 @@ for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url', 'retr
     await app.browser.context!.route(/https:\/\/(search.naver.com|www.google.com)\//, (r) => {
       engines.push(new URL(r.request().url()).hostname);
       return r.fulfill({
-        contentType: 'text/html',
+        contentType: 'text/html; charset=utf-8',
         body: `<p>공식 공개 자료를 찾는 가상 검색 결과입니다. 검색 결과는 정답 증거가 아닙니다.</p><a href="https://example.org/failing">원문</a>`,
       });
     });
@@ -304,7 +304,7 @@ for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url', 'retr
     if (mode === 'blocked')
       await app.browser.context!.route('https://example.org/failing', (r) =>
         r.fulfill({
-          contentType: 'text/html',
+          contentType: 'text/html; charset=utf-8',
           body: `<form method="post" action="https://example.org/write" id="f"></form><script>document.getElementById('f').submit()</script>`,
         }),
       );
@@ -480,7 +480,7 @@ test('early research stop leaves decisions for dashboard answers, final review a
   });
   await app.browser.context!.route('https://search.naver.com/**', (r) =>
     r.fulfill({
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       body: '<p>공식 공개 자료를 찾는 가상 검색 결과입니다. 아직 정답의 근거는 없습니다.</p>',
     }),
   );
@@ -579,4 +579,224 @@ test('a planner requesting research with no allocation is routed to the inbox wi
   assert.equal(saved.status, 'needs_user', saved.note);
   assert.equal(saved.autonomy!.inbox!.items.length, 1);
   assert.equal(saved.transmitted, undefined);
+});
+
+test('observed map fallback bypasses repeated search, preserves call cap and reads legacy controls', async (t) => {
+  const { app, job, original } = await fixture(t);
+  const aging = 'https://sgis.mods.go.kr/publicsmodel/newAging.vw';
+  job.autonomy!.researchProgress!.searches = ['85세 고령화 통계'];
+  job.autonomy!.evidence = [
+    {
+      id: 'source',
+      url: aging,
+      title: '고령화현황보기',
+      text: '공식 지도',
+      screenshot: '',
+      observedAt: Date.now(),
+      links: [],
+    },
+  ];
+  await app.browser.context!.route(aging, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<h1>공식 고령화 통계지도</h1><div id="location_mapNavi_1" class="interactiveSelect" onclick="document.querySelector('#picker').hidden=false">가상도</div><div id="picker" hidden><ul id="sidoSelect_mapNavi_1"><li onclick="document.querySelector('#sggSelect_mapNavi_1').hidden=false">가상도</li></ul><ul id="sggSelect_mapNavi_1" hidden><li onclick="document.querySelector('#selected').textContent='가상도 가상군'">가상군</li></ul><span id="selected"></span><div class="navi-action"><button id="navi-confirm" onclick="document.querySelector('.interactiveSelect').textContent=document.querySelector('#selected').textContent;document.querySelector('#picker').hidden=true">확인</button></div></div><div class="quickBox"><ul class="radioType"><li><label onclick="document.querySelector('#data').textContent='가상도 가상군 2024 노인 중 85세 이상 비율 12.3%'">노인 중 85세 이상 비율</label></li></ul></div><p id="data"></p><script>window.Map=function LegacyMap(){};</script>`,
+    }),
+  );
+  let calls = 0;
+  const model = {
+    async decide(_p: any, _i: any, c: any) {
+      calls++;
+      const o = c.observation;
+      assert.equal(o.url, aging);
+      let step: any = { action: 'done', observationId: o.id, reason: 'fixture evidence' };
+      if (calls === 1) {
+        const e = o.elements.find((e: any) => e.statisticsQuery?.kind === 'region');
+        assert.ok(e);
+        step = { ...step, action: 'query', ref: e.ref, text: '가상도 > 가상군' };
+      }
+      if (calls === 2) {
+        assert.match(o.text, /가상도 가상군/);
+        step = {
+          ...step,
+          action: 'query',
+          ref: o.elements.find((e: any) => e.label === '노인 중 85세 이상 비율').ref,
+        };
+      }
+      if (calls === 3) assert.match(o.text, /12.3%/);
+      return { step, inputTokens: 10, outputTokens: 2 };
+    },
+  } as any;
+  const before = { max: job.maxSteps, searches: [...job.autonomy!.researchProgress!.searches] };
+  await researchQuestion(
+    app.store,
+    app.browser,
+    model,
+    job,
+    '고령화 통계 85세',
+    new AbortController().signal,
+    { hint: '고령화현황보기' },
+  );
+  assert.equal(calls, 3);
+  assert.equal(job.steps, 3);
+  assert.equal(job.maxSteps, before.max);
+  assert.equal(job.inputTokens, 30);
+  assert.deepEqual(job.autonomy!.researchProgress!.searches, before.searches);
+  assert.ok(job.history.some((h) => h.action === 'research_map_fallback'));
+  assert.equal(app.browser.page, original);
+  assert.equal(await original.locator('input').inputValue(), 'keep');
+});
+
+test('statistics capability retry preserves exhausted ordinary retries and all charged usage', async (t) => {
+  const { app, job } = await fixture(t);
+  const s = job.autonomy!;
+  s.origin = 'https://sgis.mods.go.kr';
+  s.researchRetries = 2;
+  delete s.researchVersion;
+  s.researchProgress = {
+    calls: 6,
+    capacity: 20,
+    priorAllocation: 3,
+    searches: ['old'],
+    failedUrls: [],
+    stops: [],
+  };
+  s.researched = ['q'];
+  s.inbox = {
+    id: 'i',
+    fingerprint: 'f',
+    createdAt: Date.now(),
+    items: [
+      {
+        id: 'q',
+        signature: 'q',
+        label: '통계지도 인구 수',
+        kind: 'radio',
+        required: true,
+        multiple: false,
+        options: [{ id: 'a', label: '1' }],
+        category: 'knowledge',
+        reason: 'answer_required',
+      },
+    ],
+  };
+  job.status = 'needs_user';
+  job.steps = 10;
+  job.inputTokens = 123;
+  app.store.saveJob(job);
+  app.runner.start = () => {};
+  const state: any = await fetch(app.origin + '/api/state').then((r) => r.json());
+  const request = () =>
+    fetch(app.origin + `/api/jobs/${job.id}/retry-research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ssal-Token': state.csrf },
+      body: '{}',
+    });
+  assert.equal((await request()).status, 200);
+  const saved = app.store.job(job.id)!;
+  assert.equal(saved.maxSteps, 40);
+  assert.equal(saved.steps, 10);
+  assert.equal(saved.inputTokens, 123);
+  assert.equal(saved.autonomy!.researchRetries, 2);
+  assert.equal(saved.autonomy!.researchProgress!.calls, 6);
+  assert.equal(saved.autonomy!.researchProgress!.priorAllocation, 3);
+  assert.equal(saved.autonomy!.researchProgress!.capacity, 20);
+  assert.deepEqual(saved.autonomy!.researchProgress!.searches, ['old']);
+  saved.autonomy!.inbox = s.inbox;
+  saved.status = 'needs_user';
+  app.store.saveJob(saved);
+  assert.match(await (await request()).text(), /research_retry_unavailable/);
+});
+
+test('failed search replans to a map discovered in the current observation without inventing a URL', async (t) => {
+  const { app, job, original } = await fixture(t);
+  const youth = 'https://sgis.mods.go.kr/view/syrStats/main';
+  await app.browser.context!.route('https://search.naver.com/**', (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<p>Public source listing with an observed official statistics map link for this question.</p><a href="${youth}">청년 통계</a>`,
+    }),
+  );
+  await app.browser.context!.route(youth, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: '<h1>청년통계 지도</h1><p>2024 전체 청년 기준의 공개 통계 자료를 화면에 표시합니다.</p>',
+    }),
+  );
+  let calls = 0;
+  const model = {
+    async decide(_p: any, _i: any, c: any) {
+      calls++;
+      if (calls === 1)
+        return {
+          step: {
+            action: 'search',
+            text: '청년 통계 공개 자료',
+            reason: 'repeat',
+            observationId: c.observation.id,
+          },
+          inputTokens: 1,
+          outputTokens: 1,
+        };
+      assert.equal(c.observation.url, youth);
+      return {
+        step: { action: 'done', reason: 'read', observationId: c.observation.id },
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    },
+  } as any;
+  await researchQuestion(
+    app.store,
+    app.browser,
+    model,
+    job,
+    '청년 통계 공개 자료',
+    new AbortController().signal,
+    { hint: '청년통계지도' },
+  );
+  assert.equal(calls, 2);
+  assert.equal(job.steps, 2);
+  assert.equal(job.maxSteps, 40);
+  assert.ok(job.history.some((h) => h.action === 'research_map_fallback' && h.url === youth));
+  assert.equal(app.browser.page, original);
+});
+
+test('map coordinates must hit the observed SVG region and cannot click an entry control', async (t) => {
+  const { app } = await fixture(t);
+  await app.browser.context!.route(map, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: '<h1>지도 조회</h1><div class="sop-overlay-pane"><svg width="200" height="100"><path class="sop-interactive" d="M0,0H100V100H0Z" onclick="document.querySelector(\'#value\').textContent=\'가상군 12%\'"/></svg></div><p id="value"></p><button onclick="document.querySelector(\'#value\').textContent=\'BAD\'">제출</button>',
+    }),
+  );
+  await app.browser.inReadOnlyTab(async () => {
+    await app.browser.navigate(map);
+    let o = await app.browser.observe();
+    let e = o.elements.find((e) => e.statisticsQuery?.kind === 'map')!;
+    assert.ok(e);
+    await assert.rejects(
+      app.browser.act({
+        action: 'query',
+        ref: e.ref,
+        x: 400,
+        y: 400,
+        observationId: o.id,
+        reason: 'outside',
+      }),
+      /statistics_map_point_unverified/,
+    );
+    o = await app.browser.observe();
+    e = o.elements.find((e) => e.statisticsQuery?.kind === 'map')!;
+    await app.browser.act({
+      action: 'query',
+      ref: e.ref,
+      x: e.x + 20,
+      y: e.y + 20,
+      observationId: o.id,
+      reason: 'visible region',
+    });
+    o = await app.browser.observe();
+    assert.match(o.text, /가상군 12%/);
+    assert.doesNotMatch(o.text, /BAD/);
+  });
 });

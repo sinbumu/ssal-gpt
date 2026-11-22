@@ -1,3 +1,4 @@
+import { STATISTICS_RESEARCH_VERSION } from './statistics-navigation.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './store.js';
@@ -123,6 +124,7 @@ export type AutonomyState = {
   entryChannel?: string;
   researched?: string[];
   researchRetries?: number;
+  researchVersion?: string;
   researchProgress?: ResearchProgress;
   introAdvances?: number;
   inbox?: {
@@ -188,6 +190,7 @@ export function createAutonomy(config: Settings, origin: string, synthetic = fal
     expires: Date.now() + 24 * 60 * 60_000,
     overrides: {},
     researchProgress: { calls: 0, searches: [], failedUrls: [], stops: [] },
+    researchVersion: STATISTICS_RESEARCH_VERSION,
     metrics: {
       modelCalls: 0,
       modelMs: 0,

@@ -1169,6 +1169,9 @@ export async function createApp(options: {
           stops: [],
         };
         state.researchRetries = (state.researchRetries || 0) + 1;
+        // A deliberate retry may recheck each failed public URL once. Keep the
+        // failure history and all network restrictions; normal runs cannot reset it.
+        state.researchProgress.retryUrls = [...state.researchProgress.failedUrls];
         state.researched = state.researched?.filter(
           (s) => !questions.some((q) => q.signature === s),
         );

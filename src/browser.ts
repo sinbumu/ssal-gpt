@@ -451,7 +451,21 @@ export class Browser {
             dmReadRequest(route.request().method(), url, route.request().postData())
           )
         ) {
-          if (route.request().isNavigationRequest()) this.readOnlyBlocks++;
+          // Hidden SSO frames can POST while an otherwise readable public GET
+          // loads. Block them without discarding that public document. Visible
+          // frames, popups and uncertain frame visibility still stop the read.
+          if (route.request().isNavigationRequest()) {
+            const frame = route.request().frame();
+            let visible = true;
+            if (frame !== frame.page().mainFrame()) {
+              const element = await frame.frameElement().catch(() => undefined);
+              if (element) {
+                visible = await element.isVisible().catch(() => true);
+                await element.dispose();
+              }
+            }
+            if (visible) this.readOnlyBlocks++;
+          }
           return await route.abort('blockedbyclient');
         }
         await validateUrl(url, this.demoOrigin);

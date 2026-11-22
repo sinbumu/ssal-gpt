@@ -113,7 +113,7 @@ export async function researchQuestion(
             observation,
             sources: state.evidence.filter((s) => researchUrls.has(s.url)),
             observedUrls: [...links],
-            failedUrls: progress.failedUrls,
+            failedUrls: progress.failedUrls.filter((url) => !progress.retryUrls?.includes(url)),
             searches: progress.searches,
             searchEngine: engine,
             remainingResearchCalls: Math.min(
@@ -148,7 +148,9 @@ export async function researchQuestion(
         }
         if (
           step.action === 'navigate' &&
-          (!step.url || !links.has(step.url) || progress.failedUrls.includes(step.url))
+          (!step.url ||
+            !links.has(step.url) ||
+            (progress.failedUrls.includes(step.url) && !progress.retryUrls?.includes(step.url)))
         ) {
           if (
             reject(
@@ -190,6 +192,8 @@ export async function researchQuestion(
           return;
         }
         try {
+          if (step.action === 'navigate')
+            progress.retryUrls = progress.retryUrls?.filter((url) => url !== step.url);
           await browser.act({ ...step, searchEngine: engine }, secrets);
         } catch (error) {
           if (!(error instanceof ServiceError)) throw error;

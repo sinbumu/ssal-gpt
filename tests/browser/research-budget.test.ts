@@ -49,6 +49,48 @@ async function fixture(t: any) {
 }
 
 const map = 'https://sgis.mods.go.kr/view/map/interactiveMap';
+test('blocked background iframe POST does not discard a readable public GET page; top-level POST still stops', async (t) => {
+  const { app, original } = await fixture(t);
+  const url = app.origin + '/demo/public-read';
+  const failed: string[] = [];
+  app.browser.context!.on('requestfailed', (r) => {
+    if (r.method() === 'POST') failed.push(new URL(r.url()).pathname);
+  });
+  await app.browser.context!.route(url, (r) =>
+    r.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<h1>공개 통계 안내</h1><p>본 자료는 로그인 없이 읽을 수 있는 공개 조회 안내입니다.</p>
+    <iframe hidden name="session"></iframe><form target="session" id="auth" method="post" action="${app.origin}/demo/background-session"></form>
+    <script>document.getElementById('auth').submit()</script>`,
+    }),
+  );
+  await app.browser.context!.route(app.origin + '/demo/main-write', (r) =>
+    r.fulfill({
+      contentType: 'text/html',
+      body: `<form id="write" method="post" action="${app.origin}/demo/main-submit"></form><script>document.getElementById('write').submit()</script>`,
+    }),
+  );
+  await app.browser.inReadOnlyTab(async () => {
+    await app.browser.navigate(app.origin + '/demo/fixture');
+    let o = await app.browser.observe();
+    await app.browser.act({ action: 'navigate', observationId: o.id, url, reason: 'public read' });
+    o = await app.browser.observe();
+    assert.match(o.text, /공개 통계 안내/);
+    assert.ok(failed.includes('/demo/background-session'));
+    await assert.rejects(
+      app.browser.act({
+        action: 'navigate',
+        observationId: o.id,
+        url: app.origin + '/demo/main-write',
+        reason: 'must block',
+      }),
+      /read_only_request_blocked/,
+    );
+    assert.ok(failed.includes('/demo/main-submit'));
+  });
+  assert.equal(app.browser.page, original);
+  assert.equal(await original.locator('input').inputValue(), 'keep');
+});
 test('explicit retry extends only the target legacy job and makes research usable without approving the inbox', async (t) => {
   const { app, job, original } = await fixture(t);
   job.steps = 41;
@@ -229,7 +271,7 @@ test('statistics lookup uses observed region/year/radius controls and restores t
   assert.ok(job.autonomy!.evidence!.some((e) => e.url === map && e.text.includes('42개')));
 });
 
-for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url'] as const) {
+for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url', 'retry_url'] as const) {
   test(`research ${mode}: bounded requests, shared usage and original form preservation`, async (t) => {
     const { app, job, original } = await fixture(t);
     let calls = 0;
@@ -242,13 +284,23 @@ for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url'] as co
       });
     });
     if (mode === 'budget') job.steps = 34;
-    if (mode === 'failed_url')
+    if (mode === 'failed_url' || mode === 'retry_url')
       job.autonomy!.researchProgress = {
         calls: 0,
         searches: [],
         failedUrls: ['https://example.org/failing'],
+        retryUrls: mode === 'retry_url' ? ['https://example.org/failing'] : undefined,
         stops: [],
       };
+    let revisits = 0;
+    if (mode === 'retry_url')
+      await app.browser.context!.route('https://example.org/failing', (r) => {
+        revisits++;
+        return r.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: '<p>공개 자료를 새로 읽는 테스트입니다. 이전 실패 기록을 지우지 않고 한 번만 재방문을 허용합니다.</p><a href="https://example.org/failing">현재 자료</a>',
+        });
+      });
     if (mode === 'blocked')
       await app.browser.context!.route('https://example.org/failing', (r) =>
         r.fulfill({
@@ -267,7 +319,7 @@ for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url'] as co
             searchEngine: 'google',
             text: '다른 정부 원문 자료',
           });
-        if (mode === 'failed_url' || (mode === 'blocked' && calls === 1))
+        if (mode === 'failed_url' || mode === 'retry_url' || (mode === 'blocked' && calls === 1))
           Object.assign(step, { action: 'navigate', url: 'https://example.org/failing' });
         return { step, inputTokens: 10, outputTokens: 2 };
       },
@@ -297,6 +349,12 @@ for (const mode of ['repeat', 'switch', 'budget', 'blocked', 'failed_url'] as co
     if (mode === 'failed_url') {
       assert.equal(calls, 2);
       assert.equal(engines.length, 1);
+    }
+    if (mode === 'retry_url') {
+      assert.equal(calls, 3);
+      assert.equal(revisits, 1);
+      assert.deepEqual(job.autonomy!.researchProgress!.failedUrls, ['https://example.org/failing']);
+      assert.deepEqual(job.autonomy!.researchProgress!.retryUrls, []);
     }
     if (mode === 'blocked') {
       assert.equal(calls, 2);

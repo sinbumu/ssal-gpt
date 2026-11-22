@@ -389,6 +389,7 @@ export async function runAutonomous(
                   ).length,
                 ),
                 researchStops: state.researchProgress?.stops || [],
+                previousResearchSearches: state.researchProgress?.searches || [],
                 profileKeys: Object.entries(state.profile)
                   .filter(([, v]) => v)
                   .map(([k]) => k),

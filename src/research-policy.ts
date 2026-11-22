@@ -7,6 +7,7 @@ export type ResearchProgress = {
   capacity?: number;
   searches: string[];
   failedUrls: string[];
+  retryUrls?: string[];
   stops: { code: string; at: number }[];
 };
 

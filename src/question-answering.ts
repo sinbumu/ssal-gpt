@@ -93,7 +93,9 @@ export function knowledgeBlocker(job: Job, q: InboxItem) {
       : 'knowledge_evidence_missing');
   const budget = /budget|allocation/.test(code);
   const technical =
-    /rejection|controls|read_only|navigation|unavailable|stale|statistics_|observation/.test(code);
+    /rejection|controls|read_only|navigation|unavailable|stale|statistics_|observation|browser_error/.test(
+      code,
+    );
   return {
     kind: budget ? 'budget' : technical ? 'technical' : 'evidence',
     code,
@@ -106,6 +108,7 @@ export function knowledgeBlocker(job: Job, q: InboxItem) {
           : '정답을 뒷받침할 자료를 확보하지 못했습니다.',
     planReason: job.autonomy?.plan?.answers.find((a) => a.questionId === q.id)?.reason,
     calls: attempt?.calls,
+    diagnostic: attempt?.diagnostics?.at(-1),
     legacy: !!legacy,
   };
 }

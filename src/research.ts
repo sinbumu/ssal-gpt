@@ -5,6 +5,7 @@ import { collectEvidence, searchUrl } from './evidence.js';
 import { redactContext, type Question } from './autonomy.js';
 import { collectStatisticsSources, statisticsSourceRank } from './statistics-navigation.js';
 import { ServiceError } from './auth.js';
+import { researchDiagnostic, type ResearchDiagnostic } from './research-errors.js';
 import {
   researchBudget,
   repeatedSearch,
@@ -40,11 +41,15 @@ export async function researchQuestion(
         calls: 0,
         stopCode: undefined as string | undefined,
         lastError: undefined as string | undefined,
+        diagnostics: [] as ResearchDiagnostic[],
         sourceIds: [] as string[],
       }
     : undefined;
   if (attempt) state.questionResearch = [...(state.questionResearch || []), attempt].slice(-80);
   const researchUrls = new Set<string>();
+  let phase = 'navigation',
+    runtimeRecoveries = 0,
+    dismissed = 0;
   const safeQuery = String(redactContext(query, secrets)).slice(0, 400);
   const record = (action: string, reason: string, url = job.startUrl) => {
     job.history.push({ action, reason, url });
@@ -61,6 +66,18 @@ export async function researchQuestion(
     }
     progress.stops = [...progress.stops, { code, at: Date.now() }].slice(-20);
     record('research_stopped', code, [...researchUrls].at(-1));
+  };
+  const diagnose = (error: unknown, recovery: ResearchDiagnostic['recovery']) => {
+    const d = researchDiagnostic(error, phase, secrets, recovery);
+    if (attempt) {
+      attempt.lastError = d.code;
+      attempt.diagnostics = [...attempt.diagnostics, d].slice(-6);
+    }
+    record(
+      'research_error',
+      `${d.code} · ${d.errorName} · ${phase} · ${recovery}`,
+      [...researchUrls].at(-1),
+    );
   };
   if (!budget.allowance) {
     stop('research_budget_reserved');
@@ -162,11 +179,36 @@ export async function researchQuestion(
       for (let i = 0; i < budget.allowance && researchBudget(job).remaining > 0; i++) {
         signal.throwIfAborted();
         let o;
+        phase = 'observation';
         try {
           o = await browser.observe(false, secrets);
         } catch (error) {
-          if (!(error instanceof ServiceError) || !(await directMap())) throw error;
+          if (!(error instanceof ServiceError)) {
+            diagnose(error, runtimeRecoveries === 0 ? 'reobserve' : 'stopped');
+            if (runtimeRecoveries++ > 0) throw error;
+            progress.runtimeRecoveries = (progress.runtimeRecoveries || 0) + 1;
+          } else if (!(await directMap())) throw error;
           o = await browser.observe(false, secrets);
+        }
+        // Dismiss only reviewed informational overlays. No affirmative OK,
+        // consent, save, form or arbitrary close controls. Reobserve afterwards.
+        const notice = o.elements.find((e) => e.statisticsQuery?.dismiss);
+        if (notice && dismissed < 2) {
+          phase = 'notice_dismissal';
+          await browser.act(
+            {
+              action: 'query',
+              observationId: o.id,
+              ref: notice.ref,
+              reason: '공개 지도 안내 닫기',
+            },
+            secrets,
+          );
+          dismissed++;
+          progress.noticeDismissals = (progress.noticeDismissals || 0) + 1;
+          record('research_notice_dismissed', String(redactContext(notice.label, secrets)), o.url);
+          i--;
+          continue;
         }
         researchUrls.add(o.url);
         state.evidence = collectEvidence(state.evidence || [], o);
@@ -176,17 +218,6 @@ export async function researchQuestion(
         if (initialSource && (await directMap(o, true))) {
           i--;
           continue;
-        }
-        const fingerprint = researchFingerprint(
-          o.url,
-          o.text,
-          o.elements.map((e) => [e.label, e.statisticsQuery]),
-        );
-        visits.set(fingerprint, (visits.get(fingerprint) || 0) + 1);
-        if (visits.get(fingerprint)! >= 3) {
-          if (await directMap(o)) continue;
-          stop('research_no_progress');
-          return;
         }
         if (o.text.trim().length < 40) {
           const article = o.elements.find(
@@ -207,8 +238,20 @@ export async function researchQuestion(
             continue;
           }
         }
+        const fingerprint = researchFingerprint(
+          o.url,
+          o.text,
+          o.elements.map((e) => [e.label, e.statisticsQuery]),
+        );
+        visits.set(fingerprint, (visits.get(fingerprint) || 0) + 1);
+        if (visits.get(fingerprint)! >= 3) {
+          if (await directMap(o)) continue;
+          stop('research_no_progress');
+          return;
+        }
         const { image, ...observation } = o;
         const time = Date.now();
+        phase = 'model';
         job.steps++;
         state.metrics.modelCalls++;
         progress.calls++;
@@ -305,6 +348,7 @@ export async function researchQuestion(
           return;
         }
         try {
+          phase = step.action;
           if (step.action === 'navigate')
             progress.retryUrls = progress.retryUrls?.filter((url) => url !== step.url);
           if (await browser.act({ ...step, searchEngine: engine }, secrets)) {
@@ -316,7 +360,18 @@ export async function researchQuestion(
             );
           }
         } catch (error) {
-          if (!(error instanceof ServiceError)) throw error;
+          if (!(error instanceof ServiceError)) {
+            diagnose(error, runtimeRecoveries === 0 ? 'reobserve' : 'stopped');
+            if (signal.aborted) throw error;
+            if (runtimeRecoveries++ === 0) {
+              progress.runtimeRecoveries = (progress.runtimeRecoveries || 0) + 1;
+              // No replay of an uncertain coordinate: the next model call sees
+              // fresh refs/screenshot and chooses its own read-only action.
+              continue;
+            }
+            stop('research_browser_error');
+            return;
+          }
           if (step.action === 'navigate' && step.url && error.code !== 'stale_observation')
             progress.failedUrls = [...new Set([...progress.failedUrls, step.url])].slice(-30);
           const recoverable = [
@@ -331,7 +386,9 @@ export async function researchQuestion(
             'statistics_region_invalid',
             'statistics_map_point_required',
             'statistics_map_point_unverified',
+            'statistics_selection_unverified',
           ].includes(error.code);
+          diagnose(error, recoverable && rejectedActions < 1 ? 'reobserve' : 'stopped');
           if (
             recoverable &&
             [
@@ -363,8 +420,15 @@ export async function researchQuestion(
       stop('research_allocation_used');
     });
   } catch (error) {
-    if (signal.aborted || !(error instanceof ServiceError)) throw error;
-    stop(error.code);
+    diagnose(error, 'stopped');
+    stop(
+      signal.aborted
+        ? 'research_aborted'
+        : error instanceof ServiceError
+          ? error.code
+          : 'research_browser_error',
+    );
+    if (signal.aborted || (!(error instanceof ServiceError) && phase === 'model')) throw error;
   }
   store.saveJob(job);
   store.note(

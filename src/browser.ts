@@ -614,6 +614,8 @@ export class Browser {
         if (!retry)
           throw new ServiceError(
             transientObservation(code) ? 'browser_observation_unstable' : code,
+            400,
+            { cause: error },
           );
         lastCode = code;
         // Read again in the same tab, never reload, navigate or replay an action.
@@ -1339,7 +1341,12 @@ export class Browser {
       if (fresh.url !== prior.url || matches.length !== 1) throw error;
       step = { ...step, observationId: fresh.id, ref: matches[0]!.ref };
       // One rebind only, with a new handle. A changed image or another mutation stops.
-      o = await this.assertFresh(step.observationId, step.action);
+      // The exact non-coordinate public control is checked again below. Keep
+      // tab/URL/age checks without requiring unrelated chart animation to stop.
+      o = await this.assertFresh(
+        step.observationId,
+        step.action === 'query' ? 'wait' : step.action,
+      );
       rebound = true;
     }
     const page = this.page!;
@@ -1450,7 +1457,7 @@ export class Browser {
         }
       } catch (error) {
         if (error instanceof Error && error.name === 'TimeoutError')
-          throw new ServiceError('statistics_query_unavailable');
+          throw new ServiceError('statistics_query_unavailable', 400, { cause: error });
         throw error;
       }
     } else if (step.action === 'type') {

@@ -44,8 +44,9 @@ export class ServiceError extends Error {
   constructor(
     public code: string,
     public status = 400,
+    options?: ErrorOptions,
   ) {
-    super(code);
+    super(code, options);
   }
 }
 const userMessages: Record<string, string> = {

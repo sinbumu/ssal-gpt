@@ -18,17 +18,32 @@ export async function selectStatisticsRegion(
     throw new ServiceError('statistics_region_invalid');
   const url = page.url();
   const house = await target.evaluate((el) => el.matches('#housingLayer .area-select-wrap'));
+  const industry = await target.evaluate((el) => el.matches('.location_wrap .addr_wrap'));
   if (house && names.length > 2) throw new ServiceError('statistics_region_invalid');
   const assertScope = () => {
     if (page.url() !== url || !statisticsPage(url)) throw new ServiceError('stale_observation');
   };
-  if (!house && !(await page.locator('ul[id^=sidoSelect_] li').filter({ visible: true }).count()))
+  if (
+    industry &&
+    !(await page
+      .locator('.location_wrap .addres_wrap .area01 li')
+      .filter({ visible: true })
+      .count())
+  )
+    await target.click();
+  if (
+    !house &&
+    !industry &&
+    !(await page.locator('ul[id^=sidoSelect_] li').filter({ visible: true }).count())
+  )
     await target.click();
   for (let i = 0; i < names.length; i++) {
     assertScope();
-    const selector = house
-      ? `#housingLayer .area-select.${i === 0 ? 'sido' : 'sgg'}`
-      : `ul[id^=${['sidoSelect_', 'sggSelect_', 'admSelect_'][i]}]`;
+    const selector = industry
+      ? `.location_wrap .addres_wrap .area0${i + 1}`
+      : house
+        ? `#housingLayer .area-select.${i === 0 ? 'sido' : 'sgg'}`
+        : `ul[id^=${['sidoSelect_', 'sggSelect_', 'admSelect_'][i]}]`;
     if (
       house &&
       !(await page
@@ -50,7 +65,9 @@ export async function selectStatisticsRegion(
     assertScope();
   }
   if (!house) {
-    const confirm = page.locator('.navi-action #navi-confirm').filter({ visible: true });
+    const confirm = page
+      .locator(industry ? '.location_wrap #address_ok_btn' : '.navi-action #navi-confirm')
+      .filter({ visible: true });
     if ((await confirm.count()) !== 1) throw new ServiceError('statistics_region_unverified');
     await confirm.click();
   }

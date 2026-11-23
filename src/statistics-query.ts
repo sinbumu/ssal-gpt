@@ -27,13 +27,14 @@ export function statisticsPage(raw: string) {
 }
 
 export const statisticsSelectors =
-  ',a.btn_stepSearch,#publicDataLeftList a,#publicDataLeftList label,#publicDataList a,a[id^=board_tabs_],#searchResultBox .pagenation a,.interactiveSelect,[id^=sidoSelect_] li,[id^=sggSelect_] li,[id^=admSelect_] li,#navi-confirm,#navi-cancel,#publicDataSlide .ui-slider-handle,a[onclick^="pageMove"],.quickBox .radioType label,#housingLayer .area-select-wrap,#housingLayer .area-select,#housingLayer .area-select li,#housingLayer .index-checked li,[data-category][data-id],.sop-overlay-pane svg path.sop-interactive,.radio_ul li[onclick],.tab_ul li[onclick],.graph_ul li[onclick]';
+  ',a.btn_stepSearch,#publicDataLeftList a,#publicDataLeftList label,#publicDataList a,a[id^=board_tabs_],#searchResultBox .pagenation a,.interactiveSelect,[id^=sidoSelect_] li,[id^=sggSelect_] li,[id^=admSelect_] li,#navi-confirm,#navi-cancel,#publicDataSlide .ui-slider-handle,a[onclick^="pageMove"],.quickBox .radioType label,#housingLayer .area-select-wrap,#housingLayer .area-select,#housingLayer .area-select li,#housingLayer .index-checked li,[data-category][data-id],.sop-overlay-pane svg path.sop-interactive,.radio_ul li[onclick],.tab_ul li[onclick],.graph_ul li[onclick],.location_wrap .addr_wrap,#company_TreeBox .easytree-title,#company_TreeBox2 .easytree-title,#searchBtnResultRgn .dragItem a.drag';
 
 export type StatisticsControl = {
   kind: 'click' | 'select' | 'radius' | 'region' | 'map';
   label: string;
   options?: string[];
   value?: string;
+  dismiss?: boolean;
 };
 
 // Self-contained for execution in the page; reads rendered DOM only.
@@ -71,7 +72,51 @@ export function inspectStatisticsControl(el: HTMLElement): string {
         /로그인|저장|등록|제출|동의|신청|구매|삭제|다운로드/.test(label)
       )
         return;
-      if (el.matches('.interactiveSelect[id^=location_],#housingLayer .area-select-wrap'))
+      // Reviewed SGIS informational overlays. Only the X/close control of a
+      // non-consent notice is offered; a generic OK can invoke an affirmative
+      // callback. UI clicks remain inside the read-only network guard.
+      const alert = el.closest('.popupWrapper.mAlert');
+      const notice = alert?.querySelector('.messageBox')?.textContent || '';
+      const industryAlert = el.closest('#alert.alert_wrap');
+      const industryNotice = industryAlert?.querySelector('.content')?.textContent || '';
+      if (
+        location.pathname === '/view/indrStats/indrStatsMap' &&
+        el.matches('#alert.alert_wrap > .title button.btn_alert_close') &&
+        label === '닫기' &&
+        /지도|업종|확대|축소|조회|항목/.test(industryNotice) &&
+        !/동의|개인정보|저장|삭제|제출|신청|로그인|구매|결제/.test(industryNotice) &&
+        !industryAlert?.querySelector('input,select,textarea,[contenteditable=true]')
+      )
+        return {
+          kind: 'click',
+          label: `지도 알림 닫기: ${industryNotice.trim().slice(0, 150)}`,
+          dismiss: true,
+        };
+      if (
+        alert &&
+        el.matches('.topbar a[id^=myXbtn_]') &&
+        label === '닫기' &&
+        /지도|확대|축소|검색어|통계|조회|항목/.test(notice) &&
+        !/동의|개인정보|저장|삭제|제출|신청|로그인|구매|결제/.test(notice) &&
+        !alert.querySelector('input,select,textarea,[contenteditable=true]')
+      )
+        return {
+          kind: 'click',
+          label: `지도 알림 닫기: ${notice.trim().slice(0, 150)}`,
+          dismiss: true,
+        };
+      if (
+        location.pathname === '/view/indrStats/indrStatsMap' &&
+        el.matches('.dash_view .dash_wrap > .head button.dash_close') &&
+        label === '닫기' &&
+        el.closest('.head')?.querySelector('h2')?.textContent?.trim() === '업종통계지도'
+      )
+        return { kind: 'click', label: '업종통계지도 안내 닫기', dismiss: true };
+      if (
+        el.matches('.interactiveSelect[id^=location_],#housingLayer .area-select-wrap') ||
+        (location.pathname === '/view/indrStats/indrStatsMap' &&
+          el.matches('.location_wrap .addr_wrap'))
+      )
         return {
           kind: 'region',
           label: '지역 선택: 시도 > 시군구 > 읍면동',
@@ -171,6 +216,22 @@ export function inspectStatisticsControl(el: HTMLElement): string {
       )
         return { kind: 'click', label };
       const region = el.closest('ul[id^=sidoSelect_],ul[id^=sggSelect_],ul[id^=admSelect_]');
+      if (/^\/view\/map\/interactiveMap(?:\/companyView)?$/.test(path)) {
+        if (el.id === 'companySearchBtn')
+          return { kind: 'click', label: '산업분류 검색어 검색 (전체 사업체 통계 조회 아님)' };
+        if (el.matches('#company_TreeBox .easytree-title,#company_TreeBox2 .easytree-title'))
+          return { kind: 'click', label: `산업분류 선택: ${label}` };
+        if (
+          el.matches('a.btnStyle02') &&
+          /^javascript:\$interactiveLeftMenu\.ui\.addSearchBtn\(\);?$/.test(
+            el.getAttribute('href') || '',
+          ) &&
+          /산업조건|검색조건/.test(label)
+        )
+          return { kind: 'click', label: `선택 통계 조건 생성: ${label}` };
+        if (el.matches('#searchBtnResultRgn .dragItem a.drag') && !el.matches('.sqdel'))
+          return { kind: 'click', label: `통계 조회 실행: ${label}` };
+      }
       if (
         (region && el.matches('li,a') && /^[가-힣\d·\s()]+$/.test(label)) ||
         el.matches(
@@ -186,7 +247,11 @@ export function inspectStatisticsControl(el: HTMLElement): string {
             'button.life-category,.life_m_wrap button.level_sel,button#industrySearchButton,button#rootSearchButton',
           ))
       )
-        return { kind: 'click', label: label || '지역 선택' };
+        return {
+          kind: 'click',
+          label:
+            el.id === 'industrySearchButton' ? '선택 생활업종 통계 조회' : label || '지역 선택',
+        };
     })() || null,
   );
 }

@@ -140,6 +140,7 @@ export type AutonomyState = {
     calls: number;
     stopCode?: string;
     lastError?: string;
+    diagnostics?: import('./research-errors.js').ResearchDiagnostic[];
     sourceIds: string[];
   }[];
   preparedKnowledge?: {

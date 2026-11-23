@@ -263,6 +263,17 @@ test('dashboard separates failed quiz research from personal answers and preserv
       startedAt: 1,
       sourceIds: [],
       stopCode: 'research_controls_or_evidence_unavailable',
+      diagnostics: [
+        {
+          at: 1,
+          phase: 'query',
+          code: 'statistics_query_unavailable',
+          errorName: 'TimeoutError',
+          message: '조회 컨트롤이 준비되지 않았습니다.',
+          frames: ['browser.ts:12:3'],
+          recovery: 'stopped',
+        },
+      ],
     },
   ];
   app.store.saveJob(job);
@@ -276,6 +287,11 @@ test('dashboard separates failed quiz research from personal answers and preserv
   await card.getByText('준비된 퀴즈 답안', { exact: false }).click();
   assert.match((await card.textContent()) || '', /공식 합계 30/);
   const form = card.locator('[data-inbox]');
+  await form.getByText('조회 오류·복구 상세', { exact: true }).click();
+  assert.equal(
+    await form.getByText('조회 컨트롤이 준비되지 않았습니다.', { exact: true }).isVisible(),
+    true,
+  );
   assert.equal(await form.locator('[data-quiz-fields]').isVisible(), false);
   assert.equal(await form.locator('button[type=submit]').isDisabled(), true);
   assert.equal(await form.getByText('실제 방문 경험은?', { exact: true }).isVisible(), true);

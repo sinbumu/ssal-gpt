@@ -6,6 +6,8 @@ export type ResearchProgress = {
   calls: number;
   mapSources?: StatisticsSource[];
   controlReobservations?: number;
+  noticeDismissals?: number;
+  runtimeRecoveries?: number;
   priorAllocation?: number;
   capacity?: number;
   searches: string[];

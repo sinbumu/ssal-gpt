@@ -1,7 +1,7 @@
 import type { AutonomyState } from './autonomy.js';
 import type { SourceEvidence } from './evidence.js';
 
-export const STATISTICS_RESEARCH_VERSION = 'sgis-visible-lookups-v3';
+export const STATISTICS_RESEARCH_VERSION = 'sgis-visible-lookups-v4';
 export type StatisticsSource = { url: string; label: string };
 
 export function statisticsRoute(raw: string) {

@@ -1,4 +1,5 @@
 import { jobParticipantCheck } from './qualifications.js';
+import { microsoftFormId } from './microsoft-forms.js';
 import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
 import {
@@ -99,7 +100,8 @@ export function preparationReasons(
   const url = new URL(e.entryUrl);
   if (!(
     url.protocol === 'https:' &&
-    ((url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
+    (microsoftFormId(e.entryUrl) ||
+      (url.hostname === 'form.naver.com' && /^\/response\//.test(url.pathname)) ||
       (url.hostname === 'moaform.com' && /^\/q\//.test(url.pathname)) ||
       (url.hostname === 'answer.moaform.com' && /^\/answers\//.test(url.pathname)) ||
       (url.hostname === 'docs.google.com' && /^\/forms\//.test(url.pathname)) ||

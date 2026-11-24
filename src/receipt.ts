@@ -1,3 +1,4 @@
+import { microsoftFormId } from './microsoft-forms.js';
 import { completionMessage, receiptLineSafe } from './completion.js';
 import { pendingFormAction } from './form-execution.js';
 import { hash, redactContext } from './autonomy.js';
@@ -434,6 +435,8 @@ export function freshReceipt(
     evidence.intentHash === hash(job.intent) &&
     (!job.intent.at || evidence.observedAt >= job.intent.at) &&
     new URL(evidence.url).origin === new URL(job.intent.url).origin &&
+    (!microsoftFormId(job.intent.url) ||
+      microsoftFormId(evidence.url) === microsoftFormId(job.intent.url)) &&
     !!quote &&
     evidence.text.includes(quote) &&
     !job.intent.beforeText.includes(quote)

@@ -10,6 +10,7 @@ import {
 } from './google-progress.js';
 import { verifyNaverContinuation } from './naver-progress.js';
 import { verifyFormContinuation } from './form-progress.js';
+import { microsoftFormId } from './microsoft-forms.js';
 import { pageProgress } from './page-progress.js';
 
 // This stage never enters values, advances a page or evaluates final receipts.
@@ -24,6 +25,32 @@ export async function verifyPageTransition(
 ) {
   const flow = formExecution(job);
   if (flow.transition) flow.transition.attempts++;
+  if (job.intent?.providerControl === 'microsoft-next') {
+    const i = job.intent,
+      old = i.microsoftQuestions || [];
+    const id = microsoftFormId(i.url);
+    if (
+      i.kind !== 'step' ||
+      !id ||
+      id !== microsoftFormId(o.url) ||
+      view.url !== o.url ||
+      browser.ownerJobId !== job.id ||
+      !old.length ||
+      !view.questions.length ||
+      view.questions.some((q) => old.includes(q.signature)) ||
+      !view.buttons.some((b) => b.providerControl?.startsWith('microsoft-'))
+    )
+      return false;
+    await browser.assertFresh(o.id, 'navigate');
+    recordFormTransition(job, '동일 Microsoft Forms에서 다음 문항 묶음 확인');
+    job.uncertain = false;
+    delete job.intent;
+    delete job.receiptObservations;
+    delete job.receiptResponses;
+    delete job.receiptCapture;
+    if (job.eventId) store.markSubmission(job.eventId, 'in_progress');
+    return true;
+  }
   if (googleNextIntent(job)) {
     if (await verifyGoogleContinuation(store, browser, job, o, view)) return true;
     if (flow.transition) flow.transition.reason = googleTransitionReason(job, view);

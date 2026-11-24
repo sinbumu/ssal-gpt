@@ -12,6 +12,7 @@ import {
   controlResultBatch,
   recoverResultBatch,
 } from './result-batch.js';
+import { recheckDeadline, canCheckDeadline } from './deadline-check.js';
 import { discoveryStart, DiscoverySources } from './discovery-start.js';
 import { jobBudget } from './operations.js';
 import { extendDecisionBudget, researchBudget } from './research-policy.js';
@@ -370,6 +371,7 @@ export async function createApp(options: {
             score: ranked.score,
             scoreReasons: ranked.reasons,
             deadlineState: deadlineState(event),
+            canCheckDeadline: canCheckDeadline(event),
             assessment,
             preparationReasons: preparationReasons(store, event, undefined, assessment),
             submissionState: store.submission(event.id)?.state,
@@ -826,6 +828,16 @@ export async function createApp(options: {
         reportManualCompletion(store, event, input.evidence);
       }
       return send(response, 200, { ok: true });
+    }
+    const deadlineMatch = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/recheck-deadline$/);
+    if (method === 'POST' && deadlineMatch) {
+      if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
+      manualNavigation = true;
+      try {
+        return send(response, 200, await recheckDeadline(store, browser, deadlineMatch[1]!));
+      } finally {
+        manualNavigation = false;
+      }
     }
     const reviewMatch = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/review$/);
     if (method === 'POST' && reviewMatch) {

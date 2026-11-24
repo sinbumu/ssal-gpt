@@ -112,7 +112,14 @@ export type Job = {
     kind?: 'step' | 'submission';
     progress?: { current: number; total: number };
     controlLabel?: string;
-    providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
+    providerControl?:
+      | 'naver-next'
+      | 'naver-submit'
+      | 'google-next'
+      | 'google-submit'
+      | 'microsoft-next'
+      | 'microsoft-submit';
+    microsoftQuestions?: string[];
     googlePage?: { history: number[]; signatures: string[] };
     pageMarker?: { id: string; number: number };
     at?: number;
@@ -153,6 +160,7 @@ export type Job = {
   history: { action: string; reason: string; url: string }[];
 };
 export type EventRecord = Candidate & {
+  deadlineCheck?: import('./deadline-check.js').DeadlineCheck;
   management?: {
     mode: 'active' | 'dropped' | 'manual';
     at: string;
@@ -210,13 +218,25 @@ export function canonicalUrl(raw: string) {
   return url.toString();
 }
 export function deadlineState(
-  candidate: Pick<Candidate, 'deadline' | 'deadlineDate'>,
+  candidate: Pick<Candidate, 'deadline' | 'deadlineDate'> &
+    Partial<Pick<EventRecord, 'deadlineCheck' | 'sourceUrl'>>,
   now = Date.now(),
 ) {
   if (candidate.deadline) return Date.parse(candidate.deadline) <= now ? 'ended' : 'available';
   if (!candidate.deadlineDate) return 'unknown';
   const today = new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   if (candidate.deadlineDate < today) return 'ended';
+  const check = candidate.deadlineCheck;
+  if (
+    candidate.deadlineDate === today &&
+    check?.date === today &&
+    check.source === candidate.sourceUrl &&
+    check.at <= now &&
+    now - check.at < 15 * 60_000
+  ) {
+    if (check.state === 'closed' || (check.until && now >= check.until)) return 'ended';
+    if (check.state === 'open' && check.until && now < check.until) return 'available';
+  }
   // A date is not evidence that entries remain open until 23:59 on that day.
   return candidate.deadlineDate === today ? 'closing_today' : 'available';
 }
@@ -331,7 +351,13 @@ export class Store {
         previousBlockers: event.blockers,
       },
     ].slice(-10);
-    const next = { ...event, ...patch, entryKey: canonicalUrl(patch.entryUrl), reviews };
+    const next = {
+      ...event,
+      ...patch,
+      deadlineCheck: undefined,
+      entryKey: canonicalUrl(patch.entryUrl),
+      reviews,
+    };
     const ranked = scoreCandidate(next);
     next.score = ranked.score;
     next.scoreReasons = ranked.reasons;
@@ -369,6 +395,7 @@ export class Store {
       const event: EventRecord = {
         ...prior,
         ...candidate,
+        deadlineCheck: undefined,
         ...context,
         entryKey,
         campaignKey,

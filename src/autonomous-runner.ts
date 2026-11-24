@@ -779,6 +779,7 @@ export async function runAutonomous(
         const intermediate =
           button.providerControl === 'naver-next' ||
           button.providerControl === 'google-next' ||
+          button.providerControl === 'microsoft-next' ||
           (!!progress &&
             progress.current < progress.total &&
             /^(다음(?:\s*(?:문항|페이지))?|next|continue)$/i.test(button.label));
@@ -822,6 +823,10 @@ export async function runAutonomous(
           kind: intermediate ? 'step' : 'submission',
           controlLabel: button.label,
           providerControl: button.providerControl,
+          microsoftQuestions:
+            button.providerControl === 'microsoft-next'
+              ? view.questions.map((q) => q.signature)
+              : undefined,
           googlePage: view.googlePage
             ? {
                 history: view.googlePage.history,

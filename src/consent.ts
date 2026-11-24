@@ -125,7 +125,14 @@ function consentAnswer(q: Question, accept: boolean) {
     /^(?:(?:개인정보\s*수집\s*(?:및|·)\s*이용에\s*)?동의(?:합니다|함)?|안내에\s*동의하고\s*진행|예|네|yes|agree|i agree)[.!]?$/i;
   const no =
     /^(?:동의하지\s*않(?:습니다|음)|미동의|비동의|거부|아니[요오]|no|disagree|i do not agree)$/i;
-  const options = q.options.filter((o) => (accept ? yes : no).test(o.label.trim()));
+  const options = q.options.filter((o) =>
+    (accept ? yes : no).test(
+      o.label
+        .trim()
+        .replace(/^\d{1,2}[.)]\s*/, '')
+        .replace(/^개인정보\s*활용에\s*/, ''),
+    ),
+  );
   if (options.length === 1) return [options[0]!.id];
   if (!accept && !q.required && q.kind === 'checkbox') return [];
 }

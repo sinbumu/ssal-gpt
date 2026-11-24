@@ -296,6 +296,27 @@ function conditionDetails(e) {
     <a href="#qualification-profile">프로필에서 참가 자격 설정</a>
     ${checks.some((c) => c.scope === 'event' || c.kind === 'service') ? `<button type="button" data-qualification-event="${esc(e.id)}">행사별 자격 확인</button>` : ''}</div>`;
 }
+function deadlineDetails(e) {
+  if (!e.canCheckDeadline || e.lifecycle?.status !== 'candidate') return '';
+  const c = e.deadlineCheck;
+  return `<div class="candidate-reasons">${c ? `<strong>당일 접수 재확인</strong><p>${esc(c.reason)}</p><small>${esc(new Date(c.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}</small>` : ''}<button type="button" data-deadline-check="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>공식 원문에서 접수 상태 재확인</button></div>`;
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-deadline-check]');
+  if (button)
+    void guard(async () => {
+      button.disabled = true;
+      try {
+        const c = await api(
+          '/api/events/' + button.dataset.deadlineCheck + '/recheck-deadline',
+          {},
+        );
+        toast(c.reason);
+      } finally {
+        button.disabled = false;
+      }
+    })(event);
+});
 function candidateBadge(e, blocked) {
   if (e.lifecycle && e.lifecycle.status !== 'candidate') return e.lifecycle.label;
   if (e.submissionState === 'completed') return '응모 완료';
@@ -355,7 +376,7 @@ function renderEvents() {
             remaining.length ||
             e.preparationReasons?.length ||
             e.submissionState;
-          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${esc(candidateBadge(e, blocked))}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>${e.lifecycle?.reason ? `<p class="entry-reason">${esc(e.lifecycle.reason)}</p>` : ''}<dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${(e.preparationReasons?.length ? e.preparationReasons : e.assessment?.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${conditionDetails(e)}${remaining.length ? `<p class="warning-text">${remaining.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? esc(e.lifecycle?.label || '기존 작업 확인') : '응모 준비'}</button>${e.lifecycle?.canManage ? `<button data-entry-manage="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>처리 방법 선택</button>` : ''}</div></article>`;
+          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${esc(candidateBadge(e, blocked))}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>${e.lifecycle?.reason ? `<p class="entry-reason">${esc(e.lifecycle.reason)}</p>` : ''}<dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${(e.preparationReasons?.length ? e.preparationReasons : e.assessment?.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${deadlineDetails(e)}${conditionDetails(e)}${remaining.length ? `<p class="warning-text">${remaining.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? esc(e.lifecycle?.label || '기존 작업 확인') : '응모 준비'}</button>${e.lifecycle?.canManage ? `<button data-entry-manage="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>처리 방법 선택</button>` : ''}</div></article>`;
         })
         .join('')
     : '<div class="empty">현재 필터에 맞는 기회가 없습니다.</div>';

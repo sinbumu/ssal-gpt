@@ -6,6 +6,7 @@ import { observedQuote } from './evidence.js';
 import { settings, type Profile } from './autonomy.js';
 import { connectionReady, siteFor } from './connections.js';
 
+import { microsoftFormId } from './microsoft-forms.js';
 import { participantConditions, qualificationProfile } from './qualifications.js';
 
 const SelectionFields = z
@@ -224,6 +225,7 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       );
   }
   const formUrl =
+    !!microsoftFormId(e.entryUrl) ||
     /^https:\/\/(?:form\.naver\.com\/response\/|(?:answer\.)?moaform\.com\/(?:q|answers)\/|docs\.google\.com\/forms\/)/.test(
       e.entryUrl,
     );

@@ -8,6 +8,7 @@ import {
   pickerContainer,
   type Upload,
 } from './complex-controls.js';
+import { microsoftFormId } from './microsoft-forms.js';
 import { hash, validateAnswer, type Question } from './autonomy.js';
 import { ServiceError } from './auth.js';
 import { googleFormId, googleFormState } from './google-form-dom.js';
@@ -24,7 +25,13 @@ export type FormView = {
     action: string;
     form: number;
     reveals?: string;
-    providerControl?: 'naver-next' | 'naver-submit' | 'google-next' | 'google-submit';
+    providerControl?:
+      | 'naver-next'
+      | 'naver-submit'
+      | 'google-next'
+      | 'google-submit'
+      | 'microsoft-next'
+      | 'microsoft-submit';
   }[];
   googlePage?: NonNullable<Awaited<ReturnType<typeof googleFormState>>>;
   dialog?: string;
@@ -66,7 +73,7 @@ export async function inspectForm(page: Page) {
         throw new ServiceError('form_controls_not_ready');
       });
   }
-  const pending = page.evaluate(() => {
+  const pending = page.evaluate((microsoft: boolean) => {
     const moa = location.hostname === 'answer.moaform.com';
     const naver = location.hostname === 'form.naver.com' && /^\/response\//.test(location.pathname);
     const scope = {
@@ -470,9 +477,15 @@ export async function inspectForm(page: Page) {
           : [el];
       const indices = group.map((e) => all.indexOf(e));
       indices.forEach((i) => seen.add(i));
-      const fieldset = el.closest(
-        'fieldset,[role=group],[role=radiogroup],[role=listitem]' + (moa ? ',.js-question' : ''),
-      );
+      const msItem = microsoft
+        ? el.closest<HTMLElement>('[data-automation-id=questionItem]')
+        : null;
+      if (microsoft && !msItem) throw new Error('unsupported_microsoft_question');
+      const fieldset =
+        msItem ||
+        el.closest(
+          'fieldset,[role=group],[role=radiogroup],[role=listitem]' + (moa ? ',.js-question' : ''),
+        );
       const otherList = fieldset?.matches('[role=listitem]') ? fieldset.parentElement : undefined;
       const otherTitle =
         kind === 'text' &&
@@ -533,9 +546,14 @@ export async function inspectForm(page: Page) {
         .filter((node): node is HTMLElement => !!node && helpers.visible(node))
         .map((node) => node.innerText)
         .join('\n');
-      const heading = fieldset
-        ?.querySelector('legend,h1,h2,h3,h4,[role=heading],.js-question-content')
-        ?.textContent?.trim();
+      const msTitle = msItem?.querySelector<HTMLElement>('[data-automation-id=questionTitle]');
+      if (msItem && (!msTitle || !helpers.visible(msTitle)))
+        throw new Error('unsupported_microsoft_question');
+      const heading = msTitle
+        ? msTitle.innerText.trim().split('\n')[0]?.trim()
+        : fieldset
+            ?.querySelector('legend,h1,h2,h3,h4,[role=heading],.js-question-content')
+            ?.textContent?.trim();
       // Plain HTML often groups a question in a div instead of a fieldset.
       // Use only a small visible container with this one control, never the
       // page-wide text (which can mix separate questions and private values).
@@ -639,6 +657,7 @@ export async function inspectForm(page: Page) {
         label: questionLabel,
         material: definitions.material(fieldset || (localText ? localBlock : undefined)),
         description: [
+          msTitle?.innerText.trim(),
           describedBy,
           localText && localText !== helpers.label(el) ? localText : '',
           nearbyConsent,
@@ -678,6 +697,9 @@ export async function inspectForm(page: Page) {
         required:
           group.some((e) => e.required || e.getAttribute('aria-required') === 'true') ||
           fieldset?.getAttribute('aria-required') === 'true' ||
+          !!msTitle?.querySelector('[data-automation-id=requiredStar]') ||
+          (!!msTitle &&
+            /동의를\s*거부할\s*경우.{0,40}참여하실\s*수\s*없습니다/.test(msTitle.innerText)) ||
           (moa && !!fieldset?.querySelector('.wf-icon-required')) ||
           (linkedConsent?.element === el &&
             /동의를\s*거부할\s*경우[\s\S]{0,120}(?:이용|참여|응모)[\s\S]{0,60}(?:없|불가|제한)/.test(
@@ -843,6 +865,25 @@ export async function inspectForm(page: Page) {
         });
       }
     }
+    if (microsoft) {
+      const items = [...document.querySelectorAll('[data-automation-id=questionItem]')].filter(
+        helpers.visible,
+      );
+      if (
+        items.length !== groups.length ||
+        items.some(
+          (item) =>
+            groups.filter(
+              (g) =>
+                g.indices.length &&
+                !g.custom &&
+                ['text', 'radio', 'checkbox'].includes(g.kind) &&
+                g.indices.every((i) => item.contains(all[i]!)),
+            ).length !== 1,
+        )
+      )
+        throw new Error('unsupported_microsoft_question');
+    }
     const buttons = [
       ...document.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
         'button,input[type=submit],input[type=image],[role=button],a[onclick]',
@@ -886,25 +927,34 @@ export async function inspectForm(page: Page) {
         role: b.getAttribute('role'),
         jsname: b.getAttribute('jsname'),
         providerControl:
-          location.origin === 'https://form.naver.com' &&
-          /^\/response\/[A-Za-z0-9_-]{5,100}\/?$/.test(location.pathname) &&
-          b instanceof HTMLButtonElement &&
-          b.type === 'button' &&
-          ['nsv_page_control_next', 'nsv_page_control_submit'].includes(b.id) &&
-          document.querySelectorAll('#' + b.id).length === 1 &&
-          ((b.id === 'nsv_page_control_next' &&
-            /^(다음|next)$/i.test(b.textContent?.trim() || '')) ||
-            (b.id === 'nsv_page_control_submit' &&
-              /^(제출|submit)$/i.test(b.textContent?.trim() || '')))
-            ? b.id === 'nsv_page_control_next'
-              ? ('naver-next' as const)
-              : ('naver-submit' as const)
-            : undefined,
+          microsoft &&
+          b.matches('button[data-automation-id=submitButton]') &&
+          /^(제출|submit)$/i.test(b.textContent?.trim() || '')
+            ? ('microsoft-submit' as const)
+            : microsoft &&
+                b.matches('button[data-automation-id=nextButton]') &&
+                /^(다음|next)$/i.test(b.textContent?.trim() || '')
+              ? ('microsoft-next' as const)
+              : location.origin === 'https://form.naver.com' &&
+                  /^\/response\/[A-Za-z0-9_-]{5,100}\/?$/.test(location.pathname) &&
+                  b instanceof HTMLButtonElement &&
+                  b.type === 'button' &&
+                  ['nsv_page_control_next', 'nsv_page_control_submit'].includes(b.id) &&
+                  document.querySelectorAll('#' + b.id).length === 1 &&
+                  ((b.id === 'nsv_page_control_next' &&
+                    /^(다음|next)$/i.test(b.textContent?.trim() || '')) ||
+                    (b.id === 'nsv_page_control_submit' &&
+                      /^(제출|submit)$/i.test(b.textContent?.trim() || '')))
+                ? b.id === 'nsv_page_control_next'
+                  ? ('naver-next' as const)
+                  : ('naver-submit' as const)
+                : undefined,
       }))
       .filter(
         (b) =>
           b.visible &&
           !b.disabled &&
+          (!microsoft || !!b.providerControl) &&
           !b.numberedChoice &&
           (b.reveals ||
             (b.anchor
@@ -937,14 +987,14 @@ export async function inspectForm(page: Page) {
             }),
       ),
     };
-  });
+  }, !!microsoftFormId(page.url()));
   const raw = await pending.catch((error: unknown) => {
     // Only bounded parser codes cross the page boundary, never page content or
     // arbitrary Playwright exception text (which can contain entered values).
     const code =
       error instanceof Error &&
       error.message.match(
-        /^(?:page\.evaluate: )?(?:Error: )?(multiple_active_form_dialogs|unlabelled_custom_choice|unsupported_choice_state|unsupported_numbered_choice|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
+        /^(?:page\.evaluate: )?(?:Error: )?(unsupported_microsoft_question|multiple_active_form_dialogs|unlabelled_custom_choice|unsupported_choice_state|unsupported_numbered_choice|unsupported_google_dropdown|unlabelled_file_picker|unsupported_moaform_question|unlabelled_moaform_question|unlabelled_moaform_option)(?:\n|$)/,
       )?.[1];
     if (code) throw new ServiceError(code);
     throw error;

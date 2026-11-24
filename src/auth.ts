@@ -125,6 +125,10 @@ const userMessages: Record<string, string> = {
     '원문 조건 또는 참가 계정이 바뀌었습니다. 프로필과 현재 후보의 문항을 다시 확인하세요.',
   qualification_actor_mismatch:
     '참가 자격을 저장한 인스타 계정과 현재 로그인 계정이 다릅니다. 계정을 확인한 뒤 재개하세요.',
+  unsupported_microsoft_question:
+    '이 Microsoft Forms 문항에는 아직 검증되지 않은 입력 방식이 있습니다. 전송 전에 중지했습니다.',
+  deadline_check_unavailable:
+    '이 후보는 당일 접수 재확인 대상이 아니거나 이미 참여를 시작했습니다.',
   event_qualification_review_required:
     '저장한 자격·선택 기준을 충족하지 않거나 원문 조건이 불명확합니다. 기회 선택 기준과 원문을 확인하세요.',
   task_route_not_permitted:

@@ -11,6 +11,7 @@ import { runAutonomous } from './autonomous-runner.js';
 import { collectEvidence, channelFromTrail, observedQuote } from './evidence.js';
 import { captureReceipt, verifyReceipt } from './receipt.js';
 import { canPrepareEntry, nextWorkflowJob, reuseUnenteredCandidates } from './workflow.js';
+import { canCheckDeadline, readDeadline } from './deadline-check.js';
 import { participantConditions, qualificationProfile } from './qualifications.js';
 import { evaluateCandidate, selection, selectionKey } from './selection.js';
 import { requireConnection, saveConnection, registerCandidateConnections } from './connections.js';
@@ -1117,6 +1118,17 @@ export class Runner {
               connectionProfile: this.browser.profileKey(),
             },
           );
+          if (
+            (recorded.added || recorded.refreshed) &&
+            this.browser.page &&
+            canCheckDeadline(recorded.event)
+          ) {
+            recorded.event.deadlineCheck = {
+              ...(await readDeadline(this.browser.page, recorded.event)),
+              screenshot: o.screenshot,
+            };
+            this.store.saveEvent(recorded.event);
+          }
           registerCandidateConnections(this.store, recorded.event, this.browser.profileKey());
           this.store.note(
             job.id,

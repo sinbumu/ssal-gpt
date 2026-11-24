@@ -546,7 +546,11 @@ export function resolveAnswer(
           )
         )
           value = digits;
-        else if (/하이픈.{0,12}(?:포함|넣|입력)|with hyphens/i.test(hint))
+        else if (
+          /하이픈.{0,12}(?:포함|넣|입력)|(?:입력\s*(?:방식|형식)|형식)\s*[:：]\s*0{3}-0{4}-0{4}|with hyphens/i.test(
+            hint,
+          )
+        )
           value = digits.replace(/^(01\d)(\d{3,4})(\d{4})$/, '$1-$2-$3');
       }
     }

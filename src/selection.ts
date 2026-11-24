@@ -6,6 +6,8 @@ import { observedQuote } from './evidence.js';
 import { settings, type Profile } from './autonomy.js';
 import { connectionReady, siteFor } from './connections.js';
 
+import { participantConditions, qualificationProfile } from './qualifications.js';
+
 const SelectionFields = z
   .object({
     mode: z.enum(['strict', 'balanced', 'broad']).default('balanced'),
@@ -96,10 +98,14 @@ export const SelectionSchema = z.preprocess((value) => {
 }, SelectionFields);
 export const selection = (store: Store) =>
   SelectionSchema.parse(store.settings('selectionPolicy', {}));
-export const selectionKey = (store: Store) =>
-  createHash('sha256')
-    .update(JSON.stringify(selection(store)))
+export function selectionKey(store: Store) {
+  const policy = selection(store);
+  // Preserve saved discovery jobs' original scope until qualification settings are configured.
+  const facts = store.settings<unknown>('qualificationProfile', null);
+  return createHash('sha256')
+    .update(JSON.stringify(facts ? [policy, qualificationProfile(store)] : policy))
     .digest('hex');
+}
 export function eventType(e: Pick<EventRecord, 'requirements' | 'entryType'>) {
   if (e.entryType) return e.entryType;
   const text = e.requirements.join(' ');
@@ -136,19 +142,32 @@ function domesticRegion(value: string, acceptedValues: string[], quote: string) 
 }
 export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()) {
   const p = selection(store),
-    reasons: string[] = [];
+    reasons: string[] = [],
+    blockingReasons: string[] = [];
   let state: 'eligible' | 'excluded' | 'review' = 'eligible';
   const reject = (reason: string, review = false) => {
     reasons.push(reason);
+    blockingReasons.push(reason);
     if (state !== 'excluded') state = review ? 'review' : 'excluded';
   };
   if (deadlineState(e, now) !== 'available') reject('접수 가능 기간 확인 필요', true);
   if (e.startsAt && Date.parse(e.startsAt) > now) reject('아직 접수 시작 전');
-  if (e.blockers.length) reject(e.blockers.join(' / '), true);
+  const participation = participantConditions(store, e);
+  const unmet = participation.checks.filter((c) => c.value !== 'yes');
+  for (const c of unmet)
+    reject(
+      `${c.value === 'no' ? '자격 불일치' : c.scope === 'profile' ? '프로필 확인 필요' : '행사별 확인 필요'}: ${c.label}`,
+      c.value === 'unknown',
+    );
+  if (participation.blockers.length) reject(participation.blockers.join(' / '), true);
   if (p.excludedTypes.includes(eventType(e))) reject('제외한 과제 유형');
   if (e.effortMinutes > p.maxMinutes) reject('예상 시간이 설정 상한을 초과');
   for (const condition of e.eligibility || []) {
-    if (!e.sourceEvidence?.some((s) => observedQuote(s.text, condition.quote))) {
+    if (participation.handled.has(condition)) continue;
+    if (
+      ['account_type', 'follower_status', 'system_user'].includes(condition.key) ||
+      !e.sourceEvidence?.some((s) => observedQuote(s.text, condition.quote))
+    ) {
       reject(`자격 원문 확인 필요: ${condition.key}`, true);
       continue;
     }
@@ -222,6 +241,9 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
   if (state === 'eligible') reasons.unshift('기간·자격·선정 설정을 통과한 후보');
   const adjustments = reasons.filter((r) => /설정|허용하지|연결 확인|원문 확인|저장하지/.test(r));
   return {
+    blockingReasons,
+    conditions: participation.checks,
+    remainingBlockers: participation.blockers,
     adjustments,
     mode: p.mode,
     priority: ['응모 성공', '토큰 절감', '시간'],
@@ -230,7 +252,9 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
     type: eventType(e),
     score:
       state === 'eligible'
-        ? scoreCandidate(e, now).score + preferred.length * 10 - e.effortMinutes
+        ? scoreCandidate({ ...e, blockers: participation.blockers }, now).score +
+          preferred.length * 10 -
+          e.effortMinutes
         : 0,
   };
 }

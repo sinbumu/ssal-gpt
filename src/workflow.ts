@@ -1,3 +1,4 @@
+import { jobParticipantCheck } from './qualifications.js';
 import { randomUUID } from 'node:crypto';
 import { createAutonomy, settings } from './autonomy.js';
 import {
@@ -73,9 +74,13 @@ export function nextWorkflowJob(store: Store, job: Job) {
 }
 
 // Shared by discovery stopping and preparation, so an unready saved lead is not success.
-export function preparationReasons(store: Store, e: EventRecord, retry?: Job) {
-  const assessment = evaluateCandidate(store, e);
-  const reasons = assessment.state === 'eligible' ? [] : [...assessment.reasons];
+export function preparationReasons(
+  store: Store,
+  e: EventRecord,
+  retry?: Job,
+  assessment = evaluateCandidate(store, e),
+) {
+  const reasons = [...assessment.blockingReasons];
   if (e.management?.mode && e.management.mode !== 'active')
     reasons.push(
       e.management.mode === 'dropped' ? '드랍한 후보입니다.' : '수동 진행으로 전환한 후보입니다.',
@@ -224,6 +229,7 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     userContext: parent.userContext,
     autonomy: createAutonomy(config, new URL(event.entryUrl).origin),
     tasks: buildTasks(event),
+    participantCheck: jobParticipantCheck(store, event),
   };
   child.autonomy!.evidence = event.sourceEvidence;
   child.autonomy!.organizer = event.organizer;

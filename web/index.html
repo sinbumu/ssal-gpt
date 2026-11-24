@@ -116,6 +116,7 @@
               <option value="dropped">드랍</option>
               <option value="unknown">제출 결과 미확인</option>
               <option value="eligible">준비 가능한 후보</option>
+              <option value="qualifications">참가 자격 입력 필요</option>
               <option value="review">확인 필요·제외 후보</option>
               <option value="completed">응모 완료만</option>
               <option value="all">전체</option>
@@ -429,6 +430,52 @@
               선택하세요. 위임 밖의 동의와 새 사실은 확인함에 모읍니다. 이미 외부에 전송된 동의는 이
               설정으로 철회되지 않습니다.
             </p>
+          </form>
+          <form id="qualification-profile">
+            <h3>참가 자격 사전 설정</h3>
+            <p class="hint">
+              수집한 기회의 자격 판정에 사용합니다. 행사에 따라 달라지는 경험과 신규 팔로우 여부는
+              후보 카드에서 확인하세요.
+            </p>
+            <div class="settings-grid">
+              <div>
+                <label
+                  >성인 여부<select name="adult">
+                    <option value="unknown">저장한 자격·연령대로 판정</option>
+                    <option value="yes">성인</option>
+                    <option value="no">미성년자</option>
+                  </select></label
+                ><label
+                  >사용 중인 서비스 (한 줄에 한 곳)<textarea
+                    name="services"
+                    placeholder="공고에 적힌 서비스 이름"
+                  ></textarea>
+                </label>
+              </div>
+              <div>
+                <label
+                  >참여용 인스타 계정 아이디<input
+                    name="instagram"
+                    maxlength="31"
+                    placeholder="@아이디"
+                    autocomplete="off" /></label
+                ><label
+                  >이 계정의 공개 범위<select name="publicAccount">
+                    <option value="unknown">미확인</option>
+                    <option value="yes">공개 계정</option>
+                    <option value="no">비공개 계정</option>
+                  </select></label
+                ><label
+                  >이 계정의 용도<select name="eventAccount">
+                    <option value="unknown">미확인</option>
+                    <option value="yes">이벤트 응모 전용</option>
+                    <option value="no">일반 계정</option>
+                  </select></label
+                >
+              </div>
+            </div>
+            <button type="submit" disabled>참가 자격 저장</button>
+            <span role="status" id="qualification-status"></span>
           </form>
           <details>
             <summary>재사용 답변 관리</summary>
@@ -1337,6 +1384,16 @@
       </main>
     </div>
     <script type="module" src="/app.js"></script>
+    <dialog id="qualification-dialog" class="reward-dialog" aria-labelledby="qualification-title">
+      <h2 id="qualification-title">행사별 자격 확인</h2>
+      <p id="qualification-event-name"></p>
+      <form id="qualification-answers">
+        <div id="qualification-items"></div>
+        <button type="submit" class="primary">이 행사에 저장</button>
+        <button type="button" data-close-dialog="qualification-dialog">닫기</button>
+        <p role="status" id="qualification-error"></p>
+      </form>
+    </dialog>
     <dialog id="entry-manager" aria-labelledby="entry-manager-title">
       <div id="entry-manager-content"></div>
       <form method="dialog"><button>닫기</button></form>

@@ -282,34 +282,59 @@ function renderCompleted() {
         .join('')
     : `<div class="empty">${query ? '검색 결과가 없습니다.' : '완료한 응모가 여기에 모입니다.'}</div>`;
 }
+function conditionDetails(e) {
+  const checks = e.assessment?.conditions || [];
+  if (!checks.length || e.lifecycle?.status !== 'candidate' || e.deadlineState === 'ended')
+    return '';
+  const status = { yes: '충족', no: '불일치', unknown: '미확인' };
+  return `<div class="candidate-reasons"><strong>참가 자격</strong><ul>${checks
+    .map(
+      (c) =>
+        `<li>${esc(c.label)} · ${status[c.value]}<small> · ${esc(c.basis || (c.scope === 'event' ? '이 행사' : '프로필'))}</small></li>`,
+    )
+    .join('')}</ul>
+    <a href="#qualification-profile">프로필에서 참가 자격 설정</a>
+    ${checks.some((c) => c.scope === 'event' || c.kind === 'service') ? `<button type="button" data-qualification-event="${esc(e.id)}">행사별 자격 확인</button>` : ''}</div>`;
+}
+function candidateBadge(e, blocked) {
+  if (e.lifecycle && e.lifecycle.status !== 'candidate') return e.lifecycle.label;
+  if (e.submissionState === 'completed') return '응모 완료';
+  if (e.deadlineState === 'ended') return '마감';
+  if (e.deadlineState === 'closing_today') return '오늘 마감 · 시각 미확인';
+  if (e.assessment?.conditions?.some((c) => c.value === 'no')) return '참가 자격 불일치';
+  if (e.assessment?.state === 'excluded') return '선정 기준 제외';
+  if (e.assessment?.conditions?.some((c) => c.value === 'unknown')) return '참가 자격 확인 필요';
+  if (e.preparationReasons?.includes('자동 준비를 검증한 참여 경로가 아닙니다.'))
+    return '자동 준비 경로 미검증';
+  return blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`;
+}
 function renderEvents() {
   if (!state) return;
   const filter = $('event-filter').value,
     query = $('event-search').value.trim().toLocaleLowerCase();
   const rows = state.events
     .filter((e) => `${e.title} ${e.organizer} ${e.prize}`.toLocaleLowerCase().includes(query))
-    .filter(
-      (e) =>
-        filter === 'all' ||
-        (filter === 'unfinished'
-          ? !e.lifecycle?.hiddenByDefault && e.submissionState !== 'completed'
-          : ['manual', 'dropped', 'unknown'].includes(filter)
-            ? filter === 'unknown'
-              ? e.lifecycle?.unknown && e.submissionState !== 'completed'
-              : e.lifecycle?.status === filter
-            : filter === 'stopped'
-              ? ['stopped', 'failed', 'held'].includes(e.lifecycle?.status)
-              : filter === 'completed'
-                ? e.submissionState === 'completed'
-                : filter === 'eligible'
-                  ? !e.submissionState &&
-                    !e.lifecycle?.hiddenByDefault &&
-                    e.assessment?.state === 'eligible' &&
-                    !e.preparationReasons?.length
-                  : !e.submissionState &&
-                    !e.lifecycle?.hiddenByDefault &&
-                    (e.assessment?.state !== 'eligible' || !!e.preparationReasons?.length)),
-    );
+    .filter((e) => {
+      if (filter === 'all') return true;
+      if (filter === 'qualifications')
+        return (
+          e.lifecycle?.status === 'candidate' &&
+          e.deadlineState !== 'ended' &&
+          e.assessment?.conditions?.some((c) => c.value === 'unknown')
+        );
+      if (filter === 'unfinished')
+        return !e.lifecycle?.hiddenByDefault && e.submissionState !== 'completed';
+      if (filter === 'unknown') return e.lifecycle?.unknown && e.submissionState !== 'completed';
+      if (filter === 'manual' || filter === 'dropped') return e.lifecycle?.status === filter;
+      if (filter === 'stopped') return ['stopped', 'failed', 'held'].includes(e.lifecycle?.status);
+      if (filter === 'completed') return e.submissionState === 'completed';
+      const ready = e.assessment?.state === 'eligible' && !e.preparationReasons?.length;
+      return (
+        !e.submissionState &&
+        !e.lifecycle?.hiddenByDefault &&
+        (filter === 'eligible' ? ready : !ready)
+      );
+    });
   rows.sort(
     $('event-sort').value === 'score'
       ? (a, b) => (b.assessment?.score ?? b.score) - (a.assessment?.score ?? a.score)
@@ -323,14 +348,14 @@ function renderEvents() {
     ? rows
         .slice(0, eventLimit)
         .map((e) => {
-          const ended = e.deadlineState === 'ended';
+          const remaining = e.assessment?.remainingBlockers ?? e.blockers;
           const blocked =
             (e.assessment && e.assessment.state !== 'eligible') ||
             e.deadlineState !== 'available' ||
-            e.blockers.length ||
+            remaining.length ||
             e.preparationReasons?.length ||
             e.submissionState;
-          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${e.lifecycle && e.lifecycle.status !== 'candidate' ? esc(e.lifecycle.label) : e.submissionState === 'completed' ? '응모 완료' : ended ? '마감' : blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>${e.lifecycle?.reason ? `<p class="entry-reason">${esc(e.lifecycle.reason)}</p>` : ''}<dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${[...new Set([...(e.assessment?.reasons || []), ...(e.preparationReasons || [])])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.blockers.length ? `<p class="warning-text">${e.blockers.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? esc(e.lifecycle?.label || '기존 작업 확인') : '응모 준비'}</button>${e.lifecycle?.canManage ? `<button data-entry-manage="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>처리 방법 선택</button>` : ''}</div></article>`;
+          return `<article class="event-card"><div class="card-top"><span class="pill ${blocked ? 'warning' : ''}">${esc(candidateBadge(e, blocked))}</span><small>${esc(e.organizer)}</small></div><h3>${esc(e.title)}</h3><p class="prize">${esc(e.prize)}</p>${e.lifecycle?.reason ? `<p class="entry-reason">${esc(e.lifecycle.reason)}</p>` : ''}<dl><dt>마감</dt><dd>${e.deadline ? esc(new Date(e.deadline).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })) : e.deadlineDate ? `${esc(e.deadlineDate)} · 시각 미표기` : '확인되지 않음'}</dd><dt>선정</dt><dd>${e.winners ? `${e.winners}명` : '인원 미확인'} · 추정 소요 ${e.effortMinutes}분</dd></dl><div class="candidate-reasons"><strong>${e.preparationReasons?.length ? '자동 준비 보류 이유' : '선정 이유'}</strong><ul>${(e.preparationReasons?.length ? e.preparationReasons : e.assessment?.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${e.assessment?.adjustments?.length ? '<a href="#selection-policy">운영 탭에서 조건 조정</a>' : ''}</div><ul>${e.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${conditionDetails(e)}${remaining.length ? `<p class="warning-text">${remaining.map(esc).join(' · ')}</p>` : ''}<details><summary>추천 근거와 원문 증거</summary><p>${e.scoreReasons.map(esc).join(' · ')}</p><blockquote>${esc(e.evidenceQuote)}</blockquote><p>${e.evidenceKind === 'image' ? '이미지에서 해석한 조건 · 실행 전 확인 필요' : '원문 텍스트 확인'}</p><a href="/evidence/${esc(e.screenshot)}" target="_blank">확인 당시 화면 ↗</a></details><details class="event-review"><summary>조건 재검토</summary><form data-event-review="${esc(e.id)}"><label>확인한 참여 주소<input name="entryUrl" type="url" required value="${esc(e.entryUrl)}"></label><label>확인한 마감 날짜<input name="deadlineDate" type="date" value="${esc(e.deadlineDate || '')}"></label><label>아직 해결되지 않은 조건 (한 줄씩)<textarea name="blockers">${esc(e.blockers.join('\n'))}</textarea></label><label>원문에서 확인한 내용<textarea name="note" required minlength="5" placeholder="기존 조건을 바꾸는 근거를 적어주세요."></textarea></label><button type="submit" ${state.busy ? 'disabled' : ''}>검토 내용 저장</button></form>${e.reviews?.length ? `<p class="hint">최근 검토: ${esc(e.reviews.at(-1).note)}</p>` : ''}</details><div class="card-actions">${safeLink(e.sourceUrl, '확인한 원문')}${safeLink(e.entryUrl, '참여 페이지')}<button data-apply="${esc(e.id)}" ${blocked || state.busy ? 'disabled' : ''}>${e.submissionState === 'completed' ? '응모 완료' : e.submissionState ? esc(e.lifecycle?.label || '기존 작업 확인') : '응모 준비'}</button>${e.lifecycle?.canManage ? `<button data-entry-manage="${esc(e.id)}" ${state.busy ? 'disabled' : ''}>처리 방법 선택</button>` : ''}</div></article>`;
         })
         .join('')
     : '<div class="empty">현재 필터에 맞는 기회가 없습니다.</div>';
@@ -943,6 +968,77 @@ function renderConsentSettings() {
   $('consent-adaptive-controls').hidden = mode !== 'adaptive';
 }
 $('autonomy-form').addEventListener('change', renderConsentSettings);
+const qualForm = $('qualification-profile');
+async function loadQualifications() {
+  const p = await api('/api/qualification-profile');
+  for (const key of ['adult', 'instagram', 'publicAccount', 'eventAccount'])
+    qualForm.elements[key].value = p[key];
+  qualForm.elements.services.value = p.services.join('\n');
+  qualForm.querySelector('button[type=submit]').disabled = false;
+}
+void loadQualifications().catch(() => {
+  $('qualification-status').textContent =
+    '참가 자격을 불러오지 못했습니다. 대시보드를 새로고침하세요.';
+});
+qualForm.onsubmit = guard(async () => {
+  const data = Object.fromEntries(new FormData(qualForm));
+  data.services = [
+    ...new Set(
+      data.services
+        .split('\n')
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
+  ];
+  await api('/api/qualification-profile', data);
+  $('qualification-status').textContent = '저장했습니다. 수집한 기회의 현재 조건에 반영됩니다.';
+});
+document.addEventListener('click', (ev) => {
+  const id = ev.target.closest('[data-qualification-event]')?.dataset.qualificationEvent;
+  if (!id) return;
+  const e = state.events.find((e) => e.id === id);
+  const checks =
+    e?.assessment?.conditions.filter((c) => c.scope === 'event' || c.kind === 'service') || [];
+  if (!checks.length) return;
+  const form = $('qualification-answers');
+  form.dataset.event = id;
+  $('qualification-error').textContent = '';
+  $('qualification-event-name').textContent = e.title;
+  $('qualification-items').innerHTML = checks
+    .map(
+      (
+        c,
+      ) => `<label>${esc(c.label)}${c.account ? ' · @' + esc(c.account) : ''} <small>${esc(c.quote)}</small>
+    ${c.needsAccount ? '<span>프로필에서 참여용 인스타 아이디를 먼저 저장하세요.</span>' : ''}
+    <select name="${esc(c.id)}" ${c.needsAccount ? 'disabled' : ''}>${Object.entries({
+      unknown: c.kind === 'service' ? '행사별 답변 없음 · 프로필 기준' : '미확인',
+      yes: '해당함',
+      no: '해당하지 않음',
+    })
+      .map(
+        ([v, t]) =>
+          `<option value="${v}" ${v === (c.scope === 'profile' ? 'unknown' : c.value) ? 'selected' : ''}>${t}</option>`,
+      )
+      .join('')}</select></label>`,
+    )
+    .join('');
+  form.querySelector('[type=submit]').disabled = !checks.some((c) => !c.needsAccount);
+  $('qualification-dialog').showModal();
+});
+$('qualification-answers').onsubmit = guard(async () => {
+  const form = $('qualification-answers');
+  try {
+    await api(`/api/events/${form.dataset.event}/qualifications`, {
+      answers: [...new FormData(form)].map(([id, value]) => ({ id, value })),
+    });
+  } catch (err) {
+    $('qualification-error').textContent =
+      '저장하지 못했습니다. 창을 닫고 최신 참가 조건을 확인하세요.';
+    throw err;
+  }
+  $('qualification-dialog').close();
+  toast('이 행사의 참가 자격을 저장했습니다.');
+});
 $('reload-profile').onclick = guard(loadProfile);
 void loadProfile().catch((error) => toast(error.message, true));
 $('autonomy-form').onsubmit = guard(async () => {

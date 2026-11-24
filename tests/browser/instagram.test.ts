@@ -296,6 +296,24 @@ test('an unavailable-page phrase inside a valid post never overrides identified 
   }
 });
 
+test('account-bound participant qualification stops before a review draft or external action on a different login', async () => {
+  const f = await fixture();
+  try {
+    const job = f.make(['follow', 'comment']);
+    job.participantCheck = { instagram: 'different_account' };
+    f.app.store.saveJob(job);
+    f.app.runner.start(job.id);
+    await f.app.runner.finished();
+    const paused = f.app.store.job(job.id)!;
+    assert.equal(paused.status, 'needs_user');
+    assert.match(paused.note, /참가 자격을 저장한 인스타 계정/);
+    assert.ok(!paused.tasks?.some((t) => t.preview || t.attempt));
+    assert.deepEqual([f.data.likes, f.data.follows, f.data.posts], [0, 0, 0]);
+  } finally {
+    await f.close();
+  }
+});
+
 test('Instagram account change and revoked delegation prevent external actions', async () => {
   const f = await fixture();
   try {

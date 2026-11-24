@@ -73,6 +73,7 @@ export type Job = {
   id: string;
   kind: 'discover' | 'apply' | 'demo' | 'autonomy_demo' | 'result';
   prepareOne?: { revision: string; expires: number; childId?: string; switches?: number };
+  participantCheck?: { instagram?: string };
   activeMs?: number;
   transmitted?: boolean;
   switchReason?: string;

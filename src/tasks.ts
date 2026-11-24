@@ -1,3 +1,4 @@
+import { verifyQualificationActor } from './qualifications.js';
 import { commentContentProblem, commentAnswersProblem } from './comment-content.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -337,6 +338,7 @@ export async function runTasks(
           },
           task.url,
         );
+      verifyQualificationActor(job, o.instagram.actor);
       task.preview = {
         actor: o.instagram.actor!,
         subject: o.instagram.subject!,
@@ -477,6 +479,7 @@ export async function runTasks(
         if (isInstagram) {
           if (!o.instagram?.ready)
             throw new ServiceError(o.instagram?.reason || 'instagram_target_not_identified');
+          verifyQualificationActor(job, o.instagram.actor);
           if (
             o.instagram.actor !== task.approval.actor ||
             o.instagram.subject !== task.approval.subject

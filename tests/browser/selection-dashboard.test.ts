@@ -302,3 +302,68 @@ test('Google search notices stay out of attention and blocked form login offers 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('saved eligibility profile and per-event answers update an existing card without creating an entry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ssal-qualification-ui-'));
+  const app = await createApp({ dir, port: 0, headless: true });
+  app.scheduler.stop();
+  const ui = await chromium.launch();
+  try {
+    const url = 'https://form.naver.com/response/fixture',
+      quote = '참여 대상: 가상포털 시스템 사용자';
+    const e = app.store.record(
+      {
+        title: '가상 자격 확인',
+        organizer: '가상',
+        entryUrl: url,
+        deadline: '2099-11-23T00:00:00Z',
+        prize: '커피',
+        winners: 1,
+        requirements: ['설문'],
+        blockers: ['가상포털 시스템 사용자 여부 미확인'],
+        eligibility: [{ key: 'system_user', quote, acceptedValues: ['가상포털 시스템 사용자'] }],
+        effortMinutes: 2,
+        evidenceQuote: quote,
+        evidenceKind: 'text',
+      },
+      url,
+      'job',
+      'fixture.png',
+      {
+        sourceEvidence: [
+          { id: 'a', url, text: quote, title: '가상', observedAt: 1, screenshot: 'fixture.png' },
+        ],
+      },
+    ).event;
+    const page = await ui.newPage();
+    await page.goto(app.origin);
+    const card = page.locator('.event-card').filter({ hasText: e.title });
+    await card.getByText('참가 자격 확인 필요', { exact: true }).waitFor();
+    await card.getByRole('button', { name: '행사별 자격 확인' }).click();
+    const dialog = page.locator('#qualification-dialog');
+    await dialog.locator('select').selectOption('no');
+    await dialog.getByRole('button', { name: '이 행사에 저장' }).click();
+    await card.getByText('참가 자격 불일치', { exact: true }).waitFor();
+    await card.getByRole('button', { name: '행사별 자격 확인' }).click();
+    await dialog.locator('select').selectOption('unknown');
+    await dialog.getByRole('button', { name: '이 행사에 저장' }).click();
+    await card.getByText('참가 자격 확인 필요', { exact: true }).waitFor();
+    await card.getByRole('link', { name: '프로필에서 참가 자격 설정' }).click();
+    const profile = page.locator('#qualification-profile');
+    await profile.locator('[name=services]').fill('가상포털');
+    await profile.getByRole('button', { name: '참가 자격 저장' }).click();
+    await page.waitForFunction(
+      () => !document.querySelector('[data-apply]')?.hasAttribute('disabled'),
+    );
+    await page.reload();
+    await page.locator('#qualification-profile button:enabled').waitFor();
+    assert.equal(await profile.locator('[name=services]').inputValue(), '가상포털');
+    assert.equal(await card.locator('[data-apply]').isEnabled(), true);
+    assert.equal(app.store.submission(e.id), undefined);
+    assert.equal(app.store.event(e.id)?.blockers.length, 1);
+  } finally {
+    await ui.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

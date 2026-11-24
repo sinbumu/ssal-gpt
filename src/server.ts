@@ -86,6 +86,13 @@ import {
   instagramBrowser,
 } from './tasks.js';
 import { SelectionSchema, SELECTION_PRESETS, selection, evaluateCandidate } from './selection.js';
+import {
+  EventAnswersSchema,
+  QualificationProfileSchema,
+  qualificationProfile,
+  saveEventQualifications,
+  jobParticipantCheck,
+} from './qualifications.js';
 import { preparationReasons } from './workflow.js';
 import { connectionSummary, checkConnections, saveConnection } from './connections.js';
 import {
@@ -356,14 +363,15 @@ export async function createApp(options: {
           })),
         },
         events: store.events().map((event) => {
-          const ranked = scoreCandidate(event);
+          const assessment = evaluateCandidate(store, event);
+          const ranked = scoreCandidate({ ...event, blockers: assessment.remainingBlockers });
           return {
             ...event,
             score: ranked.score,
             scoreReasons: ranked.reasons,
             deadlineState: deadlineState(event),
-            assessment: evaluateCandidate(store, event),
-            preparationReasons: preparationReasons(store, event),
+            assessment,
+            preparationReasons: preparationReasons(store, event, undefined, assessment),
             submissionState: store.submission(event.id)?.state,
             lifecycle: entryLifecycle(store, event),
             sourceEvidence: undefined,
@@ -621,6 +629,21 @@ export async function createApp(options: {
       );
       return send(response, 200, { ok: true });
     }
+    if (url.pathname === '/api/qualification-profile') {
+      if (method === 'GET') return send(response, 200, qualificationProfile(store));
+      if (method === 'POST') {
+        if (runner.isBusy()) throw new ServiceError('pause_before_changing_delegation');
+        store.setSettings('qualificationProfile', QualificationProfileSchema.parse(data));
+        return send(response, 200, { ok: true });
+      }
+    }
+    const qualifications = url.pathname.match(/^\/api\/events\/([a-f0-9-]+)\/qualifications$/);
+    if (method === 'POST' && qualifications) {
+      const event = store.event(qualifications[1]!);
+      if (!event) throw new ServiceError('event_not_found', 404);
+      saveEventQualifications(store, event, EventAnswersSchema.parse(data));
+      return send(response, 200, { ok: true });
+    }
     if (method === 'GET' && url.pathname === '/api/autonomy')
       return send(response, 200, settings(store));
     if (method === 'POST' && url.pathname === '/api/autonomy') {
@@ -834,7 +857,7 @@ export async function createApp(options: {
         input.kind === 'apply' && input.eventId ? store.event(input.eventId) : undefined;
       if (input.kind === 'apply' && (!event || !input.routeConfirmed))
         throw new ServiceError('event_and_route_confirmation_required');
-      if (event && (deadlineState(event) !== 'available' || event.blockers.length))
+      if (event && deadlineState(event) !== 'available')
         throw new ServiceError('event_not_eligible');
       if (event?.management?.mode && event.management.mode !== 'active')
         throw new ServiceError('entry_management_blocks_automation');
@@ -907,6 +930,7 @@ export async function createApp(options: {
         job.autonomy.evidence = event?.sourceEvidence || [];
         job.autonomy.entryChannel = event?.entryChannel;
       }
+      if (event) job.participantCheck = jobParticipantCheck(store, event);
       if (event?.tasks?.length) job.tasks = buildTasks(event);
       if (event && !store.claimSubmission(event.id, id))
         throw new ServiceError('event_already_started_or_submitted');

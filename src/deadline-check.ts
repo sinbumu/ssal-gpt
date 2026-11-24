@@ -56,6 +56,20 @@ export function assessDeadline(
     .split('\n')
     .map((t) => t.trim())
     .filter(Boolean);
+  if (ownerCaption) {
+    const closed = lines.find((l) =>
+      /^[📢📌✔️\s]*(?:본\s*)?(?:이벤트|응모|접수|참여)(?:가|는|를)?\s*(?:조기\s*)?(?:마감|종료)(?:되었습니다|됐습니다|했습니다)[.!\s]*$/u.test(
+        l,
+      ),
+    );
+    if (closed)
+      return {
+        ...result,
+        state: 'closed',
+        reason: '주최자 게시물에 마감 안내가 있습니다.',
+        quote: closed,
+      };
+  }
   const index = lines.findIndex((l) => /(?:참여|응모|접수|이벤트)\s*기간/.test(l));
   if (index < 0) return result;
   const window = lines
@@ -73,17 +87,21 @@ export function assessDeadline(
   result.reason =
     '원문의 참여 기간은 오늘까지입니다. 접수 종료 시각과 현재 접수 상태는 확인되지 않았습니다.';
   if (!ownerCaption) return result;
-  const closed = lines.find((l) =>
-    /^(?:[📢📌✔️\s]*)(?:본\s*)?(?:이벤트|응모|접수|참여)(?:가|는|를)?\s*(?:조기\s*)?(?:마감|종료)(?:되었습니다|됐습니다|합니다|했습니다)[.!\s]*$/u.test(
-      l,
-    ),
+  // The original launch caption can say "접수 중" for weeks. Accept an explicit
+  // current-status notice only when the author dates that same line to today.
+  const currentNotice = new RegExp(
+    '^' +
+      date +
+      '\\s*(?:현재|기준)\\s*[,·:：-]?\\s*(?:이벤트\\s*)?(?:응모|접수|참여)\\s*(?:진행\\s*)?중(?:입니다)?[.!\\s]*$',
+    'u',
   );
-  if (closed)
+  const active = lines.find((l) => currentNotice.test(l));
+  if (!end[1] && active)
     return {
       ...result,
-      state: 'closed',
-      reason: '주최자 게시물에 마감 안내가 있습니다.',
-      quote: closed,
+      state: 'open',
+      reason: '주최자가 오늘 날짜로 접수 중임을 안내했습니다.',
+      quote: active,
     };
   if (!end[1] || /조기\s*(?:종료|마감)|선착순|소진\s*시|오전|오후/.test(caption)) return result;
   const h = Number(end[1]),
@@ -108,13 +126,14 @@ export async function readDeadline(page: Page, e: EventRecord, now = Date.now())
   const same = canonicalUrl(page.url()) === canonicalUrl(e.sourceUrl);
   if (!same || !anchor) return assessDeadline(e, '', false, now);
   const caption = await page.evaluate((quote) => {
-    const visible = (el: HTMLElement) =>
-      !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-    const match = (el: HTMLElement) =>
-      visible(el) && el.innerText.replace(/\s/g, '').includes(quote.replace(/\s/g, ''));
     // Only the unique post title can establish a closing time. Surrounding text can
     // corroborate a date, but a comment or an enabled editor cannot prove acceptance.
-    const titles = [...document.querySelectorAll<HTMLElement>('main h1,article h1')].filter(match);
+    const titles = [...document.querySelectorAll<HTMLElement>('main h1,article h1')].filter(
+      (el) =>
+        el.getClientRects().length &&
+        getComputedStyle(el).visibility !== 'hidden' &&
+        el.innerText.replace(/\s/g, '').includes(quote.replace(/\s/g, '')),
+    );
     return titles.length === 1
       ? { text: titles[0]!.innerText, owner: true }
       : { text: document.body.innerText.slice(0, 24000), owner: false };

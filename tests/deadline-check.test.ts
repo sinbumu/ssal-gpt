@@ -28,4 +28,13 @@ test('closing-day evidence needs an attributable precise cutoff and is bound to 
   assert.equal(check(lines + ' 12:00').state, 'closed');
   assert.equal(check(lines + '\n이벤트가 조기 마감되었습니다.').state, 'closed');
   assert.equal(check(lines + ' 17:00\n소진 시 조기 마감').state, 'unknown');
+  assert.equal(check(lines + '\n현재 접수 중입니다').state, 'unknown');
+  assert.equal(check(lines + '\n30. 2. 2. 현재 접수 중입니다').state, 'unknown');
+  const current = check(lines + '\n30. 2. 3. 현재 접수 중입니다.');
+  assert.equal(current.state, 'open');
+  assert.equal(current.until, undefined);
+  assert.equal(deadlineState({ ...e, deadlineCheck: current }, at), 'available');
+  assert.equal(deadlineState({ ...e, deadlineCheck: current }, at + 15 * 60000), 'closing_today');
+  assert.equal(check('댓글로 참여하세요.\n이벤트가 종료되었습니다.').state, 'closed');
+  assert.equal(check(lines + '\n응모 마감합니다.').state, 'unknown');
 });

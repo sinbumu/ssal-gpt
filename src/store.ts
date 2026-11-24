@@ -235,7 +235,7 @@ export function deadlineState(
     now - check.at < 15 * 60_000
   ) {
     if (check.state === 'closed' || (check.until && now >= check.until)) return 'ended';
-    if (check.state === 'open' && check.until && now < check.until) return 'available';
+    if (check.state === 'open') return 'available';
   }
   // A date is not evidence that entries remain open until 23:59 on that day.
   return candidate.deadlineDate === today ? 'closing_today' : 'available';

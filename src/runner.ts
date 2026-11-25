@@ -25,6 +25,7 @@ import { settings } from './autonomy.js';
 import { ModelOutputError, type ModelDiagnostic, type OutputDetails } from './model-output.js';
 import { prepareFormDrafts } from './form-drafts.js';
 import { readFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import {
   discoveryContext,
@@ -598,6 +599,7 @@ export class Runner {
     let formatFeedback: OutputDetails | undefined =
       job.kind === 'discover' ? modelRepairFeedback(job.modelDiagnostics?.at(-1)) : undefined;
     let formatRetry: ModelDiagnostic | undefined;
+    let waitingForModelRecovery = false;
     try {
       if (
         job.uncertain &&
@@ -764,6 +766,36 @@ export class Runner {
         try {
           result = await model.decide(job.provider, INSTRUCTIONS, submitted, image, signal);
         } catch (error) {
+          const safeToReplan =
+            job.kind === 'discover' &&
+            !signal.aborted &&
+            !job.uncertain &&
+            !job.intent &&
+            !job.transmitted &&
+            !job.approval &&
+            !approved;
+          if (
+            job.kind === 'discover' &&
+            error instanceof ServiceError &&
+            error.code === 'server_is_overloaded'
+          ) {
+            trace?.finish('failed', error.code);
+            const blocked =
+              jobBudget(this.store, job)?.blocked || budgetReason(this.store, job.provider);
+            if (blocked) throw new ServiceError(blocked);
+            const retries = job.discoveryOverloadRetries || 0;
+            const waitMs = [5000, 15000][retries];
+            if (!safeToReplan || waitMs === undefined) throw error;
+            job.discoveryOverloadRetries = retries + 1;
+            waitingForModelRecovery = true;
+            job.note = `AI 서버가 혼잡합니다. ${waitMs / 1000}초 후 현재 화면을 다시 읽고 탐색을 이어갑니다 (자동 재요청 ${retries + 1}/2회).`;
+            this.store.note(job.id, job.note);
+            this.store.saveJob(job);
+            await delay(waitMs, undefined, { signal });
+            // No action was issued. An unchanged page here is not a failed navigation.
+            previousFingerprint = '';
+            continue;
+          }
           if (error instanceof ModelOutputError) {
             if (formatRetry) formatRetry.outcome = 'stopped';
             trace?.finish('failed', error.code, { validation: error.details });
@@ -771,17 +803,7 @@ export class Runner {
             if (diagnostic) diagnostic.outcome = 'stopped';
             const blocked =
               jobBudget(this.store, job)?.blocked || budgetReason(this.store, job.provider);
-            if (
-              job.kind === 'discover' &&
-              error.retryable &&
-              !signal.aborted &&
-              !job.uncertain &&
-              !job.intent &&
-              !job.transmitted &&
-              !job.approval &&
-              (job.modelFormatRetries || 0) < 2 &&
-              !blocked
-            ) {
+            if (safeToReplan && error.retryable && (job.modelFormatRetries || 0) < 2 && !blocked) {
               job.modelFormatRetries = (job.modelFormatRetries || 0) + 1;
               formatFeedback = error.details;
               formatRetry = diagnostic;
@@ -796,6 +818,13 @@ export class Runner {
           throw error;
         }
         signal.throwIfAborted();
+        if (waitingForModelRecovery) {
+          this.store.note(
+            job.id,
+            'AI 서버 과부하 복구: 새 관찰로 응답을 받아 기존 탐색을 이어갑니다.',
+          );
+          waitingForModelRecovery = false;
+        }
         if (formatRetry) formatRetry.outcome = 'recovered';
         formatRetry = undefined;
         // Field/enum corrections remain applicable to later candidate repairs.
@@ -1261,6 +1290,7 @@ export class Runner {
           executionPhase === 'observation' && diagnostic?.outcome === 'stopped'
             ? `observation:${diagnostic.stage}`
             : executionPhase,
+          job.kind,
         );
         if (exhausted) job.stopReason.reason = exhausted;
         if (

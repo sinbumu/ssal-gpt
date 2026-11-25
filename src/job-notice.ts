@@ -46,11 +46,22 @@ export function observationErrorCode(error: unknown): string {
 export const transientObservation = (code: string) =>
   ['observation_navigation_changed', 'observation_document_not_ready'].includes(code);
 
-export function errorNotice(error: unknown, phase: string): JobNotice {
+export function errorNotice(error: unknown, phase: string, kind?: Job['kind']): JobNotice {
   const code =
     error instanceof ServiceError && /^[a-z0-9_:-]{1,150}$/.test(error.code)
       ? error.code
       : 'unclassified_error';
+  if (code === 'server_is_overloaded' && phase === 'model' && kind === 'discover')
+    return {
+      category: 'normal',
+      title: '일시 중단 · AI 서버 과부하',
+      reason:
+        'AI 서버가 혼잡해 다음 탐색 판단을 받지 못했습니다. 수집한 후보와 진행 기록은 저장돼 있습니다.',
+      nextAction: '잠시 후 이 작업의 탐색 재개 버튼을 누르면 남은 한도로 이어갑니다.',
+      code,
+      phase,
+      at: Date.now(),
+    };
   if (code === 'delegation_expired_or_changed')
     return {
       category: 'user',
@@ -270,6 +281,15 @@ export function jobNotice(job: Job): JobNotice | undefined {
       nextAction: '저장된 접수 증거를 확인하세요. 중복 제출 방지를 위해 자동 재시도하지 않습니다.',
     };
   if (['running', 'queued', 'completed'].includes(job.status)) return;
+  if (
+    job.kind === 'discover' &&
+    job.stopReason?.code === 'server_is_overloaded' &&
+    job.stopReason.phase === 'model'
+  )
+    return {
+      ...errorNotice(new ServiceError(job.stopReason.code), 'model', job.kind),
+      at: job.stopReason.at,
+    };
   if (job.stopReason?.code === 'delegation_expired_or_changed')
     return {
       ...errorNotice(

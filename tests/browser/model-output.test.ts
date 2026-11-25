@@ -10,6 +10,7 @@ import { Runner } from '../../src/runner.js';
 import { parseModelOutput, type ModelClient } from '../../src/model.js';
 import { ServiceError } from '../../src/auth.js';
 import { OperationsSchema, usage } from '../../src/operations.js';
+import { jobNotice } from '../../src/job-notice.js';
 import type { Job } from '../../src/store.js';
 
 async function fixture(
@@ -59,6 +60,110 @@ const output = (args?: unknown) => ({
         ],
   usage: { input_tokens: 10, output_tokens: 2 },
 });
+
+test('a discovery model overload is metered and retried from a fresh observation in the same job', async () =>
+  fixture(async (app, job) => {
+    const observations: string[] = [];
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      {
+        async decide(_p, _i, ctx: any) {
+          observations.push(ctx.observation.id);
+          if (observations.length === 1) throw new ServiceError('server_is_overloaded', 502);
+          return parseModelOutput(
+            output({ action: 'done', reason: 'synthetic', observationId: ctx.observation.id }),
+            10,
+          );
+        },
+      },
+      app.origin,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.status, 'completed');
+    assert.equal(saved.steps, 1);
+    assert.equal(saved.discoveryOverloadRetries, 1);
+    assert.equal(observations.length, 2);
+    assert.equal(new Set(observations).size, 2);
+    assert.equal(saved.readTraces?.[0]?.reason, 'server_is_overloaded');
+    assert.equal(usage(app.store).calls, 2);
+    assert.equal(usage(app.store).unknown, 1);
+    assert.equal(app.store.jobs().length, 1);
+  }));
+
+test('persistent overload pauses at the per-job cap across manual resumes, including legacy notices', async () =>
+  fixture(async (app, job) => {
+    job.discoveryOverloadRetries = 1;
+    app.store.saveJob(job);
+    const runner = new Runner(
+      app.store,
+      app.browser,
+      {
+        async decide() {
+          throw new ServiceError('server_is_overloaded', 502);
+        },
+      },
+      app.origin,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    const saved = app.store.job(job.id)!;
+    assert.equal(saved.discoveryOverloadRetries, 2);
+    assert.equal(saved.steps, 0);
+    assert.equal(saved.status, 'paused');
+    assert.equal(saved.stopReason?.code, 'server_is_overloaded');
+    assert.equal(usage(app.store).calls, 2);
+    assert.match(
+      jobNotice({
+        ...saved,
+        status: 'failed',
+        stopReason: { ...saved.stopReason!, title: '기술 오류 · 작업 중단' },
+      })!.title,
+      /AI 서버 과부하/,
+    );
+    runner.start(job.id);
+    await runner.finished();
+    assert.equal(usage(app.store).calls, 3);
+    assert.equal(app.store.job(job.id)!.discoveryOverloadRetries, 2);
+  }));
+
+for (const scenario of ['pause', 'limit', 'apply'] as const) {
+  test(`discovery overload does not retry on ${scenario}`, async () =>
+    fixture(async (app, job) => {
+      if (scenario === 'limit')
+        app.store.setSettings('operations', OperationsSchema.parse({ dailyCalls: 1 }));
+      if (scenario === 'apply') {
+        job.kind = 'apply';
+        app.store.saveJob(job);
+      }
+      const runner = new Runner(
+        app.store,
+        app.browser,
+        {
+          async decide() {
+            throw new ServiceError('server_is_overloaded', 502);
+          },
+        },
+        app.origin,
+      );
+      runner.start(job.id);
+      if (scenario === 'pause') {
+        for (let i = 0; i < 150 && !app.store.job(job.id)?.discoveryOverloadRetries; i++)
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(app.store.job(job.id)?.discoveryOverloadRetries, 1);
+        await runner.pause(job.id);
+      }
+      await runner.finished();
+      const saved = app.store.job(job.id)!;
+      assert.equal(usage(app.store).calls, 1);
+      assert.equal(saved.steps, 0);
+      if (scenario === 'limit') assert.equal(saved.stopReason?.code, 'daily_call_limit');
+      if (scenario === 'pause') assert.equal(saved.status, 'paused');
+      if (scenario === 'apply') assert.equal(saved.discoveryOverloadRetries, undefined);
+    }));
+}
 
 test('discovery repairs format errors with fresh observations, meters all requests and renders diagnostic fields', async () =>
   fixture(async (app, job) => {

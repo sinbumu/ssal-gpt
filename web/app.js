@@ -65,6 +65,8 @@ const canAnswerInbox = (job) =>
   !delegationIssue(job) &&
   (job.autonomy.synthetic || state.autonomy.revision === job.autonomy.revision);
 function jobNote(job) {
+  if (job.note === 'server_is_overloaded' && job.notice?.code === job.note)
+    return job.notice.reason;
   if (job.note === 'delegation_expired_or_changed')
     return job.notice?.reason || '작업 위임을 갱신해야 합니다.';
   return job.status === 'stopped' &&

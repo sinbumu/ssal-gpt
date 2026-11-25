@@ -205,37 +205,10 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     store.saveJob(parent);
     return;
   }
-  const now = new Date().toISOString();
-  const child: Job = {
-    id: randomUUID(),
-    kind: 'apply',
-    provider: parent.provider,
-    browserEngine: parent.browserEngine,
-    parentId: parent.id,
-    goal: `확인한 이벤트의 필수 조건을 충족하여 응모하세요. ${event.requirements.join(' / ')}`,
-    startUrl: event.entryUrl,
-    status: 'queued',
-    createdAt: now,
-    updatedAt: now,
-    eventId: event.id,
-    candidateLimit: 1,
-    maxSteps: selection(store).maxCalls,
-    steps: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    note: '탐색 결과에서 자동 선택한 응모입니다.',
-    uncertain: false,
-    allowedOrigins: [new URL(event.entryUrl).origin],
-    approvedTexts: [],
-    history: [],
-    userContext: parent.userContext,
-    autonomy: createAutonomy(config, new URL(event.entryUrl).origin),
-    tasks: buildTasks(event),
-    participantCheck: jobParticipantCheck(store, event),
-  };
-  child.autonomy!.evidence = event.sourceEvidence;
-  child.autonomy!.organizer = event.organizer;
-  child.autonomy!.entryChannel = event.entryChannel;
+  const child = createPreparedEntry(store, event, parent.provider, parent.browserEngine);
+  child.parentId = parent.id;
+  child.userContext = parent.userContext;
+  child.note = '탐색 결과에서 자동 선택한 응모입니다.';
   store.db.exec('BEGIN IMMEDIATE');
   try {
     if (
@@ -257,4 +230,42 @@ export function prepareDiscoveredEntry(store: Store, parent: Job) {
     store.db.exec('ROLLBACK');
     throw error;
   }
+}
+
+export function createPreparedEntry(
+  store: Store,
+  event: EventRecord,
+  provider: Job['provider'],
+  browserEngine: Job['browserEngine'],
+): Job {
+  const now = new Date().toISOString();
+  const child: Job = {
+    id: randomUUID(),
+    kind: 'apply',
+    provider,
+    browserEngine,
+    goal: `확인한 이벤트의 필수 조건을 충족하여 응모하세요. ${event.requirements.join(' / ')}`,
+    startUrl: event.entryUrl,
+    status: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    eventId: event.id,
+    candidateLimit: 1,
+    maxSteps: selection(store).maxCalls,
+    steps: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    note: '저장된 위임으로 응모를 준비합니다.',
+    uncertain: false,
+    allowedOrigins: [new URL(event.entryUrl).origin],
+    approvedTexts: [],
+    history: [],
+    autonomy: createAutonomy(settings(store), new URL(event.entryUrl).origin),
+    tasks: buildTasks(event),
+    participantCheck: jobParticipantCheck(store, event),
+  };
+  child.autonomy!.evidence = event.sourceEvidence;
+  child.autonomy!.organizer = event.organizer;
+  child.autonomy!.entryChannel = event.entryChannel;
+  return child;
 }

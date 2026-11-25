@@ -331,8 +331,70 @@ function candidateBadge(e, blocked) {
     return '자동 준비 경로 미검증';
   return blocked ? '조건 확인 필요' : `검토 우선순위 ${e.assessment?.score ?? e.score}`;
 }
+function renderEntryBatch() {
+  const plan = state.entryBatchPlan;
+  $('entry-batch-panel').hidden = !plan;
+  if (!plan) return;
+  const b = state.entryBatch;
+  const active = b?.state === 'running';
+  const start = $('entry-batch-start');
+  start.hidden = active;
+  start.disabled = !plan.ids.length || !state.autonomy.policy.enabled;
+  start.textContent = `응모 가능 ${plan.ids.length}건 순차 시작`;
+  $('entry-batch-stop').hidden = !active;
+  const current = active && b.items.find((i) => i.state === 'current');
+  const job = current && state.jobs.find((j) => j.id === current.jobId);
+  const waiting = job && !['queued', 'running', 'completed'].includes(job.status);
+  const policy =
+    state.autonomy.policy.finalSubmit === 'auto'
+      ? '위임한 최종 제출은 자동으로 진행합니다.'
+      : '최종 제출은 확인함에서 승인합니다.';
+  const done = b?.items.filter((i) => i.state === 'completed').length || 0;
+  const skipped = b?.items.filter((i) => i.state === 'skipped').length || 0;
+  $('entry-batch-status').textContent = active
+    ? `전체 ${b.items.length}건 · 접수 완료 ${done}건 · 건너뜀 ${skipped}건. ${waiting ? '현재 건의 확인을 기다립니다.' : b.note}`
+    : `${b ? b.note + ' 완료 ' + done + '건 · 건너뜀 ' + skipped + '건. ' : ''}${state.autonomy.policy.enabled ? '시작 시점에 응모 가능한 전체 후보를 선정 점수순으로 진행합니다. ' + policy : '프로필·위임 정책에서 자율 응모를 켜 주세요.'}`;
+  $('entry-batch-current').innerHTML = current
+    ? `<p><strong>${esc(current.title)}</strong> <button type="button" data-entry-job="${esc(current.jobId)}">${waiting ? '확인함 열기' : '현재 작업 보기'}</button></p>`
+    : '';
+  const labels = { pending: '대기', current: '진행', completed: '접수 완료', skipped: '건너뜀' };
+  $('entry-batch-previous').hidden = active || !b;
+  $('entry-batch-results').innerHTML =
+    b && !active
+      ? b.items
+          .map((i) => {
+            const status =
+              i.state === 'pending'
+                ? '미시작'
+                : i.state === 'current'
+                  ? '개별 작업 확인'
+                  : labels[i.state];
+            return `<li>${esc(i.title)} · ${esc(status)} ${esc(i.note || '')}</li>`;
+          })
+          .join('')
+      : '';
+  const rows = active ? b.items : plan.ids.map((id) => ({ eventId: id }));
+  $('entry-batch-summary').textContent = active
+    ? '진행 순서와 결과 보기'
+    : '이번에 진행할 후보 보기';
+  $('entry-batch-items').innerHTML = rows
+    .map((i) => {
+      const e = state.events.find((e) => e.id === i.eventId);
+      return `<li>${esc(i.title || e?.title)} · ${esc(i.state ? labels[i.state] : (e?.requirements || []).join(' / '))} ${i.note ? esc(i.note) : ''} ${e ? safeLink(e.sourceUrl, '원문') : ''}</li>`;
+    })
+    .join('');
+}
+$('entry-batch-start').onclick = guard(async () => {
+  const provider = requireChoice();
+  $('entry-batch-start').disabled = true;
+  await api('/api/entry-batch', { provider, key: state.entryBatchPlan.key });
+});
+$('entry-batch-stop').onclick = guard(async () => {
+  await api('/api/entry-batch/stop', { id: state.entryBatch.id });
+});
 function renderEvents() {
   if (!state) return;
+  renderEntryBatch();
   const filter = $('event-filter').value,
     query = $('event-search').value.trim().toLocaleLowerCase();
   const rows = state.events
@@ -394,6 +456,13 @@ document.addEventListener('click', (event) => {
   if (view) {
     $('entry-manager').close();
     const card = $(`job-${view.dataset.entryJob}`);
+    if (card?.hidden) {
+      const index = [...$('active-jobs').querySelectorAll('[data-activity-job]')].indexOf(card);
+      if (index >= 0) {
+        activeJobLimit = Math.max(activeJobLimit, index + 1);
+        updateActiveJobVisibility();
+      }
+    }
     const details = card?.closest('details');
     if (details) details.open = true;
     card?.scrollIntoView({ block: 'start' });
@@ -796,6 +865,8 @@ function render() {
     : '<p class="hint">확인함에서 재사용을 선택한 답변이 여기에 표시됩니다.</p>';
   const contentKey = JSON.stringify({
     events: state.events,
+    entryBatch: state.entryBatch,
+    entryBatchKey: state.entryBatchPlan?.key,
     jobs: state.jobs,
     busy: state.busy,
     autonomyRevision: state.autonomy.revision,

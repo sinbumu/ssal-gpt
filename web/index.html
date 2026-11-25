@@ -104,6 +104,23 @@
           <h2>수집한 기회 <span id="event-count">0</span></h2>
           <span class="hint">우선순위는 당첨 확률이 아닙니다</span>
         </div>
+        <section class="panel" id="entry-batch-panel" hidden>
+          <div class="section-head">
+            <h3>순차 응모</h3>
+            <button type="button" class="primary" id="entry-batch-start">순차 응모 시작</button>
+            <button type="button" id="entry-batch-stop" hidden>남은 대기열 종료</button>
+          </div>
+          <p id="entry-batch-status" aria-live="polite"></p>
+          <div id="entry-batch-current"></div>
+          <details>
+            <summary id="entry-batch-summary">대상 보기</summary>
+            <ol id="entry-batch-items"></ol>
+          </details>
+          <details id="entry-batch-previous" hidden>
+            <summary>지난 순차 응모 결과</summary>
+            <ol id="entry-batch-results"></ol>
+          </details>
+        </section>
         <div class="list-tools">
           <label
             >기회 검색<input id="event-search" type="search" placeholder="이벤트 · 주최자 · 경품"

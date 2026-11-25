@@ -50,6 +50,11 @@ export class ServiceError extends Error {
   }
 }
 const userMessages: Record<string, string> = {
+  entry_batch_active: '이미 순차 응모 대기열이 실행 중입니다.',
+  entry_batch_empty: '현재 순차 응모할 후보가 없습니다.',
+  entry_batch_changed: '대기열 상태가 변경됐습니다. 현재 상태를 확인해 주세요.',
+  entry_batch_plan_changed:
+    '대상 또는 위임 설정이 바뀌었습니다. 새로 표시된 목록을 확인한 뒤 시작해 주세요.',
   result_batch_exists:
     '진행 중인 일괄 확인이 있습니다. 이어서 확인하거나 종료한 뒤 새로 시작하세요.',
   result_batch_empty: '지금 확인할 수 있는 공개 발표 대상이 없습니다. 제외 이유를 확인하세요.',

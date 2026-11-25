@@ -194,6 +194,7 @@ test('connection needs are grouped, observed, profile scoped and expire; checkin
       f.e.entryUrl,
     );
     assert.equal(evaluateCandidate(f.store, e).state, 'review');
+    assert.equal(evaluateCandidate(f.store, e, Date.now(), 'chrome').state, 'eligible');
     saveConnection(
       f.store,
       'chromium',

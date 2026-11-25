@@ -1,3 +1,10 @@
+import {
+  entryBatch,
+  entryBatchCandidate,
+  entryBatchPlan,
+  startEntryBatch,
+  stopEntryBatch,
+} from './entry-batch.js';
 import { knowledgeBlocker, knowledgeSummary } from './question-answering.js';
 import { statisticsUpgradeRetry, STATISTICS_RESEARCH_VERSION } from './statistics-navigation.js';
 import { approveProofAttachment, ProofAttachmentSchema } from './proof-attachments.js';
@@ -293,6 +300,27 @@ export async function createApp(options: {
       }
     }
     if (method === 'GET' && url.pathname === '/api/state') {
+      const batchCandidates: ReturnType<typeof entryBatchCandidate>[] = [];
+      const events = store.events().map((event) => {
+        const assessment = evaluateCandidate(store, event, Date.now(), browser.profileKey());
+        const ranked = scoreCandidate({ ...event, blockers: assessment.remainingBlockers });
+        const reasons = preparationReasons(store, event, undefined, assessment);
+        if (!reasons.length) batchCandidates.push(entryBatchCandidate(event, assessment.score));
+        return {
+          ...event,
+          score: ranked.score,
+          scoreReasons: ranked.reasons,
+          deadlineState: deadlineState(event),
+          canCheckDeadline: canCheckDeadline(event),
+          assessment,
+          preparationReasons: reasons,
+          submissionState: store.submission(event.id)?.state,
+          lifecycle: entryLifecycle(store, event),
+          sourceEvidence: undefined,
+        };
+      });
+      const plan = entryBatchPlan(store, browser.profileKey(), batchCandidates);
+
       return send(response, 200, {
         csrf,
         auth: auth.publicInfo(),
@@ -363,22 +391,9 @@ export async function createApp(options: {
             at: a.at,
           })),
         },
-        events: store.events().map((event) => {
-          const assessment = evaluateCandidate(store, event);
-          const ranked = scoreCandidate({ ...event, blockers: assessment.remainingBlockers });
-          return {
-            ...event,
-            score: ranked.score,
-            scoreReasons: ranked.reasons,
-            deadlineState: deadlineState(event),
-            canCheckDeadline: canCheckDeadline(event),
-            assessment,
-            preparationReasons: preparationReasons(store, event, undefined, assessment),
-            submissionState: store.submission(event.id)?.state,
-            lifecycle: entryLifecycle(store, event),
-            sourceEvidence: undefined,
-          };
-        }),
+        events,
+        entryBatch: entryBatch(store),
+        entryBatchPlan: { key: plan.key, ids: plan.items.map((i) => i.eventId) },
         completedEntries: store.completedEntries(),
         outcomes: publicOutcomes(store),
         resultCheckPlan: resultCheckPlan(store),
@@ -857,6 +872,19 @@ export async function createApp(options: {
       const { note, ...patch } = review;
       return send(response, 200, { event: store.reviewEvent(id, patch, note) });
     }
+    if (method === 'POST' && url.pathname === '/api/entry-batch') {
+      const input = z
+        .object({ provider: ProviderSchema, key: z.string().regex(/^[a-f0-9]{64}$/) })
+        .strict()
+        .parse(data);
+      await auth.bearer(input.provider);
+      const batch = startEntryBatch(store, browser.profileKey(), input.provider, input.key);
+      return send(response, 201, { id: batch.id });
+    }
+    if (method === 'POST' && url.pathname === '/api/entry-batch/stop') {
+      stopEntryBatch(store, z.string().uuid().parse(data.id));
+      return send(response, 200, { ok: true });
+    }
     if (method === 'POST' && url.pathname === '/api/jobs') {
       if (runner.isBusy() || manualNavigation) throw new ServiceError('browser_busy', 409);
       const input = JobSchema.parse(data);
@@ -875,7 +903,10 @@ export async function createApp(options: {
         throw new ServiceError('entry_management_blocks_automation');
       if (event?.management?.manualAt && !event.management.manualNotEnteredAt)
         throw new ServiceError('manual_participation_check_required');
-      if (event && evaluateCandidate(store, event).state !== 'eligible')
+      if (
+        event &&
+        evaluateCandidate(store, event, Date.now(), browser.profileKey()).state !== 'eligible'
+      )
         throw new ServiceError('event_qualification_review_required');
       const id = randomUUID();
       const now = new Date().toISOString();

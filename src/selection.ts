@@ -141,7 +141,12 @@ function domesticRegion(value: string, acceptedValues: string[], quote: string) 
     )
   );
 }
-export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()) {
+export function evaluateCandidate(
+  store: Store,
+  e: EventRecord,
+  now = Date.now(),
+  browserProfile?: string,
+) {
   const p = selection(store),
     reasons: string[] = [],
     blockingReasons: string[] = [];
@@ -209,6 +214,7 @@ export function evaluateCandidate(store: Store, e: EventRecord, now = Date.now()
       );
   }
   const profile =
+    browserProfile ||
     e.connectionProfile ||
     store.job(e.jobId)?.browserEngine ||
     store.settings<{ engine?: string }>('browser', {}).engine ||

@@ -40,6 +40,7 @@ export type Approval = {
 };
 export type Job = {
   resultBatchId?: string;
+  entryBatchId?: string;
   dmScope?: import('./instagram-dm.js').DmScope;
   dmReadDiagnostics?: {
     fallback?: 'inbox_search';

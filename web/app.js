@@ -1649,7 +1649,7 @@ function renderReceivedRewards(won) {
       .map((o) => {
         const e = state.completedEntries.find((e) => e.eventId === o.eventId),
           r = o.reward;
-        return `<article class="event-card"><span class="pill">${r.status === 'used' ? '사용·처분 완료' : '수령 완료 · 종결'}</span><h4>${esc(r.name || e?.prize || '경품')}</h4><p>${esc(e?.title || '응모')}</p><p>${knownRewardValue(r) ? `${Number(r.faceValue).toLocaleString()}원` : '가치 미정'}${r.receivedAt ? ` · 수령 기록 ${esc(new Date(r.receivedAt).toLocaleDateString())}` : ''}</p><div class="card-actions">${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록</button></div></article>`;
+        return `<article class="event-card"><span class="pill">${r.status === 'used' ? '사용·처분 완료' : '수령 완료 · 종결'}</span><h4>${esc(r.name || e?.prize || '경품')}</h4><p>${esc(e?.title || '응모')}</p><p>${knownRewardValue(r) ? `${Number(r.faceValue).toLocaleString()}원` : '가치 미정'}${r.receivedAt ? ` · 수령 기록 ${esc(new Date(r.receivedAt).toLocaleDateString())}` : ''}</p><div class="card-actions">${f.state === 'needs_reply' && (o.dmChecks || []).some((d) => d.state === 'won' && '@' + d.organizer === f.recipient) ? `<button data-dm-reply="${esc(o.eventId)}">수신 안내·회신 검토</button>` : ''}${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록</button></div></article>`;
       })
       .join('') ||
     '<p class="hint">아직 수령 완료로 기록한 경품이 없습니다. 경품을 받으면 ‘경품 받음 · 종결’로 정리하세요.</p>';
@@ -1711,7 +1711,7 @@ function renderOutcomeSummary() {
       .map((o) => {
         const f = o.followUp || { state: 'awaiting_delivery' },
           e = state.completedEntries.find((e) => e.eventId === o.eventId);
-        return `<article class="event-card"><span class="pill warning">${esc(followStates[f.state])}</span><h3>${esc(e?.title || '당첨')}</h3><p>${esc(o.reward?.name || e?.prize || '경품 확인 필요')}</p><p>연락 대상 · ${esc(f.recipient || '확인 필요')}</p>${f.state === 'needs_reply' && f.deadlineText ? `<p>회신 기한 · ${esc(f.deadlineText)}</p>` : ''}${f.state === 'needs_reply' && f.deadlineUncertain ? '<p class="consent-notice">기한 안내가 불명확하거나 서로 다릅니다. 원문을 확인하세요.</p>' : ''}${f.deliveryNote ? `<p>${esc(f.deliveryNote)}</p>` : ''}<div class="card-actions">${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록·회신 초안</button><button data-followup-open="${esc(o.eventId)}">전용 브라우저에서 안내 열기</button></div></article>`;
+        return `<article class="event-card"><span class="pill warning">${esc(followStates[f.state])}</span><h3>${esc(e?.title || '당첨')}</h3><p>${esc(o.reward?.name || e?.prize || '경품 확인 필요')}</p><p>연락 대상 · ${esc(f.recipient || '확인 필요')}</p>${f.state === 'needs_reply' && f.deadlineText ? `<p>회신 기한 · ${esc(f.deadlineText)}</p>` : ''}${f.state === 'needs_reply' && f.deadlineUncertain ? '<p class="consent-notice">기한 안내가 불명확하거나 서로 다릅니다. 원문을 확인하세요.</p>' : ''}${f.deliveryNote ? `<p>${esc(f.deliveryNote)}</p>` : ''}<div class="card-actions">${f.state === 'needs_reply' && (o.dmChecks || []).some((d) => d.state === 'won' && '@' + d.organizer === f.recipient) ? `<button data-dm-reply="${esc(o.eventId)}">수신 안내·회신 검토</button>` : ''}${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록·회신 초안</button><button data-followup-open="${esc(o.eventId)}">전용 브라우저에서 안내 열기</button></div></article>`;
       })
       .join('') +
     (followups.length > rewardFollowupLimit
@@ -1731,6 +1731,14 @@ function renderDmChecks() {
         !['won', 'lost'].includes(state.outcomes.find((o) => o.eventId === x.eventId)?.status),
     )
     .slice(0, 20);
+  const monitor = state.dmMonitor || {};
+  $('dm-monitor-toggle').textContent = monitor.enabled ? '정기 점검 끄기' : '정기 점검 켜기';
+  $('dm-monitor-status').textContent =
+    (monitor.enabled
+      ? (monitor.note || '점검 대기') +
+        (monitor.nextAt ? ' · 다음 점검 ' + new Date(monitor.nextAt).toLocaleString() : '')
+      : '정기 점검 꺼짐') +
+    ' · 앱 실행 중 6시간마다 발표일이 지난 14일 이내의 완료 응모를 확인합니다. 발표일을 모르면 최근 완료한 DM 안내·발표 확인 건을 확인합니다.';
   $('dm-announced-start').disabled = active || !announced.length;
   $('dm-check-summary').textContent =
     `연결 가능한 완료 응모 ${plan.filter((x) => x.eligible).length}건 · 발표된 미확정 응모 ${announced.length}건. 묶음 실행 상태와 시간·토큰은 위 실행 결과에 표시합니다.`;
@@ -1764,6 +1772,66 @@ function renderDmChecks() {
     )
     .join('');
 }
+$('dm-monitor-toggle').onclick = guard(() =>
+  api('/api/outcomes/dm-monitor', {
+    enabled: !state.dmMonitor?.enabled,
+    provider: state.dmMonitor?.enabled ? state.dmMonitor.provider : requireChoice(),
+  }),
+);
+let dmCard = null;
+let dmCardRevision = 0;
+async function loadDmCard() {
+  const rev = ++dmCardRevision;
+  const id = dmCard.eventId;
+  const consent = $('dm-reply-consent').value;
+  $('dm-reply-send').disabled = true;
+  $('dm-reply-body').value = '';
+  $('dm-reply-message').textContent = '회신안 확인 중…';
+  const p = await api('/api/outcomes/dm-preview', { eventId: id, consent });
+  if (!dmCard || rev !== dmCardRevision) return;
+  dmCard = { eventId: id, consent, approval: p.approval, text: p.text };
+  $('dm-reply-target').textContent = '@' + p.actor + ' → ' + p.recipient;
+  $('dm-reply-source').textContent = p.source;
+  $('dm-reply-body').value = p.text;
+  $('dm-reply-message').textContent = p.reason || '받는 계정과 보낼 내용을 확인한 뒤 승인하세요.';
+  $('dm-reply-send').disabled = !p.approval;
+}
+document.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-dm-reply]');
+  if (!button) return;
+  const eventId = button.dataset.dmReply;
+  const o = state.outcomes.find((o) => o.eventId === eventId);
+  dmCard = { eventId };
+  $('dm-reply-title').textContent =
+    state.completedEntries.find((e) => e.eventId === eventId)?.title || '당첨 DM 회신';
+  $('dm-reply-source').textContent = '';
+  $('dm-reply-target').textContent = '';
+  $('dm-reply-consent').value = 'unset';
+  $('dm-consent-label').hidden = !o.followUp.requested.includes('consent');
+  $('dm-reply-dialog').showModal();
+  void guard(loadDmCard)(e);
+});
+$('dm-reply-consent').onchange = guard(loadDmCard);
+$('dm-reply-dialog').onclose = () => {
+  dmCard = null;
+  dmCardRevision++;
+  $('dm-reply-body').value = '';
+  $('dm-reply-source').textContent = '';
+};
+$('dm-reply-send').onclick = guard(async () => {
+  if (!dmCard?.approval) return;
+  const request = dmCard;
+  $('dm-reply-send').disabled = true;
+  $('dm-reply-message').textContent = '수신 대화 재확인 및 회신 처리 중…';
+  try {
+    await api('/api/outcomes/dm-send', request);
+    $('dm-reply-dialog').close();
+    toast('주최자 대화에서 발신 메시지를 확인했습니다.');
+  } catch (err) {
+    $('dm-reply-message').textContent = err.message;
+    throw err;
+  }
+});
 $('dm-plan-more').onclick = () => {
   dmPlanLimit += 20;
   renderDmChecks();
@@ -2704,7 +2772,7 @@ function renderTelegramAndInbox() {
     shown
       .map(
         (n) =>
-          `<article class="event-card"><span class="pill ${n.readAt ? '' : 'warning'}">${n.readAt ? '읽음' : '안 읽음'}</span><h4>${esc(n.label)}</h4><p>${esc(n.title)}</p><p class="hint">${esc(new Date(n.createdAt).toLocaleString())} · ${n.active ? '현재 확인할 내용' : '지난 알림'}<br>텔레그램: ${esc(deliveryLabels[t.deliveryByNotice?.[n.id]] || (n.active && t.enabled ? '전송 대기' : '미전송'))}</p><div class="card-actions"><button data-outcome="${esc(n.eventId)}">결과·후속 처리 열기</button>${n.readAt ? '' : `<button data-notice-read="${esc(n.id)}">읽음으로 표시</button>`}</div></article>`,
+          `<article class="event-card"><span class="pill ${n.readAt ? '' : 'warning'}">${n.readAt ? '읽음' : '안 읽음'}</span><h4>${esc(n.label)}</h4><p>${esc(n.title)}</p><p class="hint">${esc(new Date(n.createdAt).toLocaleString())} · ${n.active ? '현재 확인할 내용' : '지난 알림'}<br>텔레그램: ${esc(deliveryLabels[t.deliveryByNotice?.[n.id]] || (n.active && t.enabled ? '전송 대기' : '미전송'))}</p><div class="card-actions">${n.active && n.kind === 'dm_review' ? '<a href="#dm-reviews">당첨 안내와 행사 연결 확인</a>' : ''}${n.active && n.kind === 'reply' && state.outcomes.find((o) => o.eventId === n.eventId)?.dmChecks?.some((d) => d.state === 'won') ? `<button data-dm-reply="${esc(n.eventId)}">수신 안내·회신 검토</button>` : ''}<button data-outcome="${esc(n.eventId)}">결과·후속 처리 열기</button>${n.readAt ? '' : `<button data-notice-read="${esc(n.id)}">읽음으로 표시</button>`}</div></article>`,
       )
       .join('') ||
     '<p class="hint">표시할 알림이 없습니다. 당첨·회신·수령 알림이 생기면 여기에 보관합니다.</p>';

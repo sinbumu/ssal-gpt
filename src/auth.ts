@@ -193,6 +193,13 @@ export function safeMessage(error: unknown): string {
       '새 응모를 안전하게 시작할 수 없는 상태입니다. 기존 작업과 제출 결과를 확인하거나 수동 진행을 선택하세요.',
     entry_management_blocks_automation:
       '드랍·수동 진행으로 정리한 후보입니다. 먼저 진행할 기회로 복원하세요.',
+    dm_reply_changed: '회신안·수신 대상 또는 처리 상태가 변경됐습니다. 카드를 다시 열어 주세요.',
+    dm_reply_preflight: '발송 전에 계정·대화·원문을 다시 확인하지 못했습니다. 전송하지 않았습니다.',
+    dm_reply_thread_changed:
+      '회신 초안 작성 후 대화 내용이 바뀌었거나 기존 답장이 있습니다. 대화를 확인해 주세요.',
+    dm_reply_unknown:
+      '발송을 시도했지만 발신 메시지를 확인하지 못했습니다. 중복 회신을 잠갔습니다. 주최자 대화를 확인해 주세요.',
+    dm_reply_unavailable: '회신 가능한 상태인지와 완료 응모의 주최자 연결을 확인해 주세요.',
     entry_owned_by_another_job: '이전 실행 기록입니다. 현재 응모에 연결된 작업을 확인하세요.',
     retry_source_unavailable:
       '지정한 이벤트 원문을 확인할 수 없어 재도전을 멈췄습니다. 다른 이벤트로 바꾸지 않았습니다.',

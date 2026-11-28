@@ -10,7 +10,7 @@ import { outcomes, queueResultCheck } from './outcomes.js';
 import { settings } from './autonomy.js';
 import { selection } from './selection.js';
 import { tickEntryBatch } from './entry-batch.js';
-import { tickResultBatch } from './result-batch.js';
+import { tickDmMonitor, tickResultBatch } from './result-batch.js';
 
 export const ProviderSchema = z.object({
   kind: z.enum(['chatgpt', 'api']),
@@ -262,6 +262,7 @@ export class Scheduler {
     this.ticking = true;
     try {
       if (tickEntryBatch(this.store, this.runner, now)) return;
+      tickDmMonitor(this.store, this.runner, now);
       if (tickResultBatch(this.store, this.runner, now)) return;
       const config = operations(this.store);
       if (!config.queueEnabled) return;

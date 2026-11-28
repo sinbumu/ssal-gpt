@@ -8,6 +8,7 @@ import { chromium } from 'playwright';
 import { createApp } from '../../src/server.js';
 import type { Job } from '../../src/store.js';
 import { startDmBatch, resultBatch } from '../../src/result-batch.js';
+import { dmReplyPreview, sendApprovedDm, replyAttempt } from '../../src/dm-reply.js';
 import { outcomes } from '../../src/outcomes.js';
 import { collectNotices } from '../../src/reward-notifications.js';
 
@@ -103,7 +104,13 @@ test('DM browser flow scopes recipient/incoming screenshot, links grounded win, 
           : `<div role="row"><a href="/${sender}/"><img src="${pixel}" alt="${sender}님의 프로필 사진"></a><p>${text}</p></div><div role="row"><a href="/fixture_user/">fixture_user</a><p>PRIVATE OUTGOING STREET</p></div>`;
       await route.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: `<style>body{font:16px sans-serif}nav{position:absolute;left:10px}main{margin-left:200px}.pane{position:fixed;left:600px;top:100px;width:450px;height:650px;background:#fff;border:1px solid #000}[role=row]{margin:10px}</style><nav><a href="/fixture_user/"><img src="${pixel}" alt="fixture_user 프로필 사진"></a></nav><main><h1>${host}</h1><button id="open">메시지 보내기</button></main><aside style="position:absolute;left:200px;top:500px">UNRELATED PRIVATE CHAT</aside><section class="pane" ${pathname.startsWith('/direct/t/') ? '' : 'hidden'}><header><div style="display:inline-block"><div><div><div><div><div><div><a href="/${sender}/" ${['empty_host', 'headerless_host'].includes(host) ? 'aria-label' : 'title'}="${sender}님의 프로필 페이지 열기">${sender}</a></div></div></div></div></div></div></div>${['empty_host', 'headerless_host'].includes(host) ? '' : '<button aria-label="대화 정보"></button>'}</header><div class="thread-body"><div role="row"><h2>${sender}</h2><p><span>${sender}</span><span> · Instagram</span></p><a href="/${sender}/">프로필 보기</a></div>${host === 'fixture_host' ? `<div><a href="/${sender}/" aria-label="Open the profile page of ${sender}"><img src="${pixel}"></a><div>${text}</div><div><button aria-label="${sender}님의 메시지에 답장하기"></button></div></div>` : incoming}<div><div contenteditable="true" role="textbox" aria-placeholder="메시지 입력..."></div><span aria-hidden="true">메시지 입력...</span></div></div><button onclick="fetch('/send/',{method:'POST'})">전송</button></section><script>document.querySelector('#open').onclick=()=>{${host === 'fallback_host' ? `fetch('/api/v1/direct_v2/create_group_thread/',{method:'POST'}).catch(()=>{})` : `document.querySelector('.pane').hidden=false`}}</script>`,
+        body: `<style>body{font:16px sans-serif}nav{position:absolute;left:10px}main{margin-left:200px}.pane{position:fixed;left:600px;top:100px;width:450px;height:650px;background:#fff;border:1px solid #000}[role=row]{margin:10px}</style><nav><a href="/fixture_user/"><img src="${pixel}" alt="fixture_user 프로필 사진"></a></nav><main><h1>${host}</h1><button id="open">메시지 보내기</button></main><aside style="position:absolute;left:200px;top:500px">UNRELATED PRIVATE CHAT</aside><section class="pane" ${pathname.startsWith('/direct/t/') ? '' : 'hidden'}><header><div style="display:inline-block"><div><div><div><div><div><div><a href="/${sender}/" ${['empty_host', 'headerless_host'].includes(host) ? 'aria-label' : 'title'}="${sender}님의 프로필 페이지 열기">${sender}</a></div></div></div></div></div></div></div>${['empty_host', 'headerless_host'].includes(host) ? '' : '<button aria-label="대화 정보"></button>'}</header><div class="thread-body"><div role="row"><h2>${sender}</h2><p><span>${sender}</span><span> · Instagram</span></p><a href="/${sender}/">프로필 보기</a></div>${host === 'fixture_host' ? `<div><a href="/${sender}/" aria-label="Open the profile page of ${sender}"><img src="${pixel}"></a><div>${text}</div><div><button aria-label="${sender}님의 메시지에 답장하기"></button></div></div>` : incoming}<div><div contenteditable="true" role="textbox" aria-placeholder="메시지 입력..."></div><span aria-hidden="true">메시지 입력...</span></div></div><button onclick="fetch('/send/',{method:'POST'})">전송</button></section><script>document.querySelector('[contenteditable]').onkeydown = ev => {
+        if(ev.key!=='Enter') return; ev.preventDefault();
+        const row=document.createElement('div'); row.setAttribute('role','row');
+        const self=document.createElement('a');self.href='/fixture_user/';self.textContent='fixture_user';row.append(self);
+        const body=document.createElement('p');body.textContent=ev.target.innerText;row.append(body);
+        ev.target.parentElement.before(row);ev.target.textContent='';
+      };document.querySelector('#open').onclick=()=>{${host === 'fallback_host' ? `fetch('/api/v1/direct_v2/create_group_thread/',{method:'POST'}).catch(()=>{})` : `document.querySelector('.pane').hidden=false`}}</script>`,
       });
     });
     app.runner.model.decide = async (_p, _i, c: any, image) => {
@@ -172,6 +179,20 @@ test('DM browser flow scopes recipient/incoming screenshot, links grounded win, 
     assert.equal(outcomes(app.store).find((o) => o.eventId === ids[1])?.reportedBy, 'user');
     assert.deepEqual(errors, []);
     assert.equal(writes, 0);
+    // Exercise the exact-text send path only after the separate one-shot approval.
+    app.store.setSettings('autonomy', {
+      profile: { shippingAddress: '테스트 배송지' },
+      policy: {},
+      revision: 'fixture',
+    });
+    const preview = dmReplyPreview(app.store, ids[0]!, 'unset');
+    assert.ok(preview.approval, preview.reason);
+    await sendApprovedDm(app.store, app.browser, ids[0]!, 'unset', preview.approval, preview.text);
+    assert.equal(replyAttempt(app.store, ids[0]!)?.status, 'sent');
+    assert.equal(outcomes(app.store).find((o) => o.eventId === ids[0])?.followUp?.state, 'replied');
+    await assert.rejects(
+      sendApprovedDm(app.store, app.browser, ids[0]!, 'unset', preview.approval, preview.text),
+    );
   } finally {
     await ui.close();
     await app.close();

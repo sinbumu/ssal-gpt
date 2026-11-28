@@ -234,3 +234,92 @@ test('manual DM batch uses completed targets and is paused on restart', () => {
     f.close();
   }
 });
+
+import { configureDmMonitor, dmMonitor, tickDmMonitor } from '../src/result-batch.js';
+import { dmReplyPreview, sendApprovedDm, replyAttempt } from '../src/dm-reply.js';
+import { currentNotices } from '../src/reward-notifications.js';
+import type { Runner } from '../src/runner.js';
+import type { Browser } from '../src/browser.js';
+
+test('scheduled organizer checks use the announcement date without a public announcement; do not restart disabled or active batches', () => {
+  const f = fixture();
+  try {
+    const now = Date.now();
+    const entry = f.store.completedEntries()[0]!;
+    f.store.completedEntries = () => [
+      {
+        ...entry,
+        completedAt: new Date(now).toISOString(),
+        announcementDate: new Date(now - 86400000).toISOString().slice(0, 10),
+      },
+    ];
+    const runner = { isBusy: () => false, browser: { profileKey: () => 'chromium' } } as Runner;
+    tickDmMonitor(f.store, runner, now);
+    assert.equal(resultBatch(f.store), null);
+    configureDmMonitor(f.store, true, { kind: 'api', model: 'fixture' }, 'chromium');
+    tickDmMonitor(f.store, runner, now + 100);
+    const batch = resultBatch(f.store)!;
+    assert.deepEqual(
+      batch.items.map((i) => i.eventId),
+      [entry.eventId],
+    );
+    assert.ok(dmMonitor(f.store).nextAt! > now);
+    tickDmMonitor(f.store, runner, now + 86400000);
+    assert.equal(resultBatch(f.store)?.id, batch.id);
+  } finally {
+    f.close();
+  }
+});
+test('reply binds source, recipient, approved text and consent, keeps a durable lock on uncertain dispatch', async () => {
+  const f = fixture();
+  try {
+    const key = 'e'.repeat(64);
+    const source =
+      '합성 달력 이벤트 당첨을 축하합니다. 성함과 개인정보 동의 여부를 회신 부탁드립니다.';
+    const finding = {
+      ...base,
+      state: 'review' as const,
+      quote: '당첨을 축하합니다.',
+      requested: ['name', 'consent'] as ('name' | 'consent')[],
+      key,
+    };
+    storeDmFinding(f.store, f.e.id, finding);
+    assert.ok(currentNotices(f.store).some((n) => n.kind === 'dm_review'));
+    reviewDmFinding(f.store, f.e.id, key, true);
+    f.store.setSettings('dmSource:' + f.e.id + ':' + key, source);
+    f.store.setSettings('autonomy', { profile: { name: '테스트' }, policy: {}, revision: 'test' });
+    assert.equal(dmReplyPreview(f.store, f.e.id, 'unset').approval, null);
+    const preview = dmReplyPreview(f.store, f.e.id, 'accept');
+    assert.ok(preview.approval);
+    const b = {
+      profileKey: () => 'chromium',
+      replyToOrganizer: async (
+        _a: string,
+        _o: string,
+        _s: string,
+        _t: string,
+        intent: () => void,
+      ) => {
+        intent();
+        return false;
+      },
+    } as Browser;
+    await assert.rejects(
+      sendApprovedDm(f.store, b, f.e.id, 'accept', preview.approval, 'tampered'),
+      /dm_reply_changed/,
+    );
+    assert.equal(replyAttempt(f.store, f.e.id), null);
+    await assert.rejects(
+      sendApprovedDm(f.store, b, f.e.id, 'accept', preview.approval, preview.text),
+      /dm_reply_unknown/,
+    );
+    assert.equal(replyAttempt(f.store, f.e.id)?.status, 'unconfirmed');
+    assert.equal(dmReplyPreview(f.store, f.e.id, 'decline').approval, null);
+    await assert.rejects(
+      sendApprovedDm(f.store, b, f.e.id, 'accept', preview.approval, preview.text),
+      /dm_reply_changed/,
+    );
+  } finally {
+    f.close();
+  }
+});

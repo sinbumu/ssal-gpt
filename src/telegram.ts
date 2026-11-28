@@ -149,6 +149,7 @@ export class TelegramNotifications {
   private work?: Promise<unknown>;
   private timer?: ReturnType<typeof setInterval>;
   private closed = false;
+  dashboardPort?: number;
   constructor(
     private store: Store,
     private request: TelegramRequest = telegramRequest,
@@ -401,7 +402,8 @@ export class TelegramNotifications {
       if (retry) {
         if ((retry.retryAt || 0) > this.now()) return;
         const items = all.filter((n) => retry.noticeIds.includes(n.id) && active.has(n.key));
-        if (items.length) await this.send(retry, recipient, notificationText(items));
+        if (items.length)
+          await this.send(retry, recipient, notificationText(items, this.dashboardPort));
         else {
           retry.status = 'failed';
           retry.code = 'telegram_notice_resolved';
@@ -421,7 +423,7 @@ export class TelegramNotifications {
         attempts: 0,
       };
       deliveries.push(d);
-      await this.send(d, recipient, notificationText(pending));
+      await this.send(d, recipient, notificationText(pending, this.dashboardPort));
     });
   }
   start() {

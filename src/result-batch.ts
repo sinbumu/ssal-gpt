@@ -10,6 +10,7 @@ import { budgetReason, dayKey } from './operations.js';
 
 export type ResultBatch = {
   mode?: 'public' | 'instagram_dm';
+  scheduled?: boolean;
   id: string;
   state: 'running' | 'paused' | 'completed' | 'stopped';
   at: number;
@@ -116,6 +117,7 @@ export function startDmBatch(
   provider: Job['provider'],
   engine: Job['browserEngine'],
   eventIds: string[],
+  scheduled = false,
 ) {
   if (['running', 'paused'].includes(resultBatch(store)?.state || ''))
     throw new ServiceError('result_batch_exists');
@@ -131,6 +133,7 @@ export function startDmBatch(
   const batch: ResultBatch = {
     id: randomUUID(),
     mode: 'instagram_dm',
+    scheduled,
     state: 'running',
     at: now,
     updatedAt: now,
@@ -143,9 +146,108 @@ export function startDmBatch(
   return batch;
 }
 
+const monitorInterval = 6 * 60 * 60 * 1000;
+type DmMonitor = {
+  enabled: boolean;
+  provider?: Job['provider'];
+  engine?: Job['browserEngine'];
+  nextAt?: number;
+  lastAt?: number;
+  note?: string;
+};
+export const dmMonitor = (store: Store) =>
+  store.settings<DmMonitor>('dmMonitor', { enabled: false });
+export function configureDmMonitor(
+  store: Store,
+  enabled: boolean,
+  provider: Job['provider'],
+  engine: Job['browserEngine'],
+) {
+  if (enabled && engine === 'connected') throw new ServiceError('dm_profile_mismatch');
+  const batch = resultBatch(store);
+  if (!enabled && batch?.scheduled && ['running', 'paused'].includes(batch.state)) {
+    batch.state = 'stopped';
+    batch.note = '정기 점검을 껐습니다. 실행 중인 읽기를 마친 뒤 멈춥니다.';
+    store.setSettings('resultBatch', batch);
+  }
+  const old = dmMonitor(store);
+  store.setSettings('dmMonitor', {
+    ...old,
+    enabled,
+    provider,
+    engine,
+    nextAt: old.enabled && enabled ? old.nextAt : Date.now(),
+    note: enabled ? '다음 점검 대기' : '정기 점검 꺼짐',
+  });
+}
+
+export function tickDmMonitor(store: Store, runner: Runner, now: number) {
+  const m = dmMonitor(store);
+  if (
+    !m.enabled ||
+    !m.provider ||
+    (m.nextAt || 0) > now ||
+    runner.isBusy() ||
+    ['running', 'paused'].includes(resultBatch(store)?.state || '')
+  )
+    return;
+  const blocked =
+    m.engine !== runner.browser.profileKey()
+      ? '저장된 전용 브라우저를 연결해 주세요.'
+      : budgetReason(store, m.provider, now);
+  if (blocked) {
+    store.setSettings('dmMonitor', { ...m, nextAt: now + 600000, note: blocked });
+    return;
+  }
+  const today = dayKey(now),
+    earliest = dayKey(now - 14 * 86400000);
+  const eligible = dmCheckPlan(store)
+    .filter(
+      (x) =>
+        x.scope?.profile === m.engine &&
+        !['won', 'lost'].includes(x.status || '') &&
+        !x.checks.some((d) => d.state === 'review' && !d.reviewed) &&
+        (x.announcementDate
+          ? x.announcementDate >= earliest && x.announcementDate <= today
+          : (x.announced || x.expectsDm) && x.completedAt.slice(0, 10) >= earliest) &&
+        !x.checks.some((d) => Math.max(d.at, d.lastAttempt?.at || 0) > now - monitorInterval),
+    )
+    .sort(
+      (a, b) =>
+        Number(b.expectsDm) - Number(a.expectsDm) ||
+        (b.announcementDate || '').localeCompare(a.announcementDate || ''),
+    );
+  if (eligible.length)
+    startDmBatch(
+      store,
+      m.provider,
+      m.engine,
+      eligible.slice(0, 20).map((x) => x.eventId),
+      true,
+    );
+  store.setSettings('dmMonitor', {
+    ...m,
+    lastAt: now,
+    nextAt: now + (eligible.length > 20 ? 60000 : monitorInterval),
+    note: eligible.length
+      ? `주최자 DM 점검 ${Math.min(eligible.length, 20)}건 예약`
+      : '이번 주기에 확인할 응모가 없습니다.',
+  });
+}
+
 export function recoverResultBatch(store: Store) {
   const b = resultBatch(store);
   if (b?.state === 'running') {
+    if (b.scheduled && dmMonitor(store).enabled) {
+      for (const i of b.items) {
+        const j = i.jobId ? store.job(i.jobId) : undefined;
+        if (j?.dmScope && ['paused', 'running'].includes(j.status)) {
+          j.status = 'queued';
+          store.saveJob(j);
+        }
+      }
+      return;
+    }
     b.state = 'paused';
     b.note = '앱이 재시작돼 일괄 확인을 멈췄습니다. 이어서 확인을 누르면 남은 작업만 처리합니다.';
     store.setSettings('resultBatch', b);
@@ -247,7 +349,7 @@ export function tickResultBatch(store: Store, runner: Runner, now = Date.now()) 
           item.state = 'running';
           b.note =
             b.mode === 'instagram_dm'
-              ? '완료 응모의 주최자 대화를 읽고 있습니다. 메시지 작성·발송 기능은 없습니다.'
+              ? '완료 응모의 주최자 대화를 읽고 있습니다. 점검은 읽기 전용입니다.'
               : '공개 페이지를 읽고 있습니다. 게시·응모·개인 메시지 전송은 하지 않습니다.';
           store.setSettings('resultBatch', b);
           runner.start(item.jobId);

@@ -8,10 +8,13 @@ import {
 import { knowledgeBlocker, knowledgeSummary } from './question-answering.js';
 import { statisticsUpgradeRetry, STATISTICS_RESEARCH_VERSION } from './statistics-navigation.js';
 import { approveProofAttachment, ProofAttachmentSchema } from './proof-attachments.js';
+import { dmReplyPreview, sendApprovedDm, replyAttempt } from './dm-reply.js';
 import { dmCheckPlan, reviewDmFinding } from './instagram-dm.js';
 import { TelegramNotifications, type TelegramRequest } from './telegram.js';
 import { collectNotices, noticeInbox, readNotices } from './reward-notifications.js';
 import {
+  configureDmMonitor,
+  dmMonitor,
   resultCheckPlan,
   publicResultBatch,
   startResultBatch,
@@ -397,7 +400,11 @@ export async function createApp(options: {
         completedEntries: store.completedEntries(),
         outcomes: publicOutcomes(store),
         resultCheckPlan: resultCheckPlan(store),
-        dmCheckPlan: dmCheckPlan(store),
+        dmCheckPlan: dmCheckPlan(store).map((row) => ({
+          ...row,
+          replyAttempt: replyAttempt(store, row.eventId),
+        })),
+        dmMonitor: dmMonitor(store),
         resultBatch: publicResultBatch(store),
         outcomeAlerts: outcomeAlerts(store, dayKey()),
         rewardNotices: noticeInbox(store),
@@ -543,6 +550,57 @@ export async function createApp(options: {
       saveRewardProgress(store, input);
       collectNotices(store);
       return send(response, 200, { ok: true });
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/dm-monitor') {
+      const input = z
+        .object({ enabled: z.boolean(), provider: ProviderSchema })
+        .strict()
+        .parse(data);
+      configureDmMonitor(store, input.enabled, input.provider, browser.engine);
+      void scheduler.tick().catch(() => {});
+      return send(response, 200, dmMonitor(store));
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/dm-preview') {
+      const input = z
+        .object({
+          eventId: z.string().uuid(),
+          consent: z.enum(['unset', 'accept', 'decline']).default('unset'),
+        })
+        .strict()
+        .parse(data);
+      return send(response, 200, dmReplyPreview(store, input.eventId, input.consent));
+    }
+    if (method === 'POST' && url.pathname === '/api/outcomes/dm-send') {
+      const input = z
+        .object({
+          eventId: z.string().uuid(),
+          consent: z.enum(['unset', 'accept', 'decline']),
+          approval: z.string().regex(/^[a-f0-9]{64}$/),
+          text: z.string().min(1).max(4000),
+        })
+        .strict()
+        .parse(data);
+      if (
+        manualNavigation ||
+        (runner.isBusy() && !(runner.activeId && store.job(runner.activeId)?.dmScope))
+      )
+        throw new ServiceError('browser_busy', 409);
+      manualNavigation = true;
+      try {
+        if (runner.isBusy()) await runner.finished();
+        await sendApprovedDm(
+          store,
+          browser,
+          input.eventId,
+          input.consent,
+          input.approval,
+          input.text,
+        );
+        collectNotices(store);
+        return send(response, 200, { verified: true });
+      } finally {
+        manualNavigation = false;
+      }
     }
     if (method === 'POST' && url.pathname === '/api/outcomes/dm-batch') {
       const input = z
@@ -1522,6 +1580,7 @@ export async function createApp(options: {
   scheduler = new Scheduler(store, runner, () => manualNavigation);
   recoverResultBatch(store);
   scheduler.start();
+  telegram.dashboardPort = address.port;
   telegram.start();
   storage.start(() => runner.isBusy() || manualNavigation);
   return {

@@ -4,6 +4,7 @@ import { outcomes } from './outcomes.js';
 import { dayKey } from './operations.js';
 
 export const noticeLabels = {
+  dm_review: '당첨 DM · 행사 연결 확인 필요',
   won: '당첨 확인',
   reply: '당첨 확인 · 회신 필요',
   delivery: '경품 수령 대기',
@@ -36,6 +37,9 @@ export function currentNotices(store: Store, now = Date.now()) {
       if (o.reward?.status === 'received' && o.reward.expiresOn && o.reward.expiresOn <= today)
         kinds.push(['expiration', o.reward.expiresOn]);
     } else if (o.status !== 'lost' && o.check?.state === 'announced') kinds.push(['announced', '']);
+    if (!['won', 'lost'].includes(o.status))
+      for (const f of o.dmChecks || [])
+        if (f.state === 'review' && !f.reviewed && f.key) kinds.push(['dm_review', f.key]);
     return kinds.map(([kind, suffix]) => ({
       eventId: o.eventId,
       kind,
@@ -73,12 +77,14 @@ export function readNotices(store: Store, ids: string[], now = Date.now()) {
   );
 }
 // No titles, DM text, recipient identifiers, profile fields, coupon codes or private links leave the device.
-export function notificationText(items: Pick<RewardNotice, 'kind'>[]) {
+export function notificationText(items: Pick<RewardNotice, 'kind'>[], localPort?: number) {
   const counts = new Map<RewardNotice['kind'], number>();
   for (const n of items) counts.set(n.kind, (counts.get(n.kind) || 0) + 1);
   return [
     '쌀-GPT · 당첨·수령 알림',
     ...[...counts].map(([kind, n]) => `${noticeLabels[kind]} ${n}건`),
-    '연결된 컴퓨터의 대시보드 → 08 결과·경품에서 확인하세요.',
+    localPort
+      ? `연결된 컴퓨터에서 열기 · http://127.0.0.1:${localPort}/#rewards`
+      : '연결된 컴퓨터의 대시보드 → 08 결과·경품에서 확인하세요.',
   ].join('\n');
 }

@@ -1141,13 +1141,38 @@
             <h3 id="dm-check-title">완료 응모 주최자 · 인스타 DM 확인</h3>
             <p>
               응모 당시 검증한 계정·주최자·전용 브라우저만 사용합니다. 일반 대화 목록은 AI에 보내지
-              않습니다. 읽으면서 사이트의 읽음 상태가 바뀔 수 있습니다. 답장·신청·링크 방문은 하지
-              않습니다.
+              않습니다. 읽으면서 사이트의 읽음 상태가 바뀔 수 있습니다. 회신은 받는 계정과 전문을
+              대시보드에서 승인한 후 전송합니다.
             </p>
             <p>
               DM이 없거나 읽을 수 없어도 낙첨으로 바꾸지 않습니다. 최근 화면의 수신 텍스트를
               확인하며 오래된 대화·이미지 전용 안내·요청함은 누락될 수 있습니다.
             </p>
+            <button id="dm-monitor-toggle" type="button">정기 점검 켜기</button>
+            <p id="dm-monitor-status" role="status"></p>
+            <dialog id="dm-reply-dialog">
+              <form method="dialog">
+                <h3 id="dm-reply-title">당첨 DM 회신</h3>
+                <p id="dm-reply-target"></p>
+                <details open>
+                  <summary>주최자의 수신 안내</summary>
+                  <blockquote id="dm-reply-source"></blockquote>
+                </details>
+                <label id="dm-consent-label" hidden
+                  >원문에 대한 개인정보 동의<select id="dm-reply-consent">
+                    <option value="unset">선택해 주세요</option>
+                    <option value="accept">동의</option>
+                    <option value="decline">미동의</option>
+                  </select></label
+                >
+                <label>보낼 내용<textarea readonly id="dm-reply-body" rows="7"></textarea></label>
+                <p id="dm-reply-message" role="status"></p>
+                <button type="button" id="dm-reply-send" disabled>
+                  위 내용으로 DM 1회 발송 승인
+                </button>
+                <button>닫기</button>
+              </form>
+            </dialog>
             <button id="dm-announced-start" type="button">발표된 응모의 주최자 DM 확인</button>
             <p id="dm-check-summary" role="status"></p>
             <div id="dm-reviews"></div>
@@ -1166,8 +1191,8 @@
           <details id="telegram-settings">
             <summary>텔레그램 개인 알림 연결</summary>
             <p>
-              앱이 켜져 있으면 대시보드 탭을 닫아도 알립니다. 새 인스타 DM 자동 탐색 기능은 아직
-              별도 개발 항목입니다.
+              앱이 켜져 있으면 대시보드 탭을 닫아도 알립니다. 주최자 DM 정기 점검에서 발견한 당첨과
+              확인할 안내도 포함됩니다.
             </p>
             <ol>
               <li>

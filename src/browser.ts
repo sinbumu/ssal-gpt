@@ -376,6 +376,9 @@ export class Browser {
     }
   }
   async inReadOnlyTab<T>(read: () => Promise<T>): Promise<T> {
+    return this.inTemporaryTab(read);
+  }
+  private async inTemporaryTab<T>(work: () => Promise<T>): Promise<T> {
     if (this.engine === 'connected')
       throw new ServiceError('connected_browser_extra_tab_not_granted');
     await this.open();
@@ -388,7 +391,7 @@ export class Browser {
       tab = await backgroundPage(this.context!, original);
       this.attach(tab);
       this.readOnlyPages.add(tab);
-      return await read();
+      return await work();
     } finally {
       for (const popup of this.context?.pages() || []) {
         if (tab && popup !== tab && (await popup.opener()) === tab)
@@ -1206,6 +1209,135 @@ export class Browser {
       this.dmReadPage = undefined;
       this.invalidate();
     }
+  }
+  async replyToOrganizer(
+    actor: string,
+    organizer: string,
+    source: string,
+    text: string,
+    onDispatch: () => void,
+  ) {
+    return this.inTemporaryTab(async () => {
+      const signal = AbortSignal.timeout(90000);
+      const read = await this.readOrganizerDm(actor, organizer, signal);
+      const page = this.page!;
+      const url = page.url();
+      const inspect = async () => {
+        if (
+          signal.aborted ||
+          this.page !== page ||
+          page.url() !== url ||
+          new URL(url).origin !== 'https://www.instagram.com'
+        )
+          throw new ServiceError('dm_reply_preflight');
+        const v = await inspectDm(page, actor, organizer);
+        if (v.state !== 'scoped' || !v.incoming.includes(source))
+          throw new ServiceError('dm_reply_preflight');
+        return v;
+      };
+      if (!read.messages.includes(source)) throw new ServiceError('dm_reply_preflight');
+      const v = await inspect();
+      const pane = page.locator('[data-ssal-dm-pane="scoped"]');
+      const editor = pane.locator('[data-ssal-dm-editor="true"]');
+      const editorText = () =>
+        editor.evaluate((e) =>
+          e instanceof HTMLTextAreaElement ? e.value : (e as HTMLElement).innerText,
+        );
+      // Bind the message to this exact incoming row. Detect own bubbles without exposing other outgoing text.
+      const outgoing = () =>
+        pane.evaluate(
+          (root, args) => {
+            const helpers = {
+              normal(t: string) {
+                return t.replace(/\s+/g, ' ').trim();
+              },
+              selfControl(row: Element) {
+                return [...row.querySelectorAll('[aria-label]')].some(
+                  (el) =>
+                    /^(회원님(?:의|이 보낸) 메시지|내가 보낸 메시지|your message|reply to yourself)/i.test(
+                      el.getAttribute('aria-label') || '',
+                    ) ||
+                    (el.getAttribute('aria-label') || '')
+                      .toLowerCase()
+                      .startsWith(args.actor + '님의 메시지'),
+                );
+              },
+              owned(el: Element) {
+                return (
+                  helpers.selfControl(el) ||
+                  [...el.querySelectorAll('a[href]')].some(
+                    (a) =>
+                      new URL((a as HTMLAnchorElement).href).pathname.toLowerCase() ===
+                      '/' + args.actor + '/',
+                  )
+                );
+              },
+            };
+
+            const { normal, selfControl, owned } = helpers;
+            const original = [
+              ...root.querySelectorAll<HTMLElement>('[data-ssal-dm-incoming]'),
+            ].find((e) => normal(e.innerText).includes(normal(args.source)));
+            const matching = [
+              ...root.querySelectorAll<HTMLElement>('p,span,div,[dir=auto]'),
+            ].filter(
+              (e) =>
+                e.getBoundingClientRect().width &&
+                !e.closest('[data-ssal-dm-incoming], [contenteditable], [role=textbox],textarea') &&
+                normal(e.innerText || '') === normal(args.text),
+            );
+            let after = false;
+            for (const row of root.querySelectorAll<HTMLElement>(
+              '[role=row],[role=listitem],[aria-roledescription=message]',
+            )) {
+              if (
+                row.querySelector('[data-ssal-dm-editor], [data-ssal-dm-incoming]') ||
+                row.matches('[data-ssal-dm-incoming]') ||
+                !owned(row)
+              )
+                continue;
+              if (
+                original &&
+                original.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING
+              )
+                after = true;
+              if (matching.some((m) => row.contains(m))) return { exact: true, after };
+            }
+            for (const m of matching) {
+              for (let e: HTMLElement | null = m; e && e !== root; e = e.parentElement) {
+                if (e.querySelector('[data-ssal-dm-editor],[data-ssal-dm-incoming]')) break;
+                if (selfControl(e)) return { exact: true, after };
+              }
+            }
+            return { exact: false, after };
+          },
+          { text, actor, source },
+        );
+      const prior = await outgoing();
+      if (v.incoming.at(-1) !== source || prior.after || prior.exact || (await editorText()).trim())
+        throw new ServiceError('dm_reply_thread_changed');
+      await editor.fill(text);
+      await inspect();
+      if ((await editorText()).trim() !== text || (await outgoing()).after)
+        throw new ServiceError('dm_reply_preflight');
+      // Keep the read guard until the approved action is durably locked.
+      onDispatch();
+      this.setReadOnlyMode(false);
+      await editor.press('Enter', { timeout: 3000 });
+      for (let n = 0; n < 24; n++) {
+        await page.waitForTimeout(400);
+        await inspect();
+        if ((await editorText()).trim()) continue;
+        const sent = pane.getByText(text.replace(/\s+/g, ' ').trim(), { exact: true });
+        if ((await sent.count()) === 1) await sent.hover({ timeout: 500 }).catch(() => {});
+        if (
+          (await outgoing()).exact &&
+          !(await pane.getByText(/^(전송 실패|다시 시도|Failed to send|Retry)$/i).count())
+        )
+          return true;
+      }
+      return false;
+    });
   }
   async assertFresh(id: string, action?: Step['action']) {
     const o = this.latest;

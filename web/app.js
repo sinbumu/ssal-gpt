@@ -1796,10 +1796,7 @@ async function loadDmCard() {
   $('dm-reply-message').textContent = p.reason || '받는 계정과 보낼 내용을 확인한 뒤 승인하세요.';
   $('dm-reply-send').disabled = !p.approval;
 }
-document.addEventListener('click', (e) => {
-  const button = e.target.closest('[data-dm-reply]');
-  if (!button) return;
-  const eventId = button.dataset.dmReply;
+async function openDmCard(eventId) {
   const o = state.outcomes.find((o) => o.eventId === eventId);
   dmCard = { eventId };
   $('dm-reply-title').textContent =
@@ -1808,8 +1805,12 @@ document.addEventListener('click', (e) => {
   $('dm-reply-target').textContent = '';
   $('dm-reply-consent').value = 'unset';
   $('dm-consent-label').hidden = !o.followUp.requested.includes('consent');
-  $('dm-reply-dialog').showModal();
-  void guard(loadDmCard)(e);
+  if (!$('dm-reply-dialog').open) $('dm-reply-dialog').showModal();
+  await loadDmCard();
+}
+document.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-dm-reply]');
+  if (button) void guard(() => openDmCard(button.dataset.dmReply))(e);
 });
 $('dm-reply-consent').onchange = guard(loadDmCard);
 $('dm-reply-dialog').onclose = () => {
@@ -1859,13 +1860,16 @@ document.addEventListener('click', (e) => {
       }),
     )(e);
   if (review)
-    void guard(() =>
-      api('/api/outcomes/dm-review', {
-        eventId: review.dataset.dmReview,
-        key: review.dataset.key,
-        confirm: review.dataset.confirm === 'true',
-      }),
-    )(e);
+    void guard(async () => {
+      const eventId = review.dataset.dmReview;
+      const confirm = review.dataset.confirm === 'true';
+      await api('/api/outcomes/dm-review', { eventId, key: review.dataset.key, confirm });
+      if (confirm) {
+        await refresh();
+        if (state.outcomes.find((o) => o.eventId === eventId)?.followUp?.state === 'needs_reply')
+          await openDmCard(eventId);
+      }
+    })(e);
 });
 let resultPlanLimit = 20;
 let resultRowsLimit = 20;

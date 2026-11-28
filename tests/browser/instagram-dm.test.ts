@@ -14,7 +14,7 @@ import { collectNotices } from '../../src/reward-notifications.js';
 
 const pixel =
   'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2230%22 height=%2230%22%3E%3Crect width=%2230%22 height=%2230%22 fill=%22green%22/%3E%3C/svg%3E';
-test('DM browser flow scopes recipient/incoming screenshot, links grounded win, queues ambiguous review and never sends messages', async () => {
+test('DM scans only read verified organizers; a separate dashboard approval sends and verifies one reply', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ssal-dm-browser-')),
     app = await createApp({ dir, port: 0, headless: true });
   app.scheduler.stop();
@@ -187,7 +187,15 @@ test('DM browser flow scopes recipient/incoming screenshot, links grounded win, 
     });
     const preview = dmReplyPreview(app.store, ids[0]!, 'unset');
     assert.ok(preview.approval, preview.reason);
-    await sendApprovedDm(app.store, app.browser, ids[0]!, 'unset', preview.approval, preview.text);
+    await page.reload();
+    await page.locator(`[data-dm-reply="${ids[0]}"]`).first().click();
+    await page.waitForFunction(
+      () => !document.querySelector<HTMLButtonElement>('#dm-reply-send')?.disabled,
+    );
+    assert.equal(await page.locator('#dm-reply-body').inputValue(), preview.text);
+    const sent = page.waitForResponse((r) => r.url().endsWith('/api/outcomes/dm-send'));
+    await page.locator('#dm-reply-send').click();
+    assert.equal((await sent).status(), 200);
     assert.equal(replyAttempt(app.store, ids[0]!)?.status, 'sent');
     assert.equal(outcomes(app.store).find((o) => o.eventId === ids[0])?.followUp?.state, 'replied');
     await assert.rejects(

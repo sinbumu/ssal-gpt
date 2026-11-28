@@ -323,3 +323,58 @@ test('reply binds source, recipient, approved text and consent, keeps a durable 
     f.close();
   }
 });
+
+test('repeat DM checks reuse assessed incoming messages and only pass new text to the model', async () => {
+  const f = fixture();
+  try {
+    let messages = ['이벤트 공지입니다.'];
+    const observations: string[] = [];
+    const browser = {
+      profileKey: () => 'chromium',
+      dmReadDiagnostics: { stage: 'scoped', blocked: [] },
+      readOrganizerDm: async () => ({
+        url: 'https://www.instagram.com/fixture_host/',
+        screenshot: 'fixture.png',
+        image: Buffer.alloc(0),
+        empty: false,
+        messages: [...messages],
+      }),
+    } as unknown as Browser;
+    const model = {
+      decide: async (
+        _p: unknown,
+        _prompt: unknown,
+        c: { observation: { text: string; id: string } },
+      ) => {
+        observations.push(c.observation.text);
+        return {
+          step: {
+            action: 'done',
+            observationId: c.observation.id,
+            dmAssessment: {
+              kind: 'no_evidence',
+              quote: '',
+              eventQuote: '',
+              requested: [],
+              deadlineQuote: '',
+            },
+          },
+          inputTokens: 1,
+          outputTokens: 1,
+        };
+      },
+    } as unknown as import('../src/model.js').ModelClient;
+    const check = async () => {
+      const id = queueDmCheck(f.store, f.e.id, { kind: 'api', model: 'fixture' }, 'chromium');
+      const { runDmCheck } = await import('../src/instagram-dm.js');
+      await runDmCheck(f.store, browser, model, f.store.job(id)!, new AbortController().signal);
+    };
+    await check();
+    await check();
+    messages.push('새 공지입니다.');
+    await check();
+    assert.deepEqual(observations, ['이벤트 공지입니다.', '새 공지입니다.']);
+  } finally {
+    f.close();
+  }
+});

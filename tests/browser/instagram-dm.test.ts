@@ -9,7 +9,7 @@ import { createApp } from '../../src/server.js';
 import type { Job } from '../../src/store.js';
 import { startDmBatch, resultBatch } from '../../src/result-batch.js';
 import { dmReplyPreview, sendApprovedDm, replyAttempt } from '../../src/dm-reply.js';
-import { outcomes } from '../../src/outcomes.js';
+import { outcomes, saveRewardProgress } from '../../src/outcomes.js';
 import { collectNotices } from '../../src/reward-notifications.js';
 
 const pixel =
@@ -169,9 +169,20 @@ test('DM scans only read verified organizers; a separate dashboard approval send
       1,
     );
     assert.equal(writes, 0);
+    // A previously received prize must not interrupt the pending DM review or the send flow.
+    const received = all.find((o) => o.eventId === ids[4])!;
+    saveRewardProgress(app.store, {
+      eventId: received.eventId,
+      expectedUpdatedAt: received.updatedAt,
+      stage: 'received',
+      rewardName: '합성 달력',
+      valueKnown: false,
+    });
     collectNotices(app.store);
     await page.reload();
     await page.waitForSelector('#dm-reviews [data-dm-review]');
+    await page.locator('#reward-received article').waitFor();
+    assert.equal(await page.locator('#reward-received [data-dm-reply]').count(), 0);
     assert.match(await page.locator('#dm-reviews').innerText(), /행사 연결 확인/);
     const approval = page.waitForResponse((r) => r.url().endsWith('/api/outcomes/dm-review'));
     await page.locator('#dm-reviews [data-confirm=true]').click();

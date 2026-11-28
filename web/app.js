@@ -922,8 +922,16 @@ function render() {
   restoreInboxEdits();
 }
 async function refresh() {
-  state = await api('/api/state');
-  render();
+  try {
+    state = await api('/api/state');
+  } catch (error) {
+    throw new Error(`서버 상태를 불러오지 못했습니다. ${error.message}`);
+  }
+  try {
+    render();
+  } catch (error) {
+    throw new Error(`대시보드를 표시하지 못했습니다. ${error.message}`);
+  }
 }
 async function beginLogin(accountId) {
   const tab = window.open('about:blank', '_blank');
@@ -1394,7 +1402,7 @@ async function poll() {
   try {
     await refresh();
   } catch (error) {
-    toast(`서버 연결 확인 필요: ${error.message}`, true);
+    toast(error.message, true);
   }
   setTimeout(poll, 2000);
 }
@@ -1649,7 +1657,7 @@ function renderReceivedRewards(won) {
       .map((o) => {
         const e = state.completedEntries.find((e) => e.eventId === o.eventId),
           r = o.reward;
-        return `<article class="event-card"><span class="pill">${r.status === 'used' ? '사용·처분 완료' : '수령 완료 · 종결'}</span><h4>${esc(r.name || e?.prize || '경품')}</h4><p>${esc(e?.title || '응모')}</p><p>${knownRewardValue(r) ? `${Number(r.faceValue).toLocaleString()}원` : '가치 미정'}${r.receivedAt ? ` · 수령 기록 ${esc(new Date(r.receivedAt).toLocaleDateString())}` : ''}</p><div class="card-actions">${f.state === 'needs_reply' && (o.dmChecks || []).some((d) => d.state === 'won' && '@' + d.organizer === f.recipient) ? `<button data-dm-reply="${esc(o.eventId)}">수신 안내·회신 검토</button>` : ''}${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록</button></div></article>`;
+        return `<article class="event-card"><span class="pill">${r.status === 'used' ? '사용·처분 완료' : '수령 완료 · 종결'}</span><h4>${esc(r.name || e?.prize || '경품')}</h4><p>${esc(e?.title || '응모')}</p><p>${knownRewardValue(r) ? `${Number(r.faceValue).toLocaleString()}원` : '가치 미정'}${r.receivedAt ? ` · 수령 기록 ${esc(new Date(r.receivedAt).toLocaleDateString())}` : ''}</p><div class="card-actions">${rewardProgressButtons(o.eventId)}<button data-outcome="${esc(o.eventId)}">상세 기록</button></div></article>`;
       })
       .join('') ||
     '<p class="hint">아직 수령 완료로 기록한 경품이 없습니다. 경품을 받으면 ‘경품 받음 · 종결’로 정리하세요.</p>';
